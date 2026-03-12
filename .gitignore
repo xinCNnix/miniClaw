@@ -14,8 +14,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Only ignore Python venv lib in backend directory
+backend/lib/
+backend/lib64/
 parts/
 sdist/
 var/
