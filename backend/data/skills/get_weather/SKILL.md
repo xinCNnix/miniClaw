@@ -31,19 +31,34 @@ fetch_url(url="https://wttr.in/{城市英文名}?format=j1")
 
 ### 步骤 2: 解析返回的 JSON
 
-wttr.in 返回的 JSON 结构（简化）：
+wttr.in 返回的 JSON 结构（使用 format=j1）：
 ```json
 {
-  "current": [
+  "current_condition": [
     {
       "temp_C": "15",
-      "weatherDesc": [{"value": "多云"}],
+      "FeelsLikeC": "13",
+      "weatherDesc": [{"value": "Sunny"}],
       "windspeedKmph": "10.5",
-      "humidity": "65"
+      "humidity": "65",
+      "pressure": "1015"
+    }
+  ],
+  "nearest_area": [
+    {
+      "areaName": [{"value": "Beijing"}]
     }
   ]
 }
 ```
+
+**关键字段**：
+- `temp_C`: 温度（摄氏度）
+- `FeelsLikeC`: 体感温度
+- `weatherDesc[0].value`: 天气描述
+- `windspeedKmph`: 风速
+- `humidity`: 湿度
+- `pressure`: 气压
 
 ### 步骤 3: 友好地返回结果
 
