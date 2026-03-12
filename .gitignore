@@ -25,11 +25,13 @@ htmlcov/
 *.coverage
 .pytest_cache/
 
-# Documentation (optional, remove if you want to include docs)
+# Documentation
 docs/
-*.md
+# Keep important project documentation
 !README.md
 !CLAUDE.md
+!QUICKSTART.md
+!CHANGELOG.md
 
 # IDE
 .vscode/
