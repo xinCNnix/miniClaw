@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+:root {
+  /* Frosty Glass Theme - Apple Style */
+  --background: #fafafa;
+  --foreground: #1a1a1a;
+
+  /* Ink Green - 墨绿色调 */
+  --ink-green: #1A4D3E;
+  --ink-green-hover: #246B56;
+  --ink-green-light: #E8F3F0;
+
+  /* Glass Effect */
+  --glass-bg: rgba(255, 255, 255, 0.8);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+
+  /* UI Colors */
+  --primary: var(--ink-green);
+  --primary-hover: var(--ink-green-hover);
+  --secondary: #6b7280;
+  --accent: #f97316; /* 活力橙 - 备选强调色 */
+}
+
+@theme inline {
+  /* Colors */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-secondary: var(--secondary);
+
+  /* Glass Effect */
+  --glass-background: var(--glass-bg);
+  --glass-border: var(--glass-border);
+  --glass-shadow: var(--glass-shadow);
+
+  /* Spacing */
+  --spacing-unit: 0.25rem;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Roboto", sans-serif;
+  --font-mono: "SF Mono", Monaco, "Cascadia Code", monospace;
+}
+
+/* Frosty Glass Base Styles */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Glass Effect Utility */
+@utility glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Selection */
+::selection {
+  background: var(--ink-green);
+  color: white;
+}
+
+/* Focus Ring */
+:focus-visible {
+  outline: 2px solid var(--ink-green);
+  outline-offset: 2px;
+}

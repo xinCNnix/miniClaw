@@ -1,0 +1,82 @@
+# Environment variables (contains API keys)
+.env
+.env.local
+.env.*.local
+*.key
+backend/data/credentials.encrypted
+
+# Tests
+**/tests/
+**/__tests__/
+**/*test*.py
+**/*test*.ts
+**/*test*.tsx
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+frontend/node_modules/@testing-library/jest-dom/types/__tests__/
+
+# Coverage reports
+coverage/
+htmlcov/
+.nyc_output/
+*.coverage
+.pytest_cache/
+
+# Documentation (optional, remove if you want to include docs)
+docs/
+*.md
+!README.md
+!CLAUDE.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# Build artifacts
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+frontend/.turbo/
+backend/htmlcov/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Data and cache (keep structure only)
+backend/data/sessions/*
+backend/data/vector_store/*
+backend/data/backup/*
+backend/data/knowledge_base/*
+backend/data/models/
+!backend/data/sessions/.gitkeep
+!backend/data/vector_store/.gitkeep
+!backend/data/backup/.gitkeep
+!backend/data/knowledge_base/.gitkeep

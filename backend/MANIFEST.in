@@ -1,0 +1,37 @@
+# MANIFEST.in - Control what files are included in the Python package
+
+# Prune patterns (exclude entire directories)
+prune frontend
+prune node_modules
+prune .next
+prune __pycache__
+prune *.egg-info
+prune .pytest_cache
+prune htmlcov
+prune .ruff_cache
+prune .mypy_cache
+prune venv
+prune .venv
+prune env
+prune .env
+
+# Global exclude patterns
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude .DS_Store
+global-exclude *.log
+global-exclude *.bak
+global-exclude *.swp
+global-exclude *~
+global-exclude .git*
+global-exclude .vscode
+global-exclude .idea
+
+# Only include Python source files and necessary data
+include README.md
+include LICENSE
+include requirements.txt
+include pyproject.toml
+recursive-include app *.py
+recursive-include data *.md *.txt *.json *.yaml *.yml
