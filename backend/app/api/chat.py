@@ -6,6 +6,8 @@ This module provides the main chat endpoint with SSE streaming support.
 
 import json
 import asyncio
+import logging
+import time
 from typing import AsyncIterator
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -16,6 +18,11 @@ from app.core.tools import get_registered_tools
 from app.memory.prompts import build_system_prompt
 from app.memory.session import get_session_manager
 from app.skills.bootstrap import bootstrap_skills
+from app.logging_config import AgentExecutionLogger, get_agent_logger
+
+# Get logger for this module
+logger = logging.getLogger(__name__)
+agent_logger = get_agent_logger("api.chat")
 
 
 router = APIRouter(tags=["chat"])
@@ -128,15 +135,20 @@ async def chat_stream_generator(
     Yields:
         SSE formatted strings
     """
-    try:
-        # Send thinking start event
-        yield format_sse_event(
-            ChatEvent(type="thinking_start")
-        )
+    # Start execution logging
+    with AgentExecutionLogger(f"chat_{request.session_id}") as exec_logger:
+        try:
+            logger.info(f"New chat request - Session: {request.session_id}")
+            logger.info(f"User message: {request.message[:200]}...")
 
-        # Load or create session
-        session_manager = get_session_manager()
-        session = session_manager.load_session(request.session_id)
+            # Send thinking start event
+            yield format_sse_event(
+                ChatEvent(type="thinking_start")
+            )
+
+            # Load or create session
+            session_manager = get_session_manager()
+            session = session_manager.load_session(request.session_id)
 
         if session is None:
             session = session_manager.create_session(
@@ -146,7 +158,16 @@ async def chat_stream_generator(
 
         # Prepare messages
         messages = []
-        for msg in session.get("messages", []):
+
+        # Get session history
+        session_messages = session.get("messages", [])
+
+        # Limit context window to avoid Agent getting stuck on previous tasks
+        # Only keep last 10 messages (5 user + 5 assistant) to maintain context
+        MAX_CONTEXT_MESSAGES = 10
+        recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
+
+        for msg in recent_messages:
             if msg["role"] in ["user", "assistant"]:
                 message_dict = {
                     "role": msg["role"],
@@ -180,14 +201,50 @@ async def chat_stream_generator(
             current_message["content"] = content_list
         messages.append(current_message)
 
+        # Log input
+        exec_logger.log_input(messages, system_prompt)
+
         # Stream agent response
+        logger.info("Starting agent stream...")
+        event_count = 0
+        tool_call_count = 0
+
         async for event in agent.astream(
             messages=messages,
             system_prompt=system_prompt,
         ):
+            event_count += 1
+
+            # Log each event
+            event_type = event.get("type", "unknown")
+            logger.debug(f"Agent event #{event_count}: {event_type}")
+
+            if event_type == "tool_call":
+                tool_call_count += 1
+                tool_calls = event.get("tool_calls", [])
+                for tc in tool_calls:
+                    tc_name = tc.get("name", "unknown")
+                    tc_args = tc.get("arguments", {})
+                    exec_logger.log_tool_call(tc_name, tc_args)
+                    logger.info(f"Tool call: {tc_name}")
+
+            elif event_type == "tool_output":
+                tool_name = event.get("tool_name", "unknown")
+                output = event.get("output", "")
+                status = event.get("status", "unknown")
+                success = status == "success"
+                exec_logger.log_tool_result(tool_name, output, success)
+                logger.info(f"Tool output: {tool_name} - {status}")
+
+            elif event_type == "content_delta":
+                content = event.get("content", "")
+                logger.debug(f"Content delta: {len(content)} chars")
+
             yield format_sse_event(
                 ChatEvent(**event)
             )
+
+        logger.info(f"Agent stream completed. Total events: {event_count}, Tool calls: {tool_call_count}")
 
         # Save to session
         session_manager.add_message(

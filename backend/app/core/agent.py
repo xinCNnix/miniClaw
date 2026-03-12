@@ -6,6 +6,8 @@ This module provides the core Agent functionality using direct LLM tool calling.
 
 import json
 import asyncio
+import logging
+import time
 from typing import List, Any, AsyncIterator, Iterator, Optional, Dict
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
@@ -13,6 +15,11 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.core.llm import create_llm, LLMProvider
 from app.config import get_settings
+from app.logging_config import get_agent_logger
+
+# Get logger for agent execution
+agent_logger = get_agent_logger("agent.executor")
+logger = logging.getLogger(__name__)
 
 
 class AgentManager:
@@ -227,37 +234,67 @@ class AgentManager:
         """
         Async stream agent responses.
         """
+        start_time = time.time()
+
         try:
+            logger.info("=== Agent astream START ===")
+            logger.debug(f"Messages count: {len(messages)}")
+            logger.debug(f"System prompt length: {len(system_prompt)} chars")
+
             self.system_prompt = system_prompt
             lc_messages = self._convert_messages(messages, system_prompt)
 
             yield {"type": "thinking_start"}
+            logger.info("Thinking...")
 
             # Get response
+            logger.info("Invoking LLM...")
+            llm_start = time.time()
             response = await self.llm_with_tools.ainvoke(lc_messages)
+            llm_duration = time.time() - llm_start
+            logger.info(f"LLM response received in {llm_duration:.2f}s")
+
+            # Log response details
+            if hasattr(response, 'content'):
+                logger.debug(f"LLM content: {response.content[:500]}...")
+            if hasattr(response, 'response_metadata'):
+                logger.debug(f"Response metadata: {response.response_metadata}")
 
             # Handle tool calls
             if hasattr(response, 'tool_calls') and response.tool_calls:
+                logger.info(f"Tool calls requested: {len(response.tool_calls)}")
+
                 # Add the assistant message with tool_calls to conversation history
                 # This is REQUIRED by OpenAI API standard - tool messages must follow
                 # a message with tool_calls
                 lc_messages.append(response)
 
-                for tool_call in response.tool_calls:
+                for idx, tool_call in enumerate(response.tool_calls):
                     tool_name = tool_call.get('name', '')
                     tool_args = tool_call.get('args', {})
+                    tool_id = tool_call.get('id', '')
+
+                    logger.info(f"Executing tool {idx+1}/{len(response.tool_calls)}: {tool_name}")
+                    logger.debug(f"Tool arguments: {tool_args}")
 
                     yield {
                         "type": "tool_call",
                         "tool_calls": [{
-                            "id": tool_call.get('id', ''),
+                            "id": tool_id,
                             "name": tool_name,
                             "arguments": tool_args,
                         }]
                     }
 
                     try:
+                        tool_start = time.time()
                         tool_output = await self._aexecute_tool(tool_name, tool_args)
+                        tool_duration = time.time() - tool_start
+
+                        logger.info(f"Tool {tool_name} completed in {tool_duration:.2f}s")
+                        logger.debug(f"Tool output size: {len(str(tool_output))} chars")
+                        logger.debug(f"Tool output preview: {str(tool_output)[:300]}...")
+
                         yield {
                             "type": "tool_output",
                             "tool_name": tool_name,
@@ -265,6 +302,7 @@ class AgentManager:
                             "status": "success",
                         }
                     except Exception as e:
+                        logger.error(f"Tool {tool_name} failed: {e}", exc_info=True)
                         yield {
                             "type": "tool_output",
                             "tool_name": tool_name,
@@ -278,16 +316,23 @@ class AgentManager:
                     ))
 
                 # Get final response
+                logger.info("Getting final LLM response after tool execution...")
                 response = await self.llm_with_tools.ainvoke(lc_messages)
 
             # Yield content
             if hasattr(response, 'content') and response.content:
+                logger.info(f"Final content: {len(response.content)} chars")
+                logger.debug(f"Final content: {response.content}")
                 yield {
                     "type": "content_delta",
                     "content": response.content,
                 }
 
+            total_duration = time.time() - start_time
+            logger.info(f"=== Agent astream COMPLETE in {total_duration:.2f}s ===")
+
         except Exception as e:
+            logger.error(f"Agent astream error: {e}", exc_info=True)
             yield {
                 "type": "error",
                 "error": str(e),
@@ -316,19 +361,25 @@ class AgentManager:
 
     def _execute_tool(self, name: str, arguments: dict) -> Any:
         """Execute a tool synchronously."""
+        logger.debug(f"Executing tool (sync): {name} with args: {arguments}")
         tool = self._get_tool_by_name(name)
         if tool:
-            return tool._run(**arguments)
+            result = tool._run(**arguments)
+            logger.debug(f"Tool {name} result size: {len(str(result))} chars")
+            return result
         raise ValueError(f"Tool not found: {name}")
 
     async def _aexecute_tool(self, name: str, arguments: dict) -> Any:
         """Execute a tool asynchronously."""
+        logger.debug(f"Executing tool (async): {name} with args: {arguments}")
         tool = self._get_tool_by_name(name)
         if tool:
             if hasattr(tool, '_arun'):
-                return await tool._arun(**arguments)
+                result = await tool._arun(**arguments)
             else:
-                return tool._run(**arguments)
+                result = tool._run(**arguments)
+            logger.debug(f"Tool {name} result size: {len(str(result))} chars")
+            return result
         raise ValueError(f"Tool not found: {name}")
 
     def _get_tool_by_name(self, name: str) -> Optional[BaseTool]:

@@ -16,6 +16,7 @@ import re
 from typing import Callable
 
 from app.config import get_settings
+from app.logging_config import setup_logging
 from app.api import chat_router, files_router, sessions_router
 from app.api import config as config_api
 from app.api import python_repl as python_repl_api
@@ -36,6 +37,9 @@ logger = logging.getLogger(__name__)
 
 # Create FastAPI app
 settings = get_settings()
+
+# Setup detailed logging (must be after settings initialization)
+setup_logging()
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
