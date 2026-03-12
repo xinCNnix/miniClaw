@@ -94,6 +94,9 @@ async def save_llm_config(request: SaveLLMConfigRequest):
 
         credentials[request.provider] = provider_config
 
+        # Update current provider to ensure it persists after restart
+        credentials["_current_provider"] = request.provider
+
         # Save obfuscated credentials
         KeyObfuscator.save_credentials(credentials)
 
