@@ -5,7 +5,7 @@
 *.key
 backend/data/credentials.encrypted
 
-# Tests
+# Tests and test results
 **/tests/
 **/__tests__/
 **/*test*.py
@@ -15,6 +15,7 @@ backend/data/credentials.encrypted
 **/*.test.tsx
 **/*.spec.ts
 **/*.spec.tsx
+**/test-results/
 frontend/node_modules/@testing-library/jest-dom/types/__tests__/
 
 # Coverage reports
