@@ -83,3 +83,6 @@ backend/data/models/
 !backend/data/vector_store/.gitkeep
 !backend/data/backup/.gitkeep
 !backend/data/knowledge_base/.gitkeep
+# Project documentation (keep local only)
+CLAUDE.md
+DEVELOPMENT_PLAN.md
