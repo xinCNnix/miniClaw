@@ -219,6 +219,9 @@ class Settings(BaseSettings):
     max_prompt_length: int = 20000  # characters
     truncation_marker: str = "...[truncated]"
 
+    # Agent Execution
+    max_tool_rounds: int = 10  # Maximum rounds of tool calling (prevents infinite loops)
+
     # Memory System
     enable_memory_extraction: bool = True
     enable_semantic_search: bool = True

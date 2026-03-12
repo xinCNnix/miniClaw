@@ -427,10 +427,28 @@ async def chat(request: ChatRequest):
                             filtered_results.append(r)
 
                 if filtered_results:
-                    recent_history = "\n".join([
-                        f"- [历史对话参考] {r['content'][:150]}..."
-                        for r in filtered_results
-                    ])
+                    # Format with structured metadata for each entry
+                    formatted_entries = []
+                    for idx, r in enumerate(filtered_results, 1):
+                        similarity = r.get('similarity', 0.0)
+                        session_id = r.get('metadata', {}).get('session_id', 'unknown')
+                        content_preview = r['content'][:150]
+
+                        entry = f"""
+---
+📜 **Historical Entry #{idx}**
+   👤 Session: {session_id}
+   🎯 Relevance: {similarity:.1%} (lower is less relevant)
+   📅 Type: Past conversation
+
+   ⚠️  This is a PAST conversation. Extract patterns only, NOT specific values.
+
+   Content:
+   "{content_preview}..."
+"""
+                        formatted_entries.append(entry)
+
+                    recent_history = "\n".join(formatted_entries)
                     import logging
                     logging.info(f"Found {len(filtered_results)} relevant conversation chunks for query: {request.message[:50]}")
     except Exception as e:
