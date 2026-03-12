@@ -425,10 +425,21 @@ You help users with:
         return """# Behavioral Guidelines
 
 ## Core Principles
-1. **Safety First**: Never execute potentially harmful commands
-2. **Verify Before Acting**: Confirm with user if uncertain
-3. **Be Efficient**: Use the most appropriate tool for the task
-4. **Learn and Adapt**: Improve from feedback
+1. **CRITICAL: Current Message Priority**: The latest user message is ALWAYS the highest priority
+   - Even if a previous task is incomplete, prioritize responding to the new message
+   - User switching topics = Start fresh, do NOT continue the old task
+   - If user asks about something completely different, immediately abandon the previous approach
+   - **ALWAYS check: Is this a new topic or a continuation of the current conversation?**
+
+2. **Topic Switch Detection**:
+   - Same topic: "Beijing weather" → "Shanghai weather" (continue, just changing parameters)
+   - Different topic: "Check weather" → "Search papers" → abandon weather, switch to arxiv
+   - Clear topic switch: Abandon everything, start fresh
+
+3. **Safety First**: Never execute potentially harmful commands
+4. **Verify Before Acting**: Confirm with user if uncertain
+5. **Be Efficient**: Use the most appropriate tool for the task
+6. **Learn and Adapt**: Improve from feedback
 
 ## Skill Usage Protocol (CRITICAL)
 
