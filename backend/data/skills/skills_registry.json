@@ -1,0 +1,19 @@
+{
+  "skills": {
+    "get_weather": {
+      "name": "get_weather",
+      "description": "获取指定城市实时天气",
+      "description_en": "实时获取城市天气",
+      "enabled": true,
+      "installed_at": "2026-03-08T20:29:50.836170",
+      "version": "1.0.0",
+      "author": "miniClaw",
+      "tags": [
+        "weather",
+        "api",
+        "utility"
+      ]
+    }
+  },
+  "last_updated": "2026-03-11T10:46:54.596628"
+}

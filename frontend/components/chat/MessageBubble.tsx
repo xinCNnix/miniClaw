@@ -1,0 +1,163 @@
+"use client"
+
+import { clsx } from "clsx"
+import { User, Bot } from "lucide-react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
+import type { Message } from "@/types/chat"
+
+interface MessageBubbleProps {
+  message: Message
+  thinkingEvents?: unknown[]
+  className?: string
+}
+
+export function MessageBubble({ message, className }: MessageBubbleProps) {
+  const isUser = message.role === "user"
+
+  return (
+    <div
+      className={clsx(
+        "flex gap-3",
+        isUser ? "justify-end" : "justify-start",
+        className
+      )}
+    >
+      {/* Avatar */}
+      {!isUser && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-[var(--ink-green)] flex items-center justify-center">
+          <Bot className="w-5 h-5 text-white" />
+        </div>
+      )}
+
+      {/* Content */}
+      <div
+        className={clsx(
+          "max-w-[80%] rounded-lg px-4 py-2",
+          isUser
+            ? "bg-[var(--ink-green)] text-white"
+            : "bg-white border border-gray-200 text-gray-900"
+        )}
+      >
+        {/* Images */}
+        {message.images && message.images.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {message.images.map((img, idx) => (
+              <img
+                key={idx}
+                src={`data:${img.mime_type};base64,${img.content}`}
+                alt={`Attachment ${idx + 1}`}
+                className="max-w-[200px] rounded-md border border-gray-300 dark:border-gray-600"
+              />
+            ))}
+          </div>
+        )}
+
+        {isUser ? (
+          <p className="whitespace-pre-wrap">{message.content}</p>
+        ) : (
+          <div className="prose prose-sm max-w-none dark:prose-invert">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                code({ className, children, inline, ...props }: any) {
+                  const match = /language-(\w+)/.exec(className || '')
+                  return !inline && match ? (
+                    <SyntaxHighlighter
+                      style={oneDark}
+                      language={match[1]}
+                      PreTag="div"
+                      customStyle={{
+                        borderRadius: '0.375rem',
+                        fontSize: '0.875rem',
+                      }}
+                    >
+                      {String(children).replace(/\n$/, '')}
+                    </SyntaxHighlighter>
+                  ) : (
+                    <code
+                      className={clsx(
+                        "px-1.5 py-0.5 rounded text-sm",
+                        "bg-gray-100 dark:bg-gray-800",
+                        "text-pink-600 dark:text-pink-400",
+                        className
+                      )}
+                      {...props}
+                    >
+                      {children}
+                    </code>
+                  )
+                },
+                p({ children }) {
+                  return <p className="mb-2 last:mb-0">{children}</p>
+                },
+                ul({ children }) {
+                  return <ul className="list-disc list-inside mb-2">{children}</ul>
+                },
+                ol({ children }) {
+                  return <ol className="list-decimal list-inside mb-2">{children}</ol>
+                },
+                li({ children }) {
+                  return <li className="mb-1">{children}</li>
+                },
+                h1({ children }) {
+                  return <h1 className="text-xl font-bold mb-2 mt-4">{children}</h1>
+                },
+                h2({ children }) {
+                  return <h2 className="text-lg font-bold mb-2 mt-3">{children}</h2>
+                },
+                h3({ children }) {
+                  return <h3 className="text-base font-bold mb-2 mt-2">{children}</h3>
+                },
+                strong({ children }) {
+                  return <strong className="font-bold">{children}</strong>
+                },
+                a({ children, href }) {
+                  return (
+                    <a
+                      href={href}
+                      className="text-blue-600 dark:text-blue-400 hover:underline"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {children}
+                    </a>
+                  )
+                },
+                blockquote({ children }) {
+                  return (
+                    <blockquote className="border-l-4 border-gray-300 pl-4 italic my-2">
+                      {children}
+                    </blockquote>
+                  )
+                },
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        )}
+
+        {/* Timestamp */}
+        {message.timestamp && (
+          <p
+            className={clsx(
+              "text-xs mt-1",
+              isUser ? "text-emerald-100" : "text-gray-400"
+            )}
+          >
+            {new Date(message.timestamp).toLocaleTimeString()}
+          </p>
+        )}
+      </div>
+
+      {isUser && (
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-500 flex items-center justify-center">
+          <User className="w-5 h-5 text-white" />
+        </div>
+      )}
+    </div>
+  )
+}
