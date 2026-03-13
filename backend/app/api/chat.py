@@ -242,18 +242,18 @@ def _extract_conversation_context(
     session_messages: list,
 ) -> str:
     """
-    Extract context reference from current session (no hardcoded message limit).
+    Extract conversation context from current session with complete recent turns.
 
     Strategy:
     1. Use task boundary detection to identify relevant history
-    2. Extract useful context information (previous queries, key parameters)
-    3. Keep it brief (not full conversation, but useful hints)
+    2. Include complete recent conversation turns (user + assistant)
+    3. Preserve dialogue continuity for LLM understanding
 
     Args:
         session_messages: Current session's message list
 
     Returns:
-        Context reference string
+        Context string with recent conversation turns
     """
     if not session_messages:
         return ""
@@ -276,40 +276,71 @@ def _extract_conversation_context(
     if not recent:
         return ""
 
-    # Extract useful context information
-    context_parts = []
+    # Extract complete conversation turns (user + assistant pairs)
+    # Exclude the last message if it's a user message (current one being processed)
+    context_messages = []
+    last_is_user = recent and recent[-1].get("role") == "user"
 
-    # 1. Summarize previous user queries (brief, with key parameters)
-    user_messages = [m for m in recent if m.get("role") == "user"]
-    if user_messages:
-        # Exclude the last message (it's the current one being processed)
-        previous_queries = user_messages[:-1]
-        if previous_queries:
-            context_parts.append("## Previous queries in this session:")
-            for msg in previous_queries:
-                content = msg.get("content", "")
-                # Extract key information (e.g., city names for weather queries)
-                key_info = _extract_key_info(content)
-                if key_info:
-                    context_parts.append(f"- {key_info}")
-                else:
-                    # Fallback: show first 50 chars
-                    preview = content[:50] + "..." if len(content) > 50 else content
-                    context_parts.append(f"- {preview}")
+    # Process messages in pairs
+    i = 0
+    while i < len(recent):
+        msg = recent[i]
 
-    # 2. Detect language
+        # Skip if this is the current user message being processed
+        if last_is_user and i == len(recent) - 1:
+            break
+
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+
+        if role == "user":
+            # Start a new turn
+            context_messages.append({
+                "type": "user",
+                "content": content
+            })
+        elif role == "assistant" and context_messages:
+            # Add to previous user message as response
+            if context_messages[-1]["type"] == "user":
+                context_messages[-1]["response"] = content
+            else:
+                # Orphan assistant message, add as separate entry
+                context_messages.append({
+                    "type": "assistant",
+                    "content": content
+                })
+
+        i += 1
+
+    if not context_messages:
+        return ""
+
+    # Build context string
+    context_parts = ["# Recent Conversation (This Session)", ""]
+
+    for idx, turn in enumerate(context_messages, 1):
+        if turn["type"] == "user":
+            context_parts.append(f"## Turn {idx}")
+            context_parts.append(f"**User**: {turn['content']}")
+            if "response" in turn:
+                # Truncate long responses
+                response = turn["response"]
+                if len(response) > 500:
+                    response = response[:500] + "..."
+                context_parts.append(f"**Assistant**: {response}")
+            context_parts.append("")
+
+    # Detect language preference
     has_chinese = any(
         msg.get("role") == "user" and _contains_chinese(msg.get("content", ""))
         for msg in recent
     )
     if has_chinese:
-        context_parts.append("\n## Communication language")
+        context_parts.append("## Communication Preference")
         context_parts.append("- User communicates in Chinese")
+        context_parts.append("")
 
-    if not context_parts:
-        return ""
-
-    return "# Current Session Context\n\n" + "\n".join(context_parts) + "\n\n⚠️ This is context from previous queries. Use it to understand the pattern, but extract parameters from the CURRENT message only."
+    return "\n".join(context_parts)
 
 
 def _extract_key_info(content: str) -> str:
@@ -697,11 +728,18 @@ async def chat(request: ChatRequest):
             if session_messages:
                 conversation_context = _extract_conversation_context(session_messages)
                 logger.debug(f"Extracted conversation context from session")
+                logger.info(f"[DEBUG] conversation_context length: {len(conversation_context)} chars")
+                if conversation_context:
+                    logger.info(f"[DEBUG] conversation_context preview:\n{conversation_context[:500]}")
     except Exception as e:
         logger.warning(f"Failed to extract conversation context: {e}")
 
     # Build system prompt with new session data structure
     try:
+        logger.info(f"[DEBUG] Building system prompt with conversation_context of {len(conversation_context)} chars")
+        if conversation_context:
+            logger.info(f"[DEBUG] conversation_context:\n{conversation_context}")
+
         system_prompt = build_system_prompt(
             session_data={
                 "user_context": request.context,
