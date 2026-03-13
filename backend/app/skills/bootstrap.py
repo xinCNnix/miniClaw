@@ -6,11 +6,14 @@ It scans the skills directory and generates SKILLS_SNAPSHOT.md.
 """
 
 import os
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import yaml
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class SkillMetadata:
@@ -24,6 +27,7 @@ class SkillMetadata:
         version: str = "1.0.0",
         author: str = "",
         tags: List[str] = None,
+        frontmatter: Dict[str, Any] = None,
     ):
         self.name = name
         self.description = description
@@ -31,6 +35,7 @@ class SkillMetadata:
         self.version = version
         self.author = author
         self.tags = tags or []
+        self.frontmatter = frontmatter or {}
 
     def to_markdown(self) -> str:
         """
@@ -87,9 +92,12 @@ class SkillsBootstrap:
         self.skills_dir = Path(settings.skills_dir)
         self.skills: Dict[str, SkillMetadata] = {}
 
-    def scan_skills(self) -> Dict[str, SkillMetadata]:
+    def scan_skills(self, check_dependencies: bool = True) -> Dict[str, SkillMetadata]:
         """
         Scan the skills directory and load all skill metadata.
+
+        Args:
+            check_dependencies: If True, check and auto-install dependencies
 
         Returns:
             Dict mapping skill names to metadata
@@ -109,11 +117,39 @@ class SkillsBootstrap:
                 if metadata:
                     self.skills[metadata.name] = metadata
 
+                    # Check dependencies if enabled
+                    if check_dependencies and metadata.frontmatter:
+                        self._check_skill_dependencies(metadata.name, metadata.frontmatter)
+
             except Exception as e:
-                print(f"Error loading skill from {skill_path}: {e}")
+                logger.error(f"Error loading skill from {skill_path}: {e}")
                 continue
 
         return self.skills
+
+    def _check_skill_dependencies(self, skill_name: str, frontmatter: Dict[str, Any]) -> None:
+        """
+        Check and auto-install dependencies for a skill.
+
+        Args:
+            skill_name: Name of the skill
+            frontmatter: Parsed YAML frontmatter
+        """
+        try:
+            from app.skills.dependencies import get_dependency_manager
+
+            dep_manager = get_dependency_manager()
+            success, messages = dep_manager.ensure_skill_dependencies(skill_name, frontmatter)
+
+            if messages:
+                for msg in messages:
+                    logger.info(f"[{skill_name}] {msg}")
+
+            if not success:
+                logger.warning(f"[{skill_name}] Some dependencies could not be installed")
+
+        except Exception as e:
+            logger.error(f"Error checking dependencies for {skill_name}: {e}")
 
     def _load_skill_metadata(self, skill_path: Path) -> Optional[SkillMetadata]:
         """
@@ -170,6 +206,7 @@ class SkillsBootstrap:
                 version=version,
                 author=author,
                 tags=tags,
+                frontmatter=frontmatter,
             )
 
         except Exception as e:

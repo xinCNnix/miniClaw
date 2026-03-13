@@ -254,6 +254,11 @@ class Settings(BaseSettings):
     md_min_confidence: float = 0.7  # Only include memories with confidence >= this in MD
     md_auto_sync: bool = True  # Automatically sync MD files after memory updates
 
+    # Skills Dependency Management
+    enable_skill_dependency_check: bool = True  # Enable skill dependency checking
+    auto_install_python_dependencies: bool = True  # Auto-install Python dependencies
+    skill_dependency_install_timeout: int = 300  # Max time (seconds) to install dependencies
+
     # Logging Configuration
     log_level: str = "INFO"  # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
     log_dir: str = "logs"  # Directory for log files
