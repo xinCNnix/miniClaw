@@ -191,12 +191,15 @@ class TerminalTool(BaseTool):
 
         try:
             # Execute command
+            # Use UTF-8 encoding for cross-platform compatibility
+            # errors='replace' replaces characters that can't be decoded instead of crashing
             result = subprocess.run(
                 command,
                 shell=True,
                 cwd=valid_cwd,
                 capture_output=True,
-                text=True,
+                encoding='utf-8',
+                errors='replace',
                 timeout=timeout,
                 check=False,  # Don't raise exception on non-zero exit
             )

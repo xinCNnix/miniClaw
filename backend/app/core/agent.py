@@ -337,6 +337,30 @@ class AgentManager:
                     "message": f"Reached maximum tool execution rounds ({max_tool_rounds})"
                 }
 
+                # Get final response from LLM after all tool executions
+                # Use LLM WITHOUT tools to force text generation instead of more tool calls
+                logger.info("Getting final response after max tool rounds...")
+                try:
+                    final_response = await self.llm.ainvoke(lc_messages)
+                    if hasattr(final_response, 'content') and final_response.content:
+                        logger.info(f"Final response: {len(final_response.content)} chars")
+                        yield {
+                            "type": "content_delta",
+                            "content": final_response.content,
+                        }
+                    else:
+                        logger.warning("LLM returned no content after max rounds")
+                        yield {
+                            "type": "error",
+                            "error": "Agent exceeded maximum tool execution rounds but could not generate a response"
+                        }
+                except Exception as e:
+                    logger.error(f"Failed to get final response: {e}")
+                    yield {
+                        "type": "error",
+                        "error": f"Failed to generate response after tool execution: {str(e)}"
+                    }
+
             total_duration = time.time() - start_time
             logger.info(f"=== Agent astream COMPLETE in {total_duration:.2f}s ===")
 
