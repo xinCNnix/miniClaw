@@ -225,6 +225,134 @@ def detect_task_boundary(msg1: dict, msg2: dict) -> bool:
     return False
 
 
+def _contains_chinese(text: str) -> bool:
+    """
+    Check if text contains Chinese characters.
+
+    Args:
+        text: Text to check
+
+    Returns:
+        True if text contains Chinese characters
+    """
+    return any('\u4e00' <= char <= '\u9fff' for char in text)
+
+
+def _extract_conversation_context(
+    session_messages: list,
+) -> str:
+    """
+    Extract context reference from current session (no hardcoded message limit).
+
+    Strategy:
+    1. Use task boundary detection to identify relevant history
+    2. Extract useful context information (previous queries, key parameters)
+    3. Keep it brief (not full conversation, but useful hints)
+
+    Args:
+        session_messages: Current session's message list
+
+    Returns:
+        Context reference string
+    """
+    if not session_messages:
+        return ""
+
+    # Detect task boundary from the end
+    boundary_index = -1
+    for i in range(len(session_messages) - 1, 1, -1):
+        if detect_task_boundary(session_messages[i-1], session_messages[i]):
+            boundary_index = i
+            logger.info(f"Task boundary found at index {i} in current session")
+            break
+
+    # Keep messages after boundary (current task sequence)
+    if boundary_index >= 0:
+        recent = session_messages[boundary_index:]
+    else:
+        # No boundary: all messages are part of current task sequence
+        recent = session_messages
+
+    if not recent:
+        return ""
+
+    # Extract useful context information
+    context_parts = []
+
+    # 1. Summarize previous user queries (brief, with key parameters)
+    user_messages = [m for m in recent if m.get("role") == "user"]
+    if user_messages:
+        # Exclude the last message (it's the current one being processed)
+        previous_queries = user_messages[:-1]
+        if previous_queries:
+            context_parts.append("## Previous queries in this session:")
+            for msg in previous_queries:
+                content = msg.get("content", "")
+                # Extract key information (e.g., city names for weather queries)
+                key_info = _extract_key_info(content)
+                if key_info:
+                    context_parts.append(f"- {key_info}")
+                else:
+                    # Fallback: show first 50 chars
+                    preview = content[:50] + "..." if len(content) > 50 else content
+                    context_parts.append(f"- {preview}")
+
+    # 2. Detect language
+    has_chinese = any(
+        msg.get("role") == "user" and _contains_chinese(msg.get("content", ""))
+        for msg in recent
+    )
+    if has_chinese:
+        context_parts.append("\n## Communication language")
+        context_parts.append("- User communicates in Chinese")
+
+    if not context_parts:
+        return ""
+
+    return "# Current Session Context\n\n" + "\n".join(context_parts) + "\n\n⚠️ This is context from previous queries. Use it to understand the pattern, but extract parameters from the CURRENT message only."
+
+
+def _extract_key_info(content: str) -> str:
+    """
+    Extract key information from user message for context.
+
+    For example:
+    - "北京天气如何" → "查询北京天气"
+    - "帮我分析foo.py文件" → "分析文件: foo.py"
+
+    Args:
+        content: User message content
+
+    Returns:
+        Key information string or None
+    """
+    import re
+
+    # Weather queries
+    weather_pattern = r"(?:北京|上海|广州|深圳|杭州|成都|重庆|武汉|西安|南京|天津|青岛|大连|厦门|苏州|无锡|宁波|济南|青岛|郑州|长沙|哈尔滨|沈阳|长春|石家庄|太原|呼和浩特|西安|兰州|银川|西宁|乌鲁木齐|拉萨|昆明|贵阳|南宁|海口|福州|合肥|南昌|济南|青岛)[省市]?的?天气"
+    match = re.search(weather_pattern, content)
+    if match:
+        city = match.group(1)
+        return f"查询{city}的天气"
+
+    # File operations
+    if "文件" in content or "file" in content.lower():
+        file_match = re.search(r'["\']?([\w\-./]+\.(?:py|js|ts|txt|md|json|yaml|yml|html|css|java|cpp|c|go|rs|rb|php|sh|bash|zsh))["\']?', content)
+        if file_match:
+            filename = file_match.group(1)
+            return f"操作文件: {filename}"
+
+    # Paper search
+    if "论文" in content or "paper" in content.lower() or "arxiv" in content.lower():
+        # Extract paper title/topic
+        if "关于" in content:
+            topic_match = re.search(r"关于(.{2,20}?)(?:的论文|论文)", content)
+            if topic_match:
+                return f"搜索论文: {topic_match.group(1)}"
+
+    return None  # No key info extracted
+
+
 async def chat_stream_generator(
     request: ChatRequest,
     agent: AgentManager,
@@ -257,88 +385,26 @@ async def chat_stream_generator(
             session = session_manager.load_session(request.session_id)
 
             if session is None:
+                # New session: create it
                 session = session_manager.create_session(
                     session_id=request.session_id,
                     metadata=request.context,
                 )
+                logger.info(f"New session created: {request.session_id}")
+            # Note: conversation_context is already extracted in the parent function
+            # and included in system_prompt, no need to extract again here
 
-            # Prepare messages
+            # === KEY DESIGN: messages list only contains current user message ===
+            # Historical conversation is NOT included in messages to avoid confusion
+            # Context is provided separately via system_prompt components
             messages = []
 
-            # Get session history
-            session_messages = session.get("messages", [])
-
-            # === INTELLIGENT CONTEXT PRUNING ===
-            # Strategy: Use task boundary detection to prune irrelevant history
-            #
-            # 1. Check if there's a task boundary in recent history
-            # 2. If boundary found, only keep messages AFTER the boundary
-            # 3. If no boundary, keep last 3 messages
-            #
-            # This ensures LLM doesn't see "Beijing weather" when asking "Shanghai weather"
-
-            MAX_CONTEXT_MESSAGES = 3
-            recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
-
-            # Check for task boundary in recent messages
-            boundary_index = -1  # -1 means no boundary found
-            for i in range(len(recent_messages) - 1, 0, -1):
-                if i < len(recent_messages) - 1:  # Not the last message
-                    if detect_task_boundary(recent_messages[i], recent_messages[i + 1]):
-                        boundary_index = i
-                        logger.info(f"Task boundary found at index {i}, pruning earlier history")
-                        break
-
-            # Prune messages based on boundary
-            if boundary_index >= 0:
-                # Keep only messages after the boundary
-                recent_messages = recent_messages[boundary_index + 1:]
-                logger.info(f"Pruned to {len(recent_messages)} messages after boundary")
-            else:
-                # No boundary: keep recent messages as-is
-                logger.debug(f"No task boundary, keeping {len(recent_messages)} recent messages")
-
-            for i, msg in enumerate(recent_messages):
-                if msg["role"] in ["user", "assistant"]:
-                    # Check if this is the last message (current question)
-                    is_last_message = (i == len(recent_messages) - 1)
-
-                    if is_last_message:
-                        # CURRENT MESSAGE: Use full content - this is what LLM should focus on
-                        message_dict = {
-                            "role": msg["role"],
-                            "content": msg["content"],
-                        }
-                        logger.debug(f"Loading current message: {msg['content'][:50]}...")
-
-                        # Add images if present (only for current message)
-                        if msg.get("images"):
-                            # Format content for vision models
-                            content_list = [{"type": "text", "text": msg["content"]}]
-                            for img in msg["images"]:
-                                content_list.append({
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                                })
-                            message_dict["content"] = content_list
-                    else:
-                        # HISTORICAL MESSAGE: Abstract to type only - prevents interference
-                        # Don't show "Beijing weather" - show "Weather Information Query" instead
-                        # Don't include images for historical messages
-                        message_type = _classify_conversation_type(msg.get("content", ""))
-                        message_dict = {
-                            "role": msg["role"],
-                            "content": f"[COMPLETED_TASK] {message_type} - Task finished, ignore details",
-                        }
-                        logger.debug(f"Abstracted historical message to: {message_type}")
-
-                    messages.append(message_dict)
-
-            # Add current message
+            # Add only the current user message
             current_message = {
                 "role": "user",
                 "content": request.message,
             }
+
             # Add images from current request if present
             if request.images:
                 content_list = [{"type": "text", "text": request.message}]
@@ -348,7 +414,9 @@ async def chat_stream_generator(
                         "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
                     })
                 current_message["content"] = content_list
+
             messages.append(current_message)
+            logger.debug(f"Prepared messages list with {len(messages)} message(s): current user message only")
 
             # Log input
             exec_logger.log_input(messages, system_prompt)
@@ -541,7 +609,7 @@ async def chat(request: ChatRequest):
     bootstrap_skills()
 
     # === Retrieve relevant conversation history via semantic search ===
-    recent_history = ""
+    semantic_history = ""
     try:
         from app.config import get_settings
         settings = get_settings()
@@ -551,8 +619,8 @@ async def chat(request: ChatRequest):
         is_substantial_query = (
             message_len > 20 and  # At least 20 characters
             not request.message.strip() in ["你好", "hello", "hi", "嗨", "您好"] and  # Not simple greetings
-            "?" in request.message or "？" in request.message or  # Questions
-            any(word in request.message.lower() for word in ["如何", "怎么", "什么", "为什么", "how", "what", "why", "how to"])  # Complex queries
+            ("?" in request.message or "？" in request.message or  # Questions
+             any(word in request.message.lower() for word in ["如何", "怎么", "什么", "为什么", "how", "what", "why", "how to"]))  # Complex queries
         )
 
         # Check embedding model status before semantic search
@@ -592,39 +660,53 @@ async def chat(request: ChatRequest):
                             filtered_results.append(r)
 
                 if filtered_results:
-                    # Format with pattern type only (no specific content)
+                    # Format with specific content (not just type)
                     formatted_entries = []
                     for idx, r in enumerate(filtered_results, 1):
                         similarity = r.get('similarity', 0.0)
                         session_id = r.get('metadata', {}).get('session_id', 'unknown')
                         content = r['content']
 
-                        # Extract pattern type (no specific values)
-                        entry_type = _classify_conversation_type(content)
+                        # Truncate content if too long (show first 200 chars)
+                        preview = content[:200] + "..." if len(content) > 200 else content
 
                         entry = f"""---
-📜 **Historical Pattern #{idx}**
-   👤 Session: {session_id}
-   🎯 Relevance: {similarity:.1%}
-   📋 Pattern Type: {entry_type}
+## Segment #{idx}
+**Session**: {session_id} | **Relevance**: {similarity:.1%}
 
-   ⚠️  This is a PAST conversation pattern. Extract the approach, NOT specific values.
+**Content Preview**:
+{preview}
+
+⚠️ *This is a historical conversation segment. Use it to understand the user's expression style and needs. Do NOT assume you need to "continue" this conversation.*
 """
                         formatted_entries.append(entry)
 
-                    recent_history = "\n".join(formatted_entries)
-                    import logging
-                    logging.info(f"Found {len(filtered_results)} relevant conversation chunks for query: {request.message[:50]}")
+                    semantic_history = "\n".join(formatted_entries)
+                    logger.info(f"Found {len(filtered_results)} relevant conversation chunks for query: {request.message[:50]}")
     except Exception as e:
-        import logging
-        logging.warning(f"Semantic search failed: {e}")
+        logger.warning(f"Semantic search failed: {e}")
 
-    # Build system prompt
+    # === Extract conversation context from current session ===
+    conversation_context = ""
+    try:
+        session_manager = get_session_manager()
+        session = session_manager.load_session(request.session_id)
+
+        if session is not None:
+            session_messages = session.get("messages", [])
+            if session_messages:
+                conversation_context = _extract_conversation_context(session_messages)
+                logger.debug(f"Extracted conversation context from session")
+    except Exception as e:
+        logger.warning(f"Failed to extract conversation context: {e}")
+
+    # Build system prompt with new session data structure
     try:
         system_prompt = build_system_prompt(
             session_data={
                 "user_context": request.context,
-                "recent_history": recent_history,
+                "conversation_context": conversation_context,  # Current session context
+                "semantic_history": semantic_history,          # Semantic search results
             }
         )
     except Exception as e:

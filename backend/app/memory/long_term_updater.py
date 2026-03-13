@@ -197,7 +197,12 @@ class LongTermMemoryUpdater:
 
     def _are_similar(self, text1: str, text2: str) -> bool:
         """
-        Check if two text contents are similar (simple heuristic).
+        Check if two text contents are similar (improved version).
+
+        Improvements:
+        1. Try to use embedding similarity (if available)
+        2. Improved text preprocessing (remove stopwords, punctuation)
+        3. Support Chinese-English mixed content
 
         Args:
             text1: First text
@@ -206,27 +211,79 @@ class LongTermMemoryUpdater:
         Returns:
             True if texts are similar
         """
-        # Simple similarity check: one is substring of the other
-        # or they share significant word overlap
-        t1_lower = text1.lower()
-        t2_lower = text2.lower()
+        # Method 1: Try to use embedding similarity
+        try:
+            from app.core.embedding_manager import get_embedding_manager
+            embedding_manager = get_embedding_manager()
+
+            if embedding_manager.get_status()["status"] == "READY":
+                # Compute semantic similarity
+                sim = embedding_manager.compute_similarity(text1, text2)
+                if sim > 0.85:  # Semantic similarity threshold
+                    logger.debug(f"Embedding similarity: {sim:.3f} -> similar")
+                    return True
+        except Exception as e:
+            logger.debug(f"Embedding similarity check failed: {e}")
+
+        # Method 2: Improved text similarity (fallback)
+        # Preprocess: lowercase, remove punctuation
+        import re
+        def normalize(text):
+            text = text.lower()
+            text = re.sub(r'[^\w\s]', ' ', text)  # Remove punctuation
+            text = re.sub(r'\s+', ' ', text)  # Merge spaces
+            return text.strip()
+
+        t1_norm = normalize(text1)
+        t2_norm = normalize(text2)
 
         # Check substring
-        if t1_lower in t2_lower or t2_lower in t1_lower:
+        if t1_norm in t2_norm or t2_norm in t1_norm:
+            logger.debug(f"Substring match found")
             return True
 
-        # Check word overlap
-        words1 = set(t1_lower.split())
-        words2 = set(t2_lower.split())
+        # Word overlap with improved tokenization
+        words1 = self._tokenize(t1_norm)
+        words2 = self._tokenize(t2_norm)
 
         if not words1 or not words2:
             return False
 
-        overlap = len(words1 & words2)
-        avg_length = (len(words1) + len(words2)) / 2
+        # Jaccard similarity
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+        jaccard = intersection / union if union > 0 else 0
 
-        # If more than 60% word overlap, consider similar
-        return overlap / avg_length > 0.6
+        logger.debug(f"Jaccard similarity: {jaccard:.3f}")
+        return jaccard > 0.7  # Increased threshold from 0.6
+
+    def _tokenize(self, text: str) -> set:
+        """
+        Improved tokenization supporting both Chinese and English.
+
+        - English: split by whitespace
+        - Chinese: extract multi-character phrases
+
+        Args:
+            text: Normalized text
+
+        Returns:
+            Set of tokens
+        """
+        tokens = set()
+
+        # English words
+        import re
+        english_words = re.findall(r'[a-z]+', text)
+        tokens.update(english_words)
+
+        # Chinese characters (remove single characters)
+        chinese_chars = re.findall(r'[\u4e00-\u9fff]+', text)
+        for phrase in chinese_chars:
+            if len(phrase) > 1:  # Only keep multi-character phrases
+                tokens.add(phrase)
+
+        return tokens
 
     def _prune_memories(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """

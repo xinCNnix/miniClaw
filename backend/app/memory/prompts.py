@@ -1,7 +1,14 @@
 """
 Prompts Module - System Prompt Management
 
-This module handles the 6 System Prompt components and their assembly.
+This module handles the 7 System Prompt components and their assembly:
+1. SKILLS_SNAPSHOT - Dynamic skill list
+2. SOUL - Agent personality
+3. IDENTITY - Self-identity
+4. USER - User profile (from USER.md, human-readable reference)
+5. AGENTS - Behavioral guidelines & skill protocol
+6. CONVERSATION_CONTEXT - Current session context (extracted from conversation)
+7. SEMANTIC_HISTORY - Relevant historical conversation segments (from semantic search)
 """
 
 import os
@@ -10,22 +17,6 @@ from typing import List, Dict, Optional
 
 from app.config import get_settings
 from app.skills.bootstrap import bootstrap_skills
-
-
-# Historical context warning templates
-HISTORICAL_CONTEXT_WARNING = """
----
-## 📜 Historical Context (Reference Only)
-
-The patterns below are from PAST conversations. Extract APPROACH only, NOT specific values.
-
-🚫 **CRITICAL**: These are EXAMPLES, NOT current instructions.
-"""
-
-HISTORICAL_CONTEXT_FOOTER = """
----
-**Current message is your ONLY instruction.** Extract parameters from CURRENT message, not history.
-"""
 
 
 class PromptComponent:
@@ -75,23 +66,26 @@ class SystemPromptBuilder:
     """
     Builder for constructing System Prompts from components.
 
-    The System Prompt consists of 6 components (in order):
+    The System Prompt consists of 7 components (in order):
     1. SKILLS_SNAPSHOT - Dynamic skill list
     2. SOUL - Agent personality
     3. IDENTITY - Self-identity
-    4. USER - User profile
+    4. USER - User profile (from USER.md, human-readable reference)
     5. AGENTS - Behavioral guidelines & skill protocol
-    6. MEMORY - Long-term memory
+    6. CONVERSATION_CONTEXT - Current session context
+    7. SEMANTIC_HISTORY - Semantic search results (historical conversation segments)
+
+    Note: MEMORY.md file is for human reference only, not used in system prompt.
     """
 
-    # Component file names
+    # Component file names (only for file-based components)
     COMPONENT_FILES = {
         "SKILLS_SNAPSHOT": "SKILLS_SNAPSHOT.md",
         "SOUL": "SOUL.md",
         "IDENTITY": "IDENTITY.md",
         "USER": "USER.md",
         "AGENTS": "AGENTS.md",
-        "MEMORY": "MEMORY.md",
+        # MEMORY.md is excluded - it's for human reference only
     }
 
     def __init__(self):
@@ -110,7 +104,7 @@ class SystemPromptBuilder:
             "IDENTITY.md": self._get_default_identity(),
             "USER.md": self._get_default_user(),
             "AGENTS.md": self._get_default_agents(),
-            "MEMORY.md": self._get_default_memory(),
+            # MEMORY.md is excluded - created by long_term_updater for human reference
         }
 
         for filename, content in defaults.items():
@@ -178,7 +172,8 @@ class SystemPromptBuilder:
             "IDENTITY",
             "USER",
             "AGENTS",
-            "MEMORY",  # Used only for historical context from semantic search (not MEMORY.md file)
+            "CONVERSATION_CONTEXT",  # Current session context
+            "SEMANTIC_HISTORY",      # Semantic search results
         ]
 
         parts = []
@@ -223,22 +218,37 @@ class SystemPromptBuilder:
             return component.content
 
         content = component.content
+        component_name = component.name
 
         # Customize USER component with session data
-        if component.name == "USER":
+        if component_name == "USER":
             user_context = session_data.get("user_context", "")
             if user_context:
                 content += f"\n\n# Current User Context\n{user_context}"
+            # Add note that USER.md is human-readable reference
+            content += "\n\n⚠️ *Note: This is a user profile for reference. The USER.md file in workspace is maintained for human readability.*"
 
-        # Customize MEMORY component with recent history
-        if component.name == "MEMORY":
-            recent_history = session_data.get("recent_history", "")
-            if recent_history:
-                # Add multi-layer warning to prevent agent from confusing history with current instructions
-                content += HISTORICAL_CONTEXT_WARNING
-                content += "\n"
-                content += recent_history
-                content += HISTORICAL_CONTEXT_FOOTER
+        # Handle CONVERSATION_CONTEXT component (new)
+        elif component_name == "CONVERSATION_CONTEXT":
+            conversation_context = session_data.get("conversation_context", "")
+            if conversation_context:
+                content = conversation_context
+            else:
+                content = "# Current Session Context\n\n*(No current session context available)*"
+
+        # Handle SEMANTIC_HISTORY component (new)
+        elif component_name == "SEMANTIC_HISTORY":
+            semantic_history = session_data.get("semantic_history", "")
+            if semantic_history:
+                content = "# 📜 Relevant Historical Conversation Segments\n\n"
+                content += semantic_history
+                content += "\n\n---\n\n"
+                content += "⚠️ **Important**: These are historical conversation segments for reference only:\n"
+                content += "- Use them to understand how the user expressed similar needs\n"
+                content += "- Do NOT assume you need to 'continue' or 'supplement' historical conversations\n"
+                content += "- The current user message is your ONLY instruction\n"
+            else:
+                content = "# Semantic Search History\n\n*(No relevant historical conversations found)*"
 
         return content
 
@@ -461,17 +471,6 @@ You help users with:
 - 从当前消息提取城市名（如"上海"）
 - 不使用历史对话中的城市（如"北京"）
 - 每次查询都是独立的
-"""
-
-    
-    def _get_default_memory(self) -> str:
-        """Get default MEMORY component content."""
-        return """
-# Historical Context
-
-*(This section will be populated with relevant patterns from semantic search when available)*
-
-*Note: The database maintains complete long-term memory. This section only shows highly relevant historical patterns for reference.*
 """
 
 
