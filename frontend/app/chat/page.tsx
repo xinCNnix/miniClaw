@@ -11,6 +11,21 @@ import { apiClient } from "@/lib/api"
 export default function ChatPage() {
   const { chat, editor, sessions, refreshSessions } = useApp()
 
+  // Restore most recent session on mount
+  useEffect(() => {
+    const restoreSession = async () => {
+      await refreshSessions()
+
+      // Auto-load the most recent session if available
+      if (sessions && sessions.length > 0) {
+        const mostRecentSession = sessions[0]
+        await chat.loadSessionMessages(mostRecentSession.session_id)
+      }
+    }
+
+    restoreSession()
+  }, [])
+
   const handleNewChat = async () => {
     await chat.newSession()
     // Refresh sessions list to show new session
@@ -19,21 +34,7 @@ export default function ChatPage() {
 
   const handleSelectSession = async (sessionId: string) => {
     try {
-      const session = await apiClient.getSession(sessionId)
-
-      // Load messages from session
-      if (session.messages && Array.isArray(session.messages)) {
-        const messages = session.messages.map((msg: any) => ({
-          role: msg.role,
-          content: msg.content,
-          timestamp: msg.timestamp || new Date().toISOString(),
-        }))
-        chat.loadMessages(messages)
-      } else {
-        chat.clearMessages()
-      }
-
-      chat.setSession(sessionId)
+      await chat.loadSessionMessages(sessionId)
     } catch (error) {
       console.error("Failed to load session:", error)
     }

@@ -19,6 +19,7 @@ interface UseChatReturn {
   stopGeneration: () => void
   clearMessages: () => void
   loadMessages: (messages: Message[]) => void
+  loadSessionMessages: (sessionId: string) => Promise<Message[]>
   setSession: (sessionId: string) => void
   newSession: () => Promise<void>
 }
@@ -238,6 +239,35 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
     setThinkingEvents([])
   }, [])
 
+  const loadSessionMessages = useCallback(async (sessionId: string) => {
+    try {
+      const response = await fetch(`${apiUrl || ""}/api/sessions/${sessionId}/messages`)
+
+      if (!response.ok) {
+        throw new Error(`Failed to load session: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+
+      // Convert backend messages to frontend format
+      const messages: Message[] = data.messages.map((msg: any) => ({
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
+        ...(msg.images && { images: msg.images }),
+      }))
+
+      loadMessages(messages)
+      setCurrentSessionId(sessionId)
+
+      return messages
+    } catch (error) {
+      console.error("Failed to load session messages:", error)
+      throw error
+    }
+  }, [apiUrl, loadMessages])
+
   const setSession = useCallback((sessionId: string) => {
     setCurrentSessionId(sessionId)
   }, [])
@@ -256,6 +286,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
     stopGeneration,
     clearMessages,
     loadMessages,
+    loadSessionMessages,
     setSession,
     newSession,
   }

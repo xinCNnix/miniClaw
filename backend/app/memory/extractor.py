@@ -121,10 +121,96 @@ class MemoryExtractor:
             elif role == "assistant":
                 lines.append(f"Assistant: {content}")
             elif role == "tool":
-                # Skip tool messages for memory extraction
-                continue
+                # Extract important information from tool outputs
+                tool_name = msg.get("name", msg.get("tool_name", "unknown"))
+                tool_output = content
+
+                # Only include important tools in memory extraction
+                if self._is_important_tool(tool_name):
+                    summarized = self._summarize_tool_output(tool_name, tool_output)
+                    if summarized:
+                        lines.append(f"[Tool: {tool_name}]\n{summarized}")
 
         return "\n".join(lines)
+
+    def _is_important_tool(self, tool_name: str) -> bool:
+        """
+        Check if a tool output is important enough to include in memory.
+
+        Args:
+            tool_name: Name of the tool
+
+        Returns:
+            True if tool output should be extracted
+        """
+        # Tools that produce important, persistent information
+        important_tools = {
+            # Research & information retrieval
+            "terminal",  # Can run arxiv_search and other info tools
+            "fetch",     # Web content retrieval
+            "arxiv",     # Academic paper search
+
+            # Knowledge tools
+            "search_knowledge_base",
+            "read_file",
+
+            # Data analysis
+            "python_repl",  # Analysis results
+        }
+
+        # Check if tool name contains any important keyword
+        tool_lower = tool_name.lower()
+        for important in important_tools:
+            if important in tool_lower:
+                return True
+
+        return False
+
+    def _summarize_tool_output(self, tool_name: str, tool_output: str) -> str:
+        """
+        Summarize tool output for memory extraction.
+
+        Args:
+            tool_name: Name of the tool
+            tool_output: Raw tool output
+
+        Returns:
+            Summarized output (truncated if too long)
+        """
+        if not tool_output or not tool_output.strip():
+            return ""
+
+        # Clean up output
+        output = tool_output.strip()
+
+        # For terminal output, try to extract structured data
+        if "terminal" in tool_name.lower():
+            # Check if it's JSON output (e.g., from arxiv_search)
+            if output.startswith("{") and output.endswith("}"):
+                try:
+                    import json
+                    data = json.loads(output)
+                    # Extract key information from structured output
+                    if "papers" in data:
+                        paper_count = len(data.get("papers", []))
+                        return f"Retrieved {paper_count} papers from arXiv"
+                    elif "total_results" in data:
+                        return f"Query returned {data.get('returned', 0)} results"
+                except json.JSONDecodeError:
+                    pass
+
+            # For other terminal output, limit length
+            max_length = 500
+            if len(output) > max_length:
+                return output[:max_length] + "\n...[truncated]"
+            return output
+
+        # For other tools, truncate very long outputs
+        max_length = 1000
+        if len(output) > max_length:
+            return output[:max_length] + "\n...[truncated]"
+
+        return output
 
     def _build_extraction_prompt(self) -> str:
         """
@@ -133,7 +219,7 @@ class MemoryExtractor:
         Returns:
             System prompt string
         """
-        return """You are a memory extraction assistant. Your task is to analyze conversations and extract key information about the user.
+        return """You are a memory extraction assistant. Your task is to analyze conversations and extract key information about the user and important research results.
 
 Analyze the conversation and extract:
 
@@ -148,17 +234,27 @@ Analyze the conversation and extract:
    - Technical stack (e.g., "uses Python 3.10+, FastAPI, Next.js")
    - Domain knowledge
    - Role or background
+   - Research findings (e.g., "retrieved 20 papers on agent long-term memory from arXiv")
+   - Important data retrieved (e.g., "found 5 relevant academic papers on topic X")
 
 3. **Context** (type: "context")
    - Project goals
    - Constraints or limitations
    - Deadlines or timeframes
    - Current problems or challenges
+   - Research topics being investigated
 
 4. **Patterns** (type: "pattern")
    - Recurring requests
    - Common workflows
    - Frequently asked topics
+   - Research interests
+
+Special attention to tool outputs:
+- When you see "[Tool: terminal]" or similar markers, extract the key information
+- For research results (e.g., arXiv papers), note the topic and paper count
+- For data retrieval, note what information was found
+- These are important "fact" or "context" memories worth preserving
 
 For each extracted item, provide:
 - type: One of "preference", "fact", "context", "pattern"
