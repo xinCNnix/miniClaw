@@ -119,6 +119,112 @@ def format_sse_event(event: ChatEvent) -> str:
     return f"data: {json.dumps(event_dict, ensure_ascii=False)}\n\n"
 
 
+def _classify_conversation_type(content: str) -> str:
+    """
+    Classify conversation type without exposing specific content.
+
+    Returns type labels like "Weather Query", "Code Generation", etc.
+
+    Args:
+        content: Conversation content to classify
+
+    Returns:
+        Type label string
+    """
+    content_lower = content.lower()
+
+    # Weather query pattern
+    if any(kw in content_lower for kw in ["天气", "weather", "温度", "temperature"]):
+        return "Weather Information Query"
+
+    # Code generation pattern
+    if any(kw in content_lower for kw in ["代码", "code", "函数", "function", "class"]):
+        return "Code Generation Task"
+
+    # Data analysis pattern
+    if any(kw in content_lower for kw in ["分析", "analyze", "统计", "statistics", "数据"]):
+        return "Data Analysis Task"
+
+    # Academic paper search
+    if any(kw in content_lower for kw in ["论文", "paper", "arxiv", "文献"]):
+        return "Academic Paper Search"
+
+    # File operation
+    if any(kw in content_lower for kw in ["文件", "file", "读取", "read", "写入", "write"]):
+        return "File Operation Task"
+
+    return "General Conversation"
+
+
+def detect_task_boundary(msg1: dict, msg2: dict) -> bool:
+    """
+    Detect if there is a task boundary between two messages.
+
+    A task boundary exists when:
+    1. Time gap > 5 minutes (conversation break)
+    2. Explicit topic switch (weather → paper search)
+
+    Args:
+        msg1: First message
+        msg2: Second message
+
+    Returns:
+        True if task boundary detected, False otherwise
+    """
+    from datetime import datetime
+
+    # Check 1: Time gap
+    try:
+        time1 = datetime.fromisoformat(msg1.get("timestamp", ""))
+        time2 = datetime.fromisoformat(msg2.get("timestamp", ""))
+        time_diff = (time2 - time1).total_seconds()
+
+        if time_diff > 300:  # 5 minutes
+            logger.info(f"Task boundary detected: time gap {time_diff}s")
+            return True
+    except Exception:
+        pass  # Skip if timestamp parsing fails
+
+    # Check 2: Topic switch keywords
+    content1 = msg1.get("content", "").lower()
+    content2 = msg2.get("content", "").lower()
+
+    # Define topic categories
+    weather_keywords = ["天气", "weather", "温度", "temperature", " climates"]
+    paper_keywords = ["论文", "paper", "arxiv", "文献", "article"]
+    code_keywords = ["代码", "code", "函数", "function", "programming"]
+    file_keywords = ["文件", "file", "读取", "read", "write", "directory"]
+
+    # Check for cross-category switches
+    def has_keywords(content, keywords):
+        return any(kw in content for kw in keywords)
+
+    # Weather → Non-weather
+    if has_keywords(content1, weather_keywords) and not has_keywords(content2, weather_keywords):
+        logger.info("Task boundary: weather → other topic")
+        return True
+
+    # Non-weather → Weather
+    if not has_keywords(content1, weather_keywords) and has_keywords(content2, weather_keywords):
+        # Only if it's been a while (not a quick follow-up)
+        try:
+            time1 = datetime.fromisoformat(msg1.get("timestamp", ""))
+            time2 = datetime.fromisoformat(msg2.get("timestamp", ""))
+            if (time2 - time1).total_seconds() > 60:  # 1 minute
+                logger.info("Task boundary: other topic → weather (after gap)")
+                return True
+        except:
+            pass
+
+    # Paper/Code/File switches
+    if (has_keywords(content1, paper_keywords) and has_keywords(content2, code_keywords)) or \
+       (has_keywords(content1, code_keywords) and has_keywords(content2, paper_keywords)):
+        logger.info("Task boundary: paper ↔ code")
+        return True
+
+    return False
+
+
 async def chat_stream_generator(
     request: ChatRequest,
     agent: AgentManager,
@@ -150,136 +256,195 @@ async def chat_stream_generator(
             session_manager = get_session_manager()
             session = session_manager.load_session(request.session_id)
 
-        if session is None:
-            session = session_manager.create_session(
-                session_id=request.session_id,
-                metadata=request.context,
-            )
-
-        # Prepare messages
-        messages = []
-
-        # Get session history
-        session_messages = session.get("messages", [])
-
-        # Limit context window to avoid Agent getting stuck on previous tasks
-        # Only keep last 10 messages (5 user + 5 assistant) to maintain context
-        MAX_CONTEXT_MESSAGES = 10
-        recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
-
-        for msg in recent_messages:
-            if msg["role"] in ["user", "assistant"]:
-                message_dict = {
-                    "role": msg["role"],
-                    "content": msg["content"],
-                }
-                # Add images if present
-                if msg.get("images"):
-                    # Format content for vision models
-                    content_list = [{"type": "text", "text": msg["content"]}]
-                    for img in msg["images"]:
-                        content_list.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                        })
-                    message_dict["content"] = content_list
-                messages.append(message_dict)
-
-        # Add current message
-        current_message = {
-            "role": "user",
-            "content": request.message,
-        }
-        # Add images from current request if present
-        if request.images:
-            content_list = [{"type": "text", "text": request.message}]
-            for img in request.images:
-                content_list.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                })
-            current_message["content"] = content_list
-        messages.append(current_message)
-
-        # Log input
-        exec_logger.log_input(messages, system_prompt)
-
-        # Stream agent response
-        logger.info("Starting agent stream...")
-        event_count = 0
-        tool_call_count = 0
-
-        async for event in agent.astream(
-            messages=messages,
-            system_prompt=system_prompt,
-        ):
-            event_count += 1
-
-            # Log each event
-            event_type = event.get("type", "unknown")
-            logger.debug(f"Agent event #{event_count}: {event_type}")
-
-            if event_type == "tool_call":
-                tool_call_count += 1
-                tool_calls = event.get("tool_calls", [])
-                for tc in tool_calls:
-                    tc_name = tc.get("name", "unknown")
-                    tc_args = tc.get("arguments", {})
-                    exec_logger.log_tool_call(tc_name, tc_args)
-                    logger.info(f"Tool call: {tc_name}")
-
-            elif event_type == "tool_output":
-                tool_name = event.get("tool_name", "unknown")
-                output = event.get("output", "")
-                status = event.get("status", "unknown")
-                success = status == "success"
-                exec_logger.log_tool_result(tool_name, output, success)
-                logger.info(f"Tool output: {tool_name} - {status}")
-
-            elif event_type == "content_delta":
-                content = event.get("content", "")
-                logger.debug(f"Content delta: {len(content)} chars")
-
-            yield format_sse_event(
-                ChatEvent(**event)
-            )
-
-        logger.info(f"Agent stream completed. Total events: {event_count}, Tool calls: {tool_call_count}")
-
-        # Save to session
-        session_manager.add_message(
-            session_id=request.session_id,
-            role="user",
-            content=request.message,
-            images=request.images,
-        )
-
-        # Trigger background memory extraction (non-blocking)
-        try:
-            from app.config import get_settings
-            settings = get_settings()
-
-            if settings.enable_memory_extraction:
-                asyncio.create_task(
-                    _background_memory_extraction(request.session_id)
+            if session is None:
+                session = session_manager.create_session(
+                    session_id=request.session_id,
+                    metadata=request.context,
                 )
-        except Exception as e:
-            import logging
-            logging.warning(f"Failed to trigger memory extraction: {e}")
 
-        # Send done event
-        yield format_sse_event(
-            ChatEvent(type="done")
-        )
+            # Prepare messages
+            messages = []
 
-    except Exception as e:
-        # Send error event
-        yield format_sse_event(
-            ChatEvent(
-                type="error",
-                error=str(e),
+            # Get session history
+            session_messages = session.get("messages", [])
+
+            # === INTELLIGENT CONTEXT PRUNING ===
+            # Strategy: Use task boundary detection to prune irrelevant history
+            #
+            # 1. Check if there's a task boundary in recent history
+            # 2. If boundary found, only keep messages AFTER the boundary
+            # 3. If no boundary, keep last 3 messages
+            #
+            # This ensures LLM doesn't see "Beijing weather" when asking "Shanghai weather"
+
+            MAX_CONTEXT_MESSAGES = 3
+            recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
+
+            # Check for task boundary in recent messages
+            boundary_index = -1  # -1 means no boundary found
+            for i in range(len(recent_messages) - 1, 0, -1):
+                if i < len(recent_messages) - 1:  # Not the last message
+                    if detect_task_boundary(recent_messages[i], recent_messages[i + 1]):
+                        boundary_index = i
+                        logger.info(f"Task boundary found at index {i}, pruning earlier history")
+                        break
+
+            # Prune messages based on boundary
+            if boundary_index >= 0:
+                # Keep only messages after the boundary
+                recent_messages = recent_messages[boundary_index + 1:]
+                logger.info(f"Pruned to {len(recent_messages)} messages after boundary")
+            else:
+                # No boundary: keep recent messages as-is
+                logger.debug(f"No task boundary, keeping {len(recent_messages)} recent messages")
+
+            for i, msg in enumerate(recent_messages):
+                if msg["role"] in ["user", "assistant"]:
+                    # Check if this is the last message (current question)
+                    is_last_message = (i == len(recent_messages) - 1)
+
+                    if is_last_message:
+                        # CURRENT MESSAGE: Use full content - this is what LLM should focus on
+                        message_dict = {
+                            "role": msg["role"],
+                            "content": msg["content"],
+                        }
+                        logger.debug(f"Loading current message: {msg['content'][:50]}...")
+
+                        # Add images if present (only for current message)
+                        if msg.get("images"):
+                            # Format content for vision models
+                            content_list = [{"type": "text", "text": msg["content"]}]
+                            for img in msg["images"]:
+                                content_list.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
+                                })
+                            message_dict["content"] = content_list
+                    else:
+                        # HISTORICAL MESSAGE: Abstract to type only - prevents interference
+                        # Don't show "Beijing weather" - show "Weather Information Query" instead
+                        # Don't include images for historical messages
+                        message_type = _classify_conversation_type(msg.get("content", ""))
+                        message_dict = {
+                            "role": msg["role"],
+                            "content": f"[COMPLETED_TASK] {message_type} - Task finished, ignore details",
+                        }
+                        logger.debug(f"Abstracted historical message to: {message_type}")
+
+                    messages.append(message_dict)
+
+            # Add current message
+            current_message = {
+                "role": "user",
+                "content": request.message,
+            }
+            # Add images from current request if present
+            if request.images:
+                content_list = [{"type": "text", "text": request.message}]
+                for img in request.images:
+                    content_list.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
+                    })
+                current_message["content"] = content_list
+            messages.append(current_message)
+
+            # Log input
+            exec_logger.log_input(messages, system_prompt)
+
+            # Stream agent response
+            logger.info("Starting agent stream...")
+            event_count = 0
+            tool_call_count = 0
+            assistant_message_parts = []  # Collect assistant response for saving
+
+            async for event in agent.astream(
+                messages=messages,
+                system_prompt=system_prompt,
+            ):
+                event_count += 1
+
+                # Log each event
+                event_type = event.get("type", "unknown")
+                logger.debug(f"Agent event #{event_count}: {event_type}")
+
+                if event_type == "tool_call":
+                    tool_call_count += 1
+                    tool_calls = event.get("tool_calls", [])
+                    for tc in tool_calls:
+                        tc_name = tc.get("name", "unknown")
+                        tc_args = tc.get("arguments", {})
+                        exec_logger.log_tool_call(tc_name, tc_args)
+                        logger.info(f"Tool call: {tc_name}")
+
+                elif event_type == "tool_output":
+                    tool_name = event.get("tool_name", "unknown")
+                    output = event.get("output", "")
+                    status = event.get("status", "unknown")
+                    success = status == "success"
+                    exec_logger.log_tool_result(tool_name, output, success)
+                    logger.info(f"Tool output: {tool_name} - {status}")
+
+                elif event_type == "content_delta":
+                    content = event.get("content", "")
+                    logger.debug(f"Content delta: {len(content)} chars")
+                    # Collect assistant response for saving
+                    assistant_message_parts.append(content)
+                    logger.debug(f"Content delta: {len(content)} chars")
+
+                yield format_sse_event(
+                    ChatEvent(**event)
+                )
+
+            logger.info(f"Agent stream completed. Total events: {event_count}, Tool calls: {tool_call_count}")
+
+            # Save user message to session
+            session_manager.add_message(
+                session_id=request.session_id,
+                role="user",
+                content=request.message,
+                images=request.images,
             )
-        )
+
+            # Save assistant response to session (if any)
+            if assistant_message_parts:
+                assistant_full_response = "".join(assistant_message_parts)
+                session_manager.add_message(
+                    session_id=request.session_id,
+                    role="assistant",
+                    content=assistant_full_response,
+                )
+                logger.info(f"Saved assistant response: {len(assistant_full_response)} chars")
+            else:
+                logger.warning("No assistant response to save")
+
+            # Trigger background memory extraction (non-blocking)
+            try:
+                from app.config import get_settings
+                settings = get_settings()
+
+                if settings.enable_memory_extraction:
+                    asyncio.create_task(
+                        _background_memory_extraction(request.session_id)
+                    )
+            except Exception as e:
+                import logging
+                logging.warning(f"Failed to trigger memory extraction: {e}")
+
+            # Send done event
+            yield format_sse_event(
+                ChatEvent(type="done")
+            )
+
+        except Exception as e:
+            # Send error event
+            yield format_sse_event(
+                ChatEvent(
+                    type="error",
+                    error=str(e),
+                )
+            )
 
 
 @router.post("")
@@ -423,14 +588,31 @@ async def chat(request: ChatRequest):
                     if len(content) > 50 and not content.startswith(('测试', 'test', 'Test')):
                         # Only include if has reasonable relevance (similarity > 0.3 if available)
                         similarity = r.get('similarity', 1.0)
-                        if similarity > 0.3:
+                        if similarity > 0.5:  # Increased threshold to reduce weak matches
                             filtered_results.append(r)
 
                 if filtered_results:
-                    recent_history = "\n".join([
-                        f"- [历史对话参考] {r['content'][:150]}..."
-                        for r in filtered_results
-                    ])
+                    # Format with pattern type only (no specific content)
+                    formatted_entries = []
+                    for idx, r in enumerate(filtered_results, 1):
+                        similarity = r.get('similarity', 0.0)
+                        session_id = r.get('metadata', {}).get('session_id', 'unknown')
+                        content = r['content']
+
+                        # Extract pattern type (no specific values)
+                        entry_type = _classify_conversation_type(content)
+
+                        entry = f"""---
+📜 **Historical Pattern #{idx}**
+   👤 Session: {session_id}
+   🎯 Relevance: {similarity:.1%}
+   📋 Pattern Type: {entry_type}
+
+   ⚠️  This is a PAST conversation pattern. Extract the approach, NOT specific values.
+"""
+                        formatted_entries.append(entry)
+
+                    recent_history = "\n".join(formatted_entries)
                     import logging
                     logging.info(f"Found {len(filtered_results)} relevant conversation chunks for query: {request.message[:50]}")
     except Exception as e:

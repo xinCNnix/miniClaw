@@ -123,9 +123,19 @@ def get_agent_logger(name: str = "agent") -> logging.Logger:
         name: Logger name (default: "agent")
 
     Returns:
-        Logger instance
+        Logger instance that outputs to agent.log and console
     """
-    return logging.getLogger(name)
+    logger = logging.getLogger(name)
+
+    # Ensure the logger has the same handlers as the "agent" logger
+    # This is important for child loggers like "agent.executor"
+    agent_root = logging.getLogger("agent")
+    if not logger.handlers:
+        for handler in agent_root.handlers:
+            logger.addHandler(handler)
+    logger.setLevel(agent_root.level)
+
+    return logger
 
 
 class AgentExecutionLogger:

@@ -59,7 +59,7 @@ class SessionDetailResponse(BaseModel):
         description="Session metadata",
     )
 
-    stats: Optional[Dict[str, int]] = Field(
+    stats: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Session statistics",
     )

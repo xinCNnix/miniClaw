@@ -134,20 +134,27 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   if (data.content) {
                     assistantContent += data.content
                     setMessages((prev) => {
-                      const newMessages = [...prev]
-                      const lastMessage = newMessages[newMessages.length - 1]
+                      const lastMessage = prev[prev.length - 1]
 
                       if (lastMessage && lastMessage.role === "assistant") {
-                        lastMessage.content = assistantContent
+                        // Create new object to ensure React detects the change
+                        return [
+                          ...prev.slice(0, -1),
+                          {
+                            ...lastMessage,
+                            content: assistantContent,
+                          },
+                        ]
                       } else {
-                        newMessages.push({
-                          role: "assistant",
-                          content: assistantContent,
-                          timestamp: new Date().toISOString(),
-                        })
+                        return [
+                          ...prev,
+                          {
+                            role: "assistant",
+                            content: assistantContent,
+                            timestamp: new Date().toISOString(),
+                          },
+                        ]
                       }
-
-                      return newMessages
                     })
                   }
                   break

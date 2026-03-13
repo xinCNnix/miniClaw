@@ -17,6 +17,9 @@ from app.core.llm import create_llm, LLMProvider
 from app.config import get_settings
 from app.logging_config import get_agent_logger
 
+# Multi-round tool calling configuration
+MAX_TOOL_ROUNDS = 10  # Maximum rounds of tool calling (prevents infinite loops)
+
 # Get logger for agent execution
 agent_logger = get_agent_logger("agent.executor")
 logger = logging.getLogger(__name__)
@@ -247,35 +250,45 @@ class AgentManager:
             yield {"type": "thinking_start"}
             logger.info("Thinking...")
 
-            # Get response
-            logger.info("Invoking LLM...")
-            llm_start = time.time()
-            response = await self.llm_with_tools.ainvoke(lc_messages)
-            llm_duration = time.time() - llm_start
-            logger.info(f"LLM response received in {llm_duration:.2f}s")
+            # Get max_tool_rounds from settings
+            settings = get_settings()
+            max_tool_rounds = settings.max_tool_rounds
 
-            # Log response details
-            if hasattr(response, 'content'):
-                logger.debug(f"LLM content: {response.content[:500]}...")
-            if hasattr(response, 'response_metadata'):
-                logger.debug(f"Response metadata: {response.response_metadata}")
+            # Multi-round tool calling loop
+            round_count = 0
+            while round_count < max_tool_rounds:
+                llm_start = time.time()
+                response = await self.llm_with_tools.ainvoke(lc_messages)
+                llm_duration = time.time() - llm_start
 
-            # Handle tool calls
-            if hasattr(response, 'tool_calls') and response.tool_calls:
-                logger.info(f"Tool calls requested: {len(response.tool_calls)}")
+                logger.info(f"[Round {round_count + 1}] LLM response received in {llm_duration:.2f}s")
 
-                # Add the assistant message with tool_calls to conversation history
-                # This is REQUIRED by OpenAI API standard - tool messages must follow
-                # a message with tool_calls
+                # Check if LLM wants to call tools
+                if not hasattr(response, 'tool_calls') or not response.tool_calls:
+                    logger.info(f"[Round {round_count + 1}] No tool calls, returning final response")
+                    # No more tool calls, yield content and break
+                    if hasattr(response, 'content') and response.content:
+                        logger.info(f"[Round {round_count + 1}] Yielding final content: {len(response.content)} chars")
+                        yield {
+                            "type": "content_delta",
+                            "content": response.content,
+                        }
+                    break
+
+                # Has tool calls - execute them
+                tool_calls = response.tool_calls
+                logger.info(f"[Round {round_count + 1}] Tool calls requested: {len(tool_calls)}")
+
+                # Add assistant message to conversation history
                 lc_messages.append(response)
 
-                for idx, tool_call in enumerate(response.tool_calls):
+                # Execute all tools in this round
+                for idx, tool_call in enumerate(tool_calls):
                     tool_name = tool_call.get('name', '')
                     tool_args = tool_call.get('args', {})
                     tool_id = tool_call.get('id', '')
 
-                    logger.info(f"Executing tool {idx+1}/{len(response.tool_calls)}: {tool_name}")
-                    logger.debug(f"Tool arguments: {tool_args}")
+                    logger.info(f"[Round {round_count + 1}] Executing tool {idx+1}/{len(tool_calls)}: {tool_name}")
 
                     yield {
                         "type": "tool_call",
@@ -287,13 +300,9 @@ class AgentManager:
                     }
 
                     try:
-                        tool_start = time.time()
                         tool_output = await self._aexecute_tool(tool_name, tool_args)
-                        tool_duration = time.time() - tool_start
 
-                        logger.info(f"Tool {tool_name} completed in {tool_duration:.2f}s")
-                        logger.debug(f"Tool output size: {len(str(tool_output))} chars")
-                        logger.debug(f"Tool output preview: {str(tool_output)[:300]}...")
+                        logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed")
 
                         yield {
                             "type": "tool_output",
@@ -302,7 +311,7 @@ class AgentManager:
                             "status": "success",
                         }
                     except Exception as e:
-                        logger.error(f"Tool {tool_name} failed: {e}", exc_info=True)
+                        logger.error(f"[Round {round_count + 1}] Tool {tool_name} failed: {e}")
                         yield {
                             "type": "tool_output",
                             "tool_name": tool_name,
@@ -310,23 +319,47 @@ class AgentManager:
                             "status": "error",
                         }
 
+                    # Add tool result to conversation
                     lc_messages.append(ToolMessage(
                         content=str(tool_output),
                         tool_call_id=tool_call.get('id', '')
                     ))
 
-                # Get final response
-                logger.info("Getting final LLM response after tool execution...")
-                response = await self.llm_with_tools.ainvoke(lc_messages)
+                # Increment round count and continue
+                round_count += 1
+                logger.info(f"[Round {round_count}] Completed, checking if more tools needed...")
 
-            # Yield content
-            if hasattr(response, 'content') and response.content:
-                logger.info(f"Final content: {len(response.content)} chars")
-                logger.debug(f"Final content: {response.content}")
+            # Check if we hit the max rounds limit
+            if round_count >= max_tool_rounds:
+                logger.error(f"⚠️  Exceeded max tool rounds ({max_tool_rounds}), forcing completion")
                 yield {
-                    "type": "content_delta",
-                    "content": response.content,
+                    "type": "warning",
+                    "message": f"Reached maximum tool execution rounds ({max_tool_rounds})"
                 }
+
+                # Get final response from LLM after all tool executions
+                # Use LLM WITHOUT tools to force text generation instead of more tool calls
+                logger.info("Getting final response after max tool rounds...")
+                try:
+                    final_response = await self.llm.ainvoke(lc_messages)
+                    if hasattr(final_response, 'content') and final_response.content:
+                        logger.info(f"Final response: {len(final_response.content)} chars")
+                        yield {
+                            "type": "content_delta",
+                            "content": final_response.content,
+                        }
+                    else:
+                        logger.warning("LLM returned no content after max rounds")
+                        yield {
+                            "type": "error",
+                            "error": "Agent exceeded maximum tool execution rounds but could not generate a response"
+                        }
+                except Exception as e:
+                    logger.error(f"Failed to get final response: {e}")
+                    yield {
+                        "type": "error",
+                        "error": f"Failed to generate response after tool execution: {str(e)}"
+                    }
 
             total_duration = time.time() - start_time
             logger.info(f"=== Agent astream COMPLETE in {total_duration:.2f}s ===")

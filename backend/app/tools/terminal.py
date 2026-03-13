@@ -91,11 +91,31 @@ class TerminalTool(BaseTool):
         for blocked in self._blocked_commands:
             # Also normalize the blocked pattern
             blocked_normalized = re.sub(r'\s+', ' ', blocked.lower())
-            if blocked_normalized in command_normalized:
-                raise ValueError(
-                    f"Command contains blocked pattern: {blocked}. "
-                    f"This command is not allowed for security reasons."
-                )
+
+            # Check if blocked word appears in command
+            if blocked_normalized not in command_normalized:
+                continue
+
+            # If found, check if it's in a URL parameter context (safe)
+            # URL params: ?format= or &format= or similar
+            # Block: format at start of line, or after command separators
+            escaped_word = re.escape(blocked_normalized)
+
+            # Safe contexts: URL parameters
+            # ?format=, &format=, -format=value, --format=value
+            safe_pattern = rf'[?&\-]({escaped_word})='
+
+            # Dangerous contexts: command execution
+            # ^format, format c:, format.exe, | format, ; format, && format
+            dangerous_pattern = rf'(?:^|[\|;]|[;&]\s+)({escaped_word})(?:\s|$)'
+
+            if re.search(dangerous_pattern, command_normalized):
+                # Also make sure it's NOT in a URL parameter context
+                if not re.search(safe_pattern, command_normalized):
+                    raise ValueError(
+                        f"Command contains blocked pattern: {blocked}. "
+                        f"This command is not allowed for security reasons."
+                    )
 
         # Check for path traversal attempts
         if "../" in command and "rm" in command.lower():
@@ -171,12 +191,15 @@ class TerminalTool(BaseTool):
 
         try:
             # Execute command
+            # Use UTF-8 encoding for cross-platform compatibility
+            # errors='replace' replaces characters that can't be decoded instead of crashing
             result = subprocess.run(
                 command,
                 shell=True,
                 cwd=valid_cwd,
                 capture_output=True,
-                text=True,
+                encoding='utf-8',
+                errors='replace',
                 timeout=timeout,
                 check=False,  # Don't raise exception on non-zero exit
             )

@@ -132,7 +132,7 @@ async def get_config_status():
     """
     try:
         credentials = KeyObfuscator.load_credentials()
-        providers = list(credentials.keys())
+        providers = [k for k in credentials.keys() if not k.startswith("_")]
 
         return ConfigStatusResponse(
             has_credentials=len(providers) > 0,
