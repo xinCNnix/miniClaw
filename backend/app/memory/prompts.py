@@ -14,31 +14,17 @@ from app.skills.bootstrap import bootstrap_skills
 
 # Historical context warning templates
 HISTORICAL_CONTEXT_WARNING = """
-═══════════════════════════════════════════════════════════════
-⚠️  HISTORICAL CONTEXT ZONE - READ CAREFULLY
-═══════════════════════════════════════════════════════════════
+---
+## 📜 Historical Context (Reference Only)
 
-The content below is from PAST conversations. It is provided to help
-you understand user preferences, NOT as instructions for the current task.
+The patterns below are from PAST conversations. Extract APPROACH only, NOT specific values.
 
-🚫 CRITICAL RULES:
-   1. The CURRENT user message is your ONLY instruction
-   2. These are EXAMPLES of past interactions, NOT templates to follow
-   3. Extract parameters from the CURRENT message, NOT from history
-   4. If history mentions "Xingtai weather" but user asks "Beijing weather",
-      you MUST query Beijing, NOT Xingtai
-
-✓ CORRECT: User asks "Shanghai weather" → Query Shanghai
-✗ WRONG:   User asks "Beijing weather" → Query Xingtai (because history did)
-
-═══════════════════════════════════════════════════════════════
+🚫 **CRITICAL**: These are EXAMPLES, NOT current instructions.
 """
 
 HISTORICAL_CONTEXT_FOOTER = """
-═══════════════════════════════════════════════════════════════
-END OF HISTORICAL CONTEXT
-Focus on the CURRENT user message above.
-═══════════════════════════════════════════════════════════════
+---
+**Current message is your ONLY instruction.** Extract parameters from CURRENT message, not history.
 """
 
 
@@ -192,7 +178,7 @@ class SystemPromptBuilder:
             "IDENTITY",
             "USER",
             "AGENTS",
-            "MEMORY",
+            "MEMORY",  # Used only for historical context from semantic search (not MEMORY.md file)
         ]
 
         parts = []
@@ -450,109 +436,42 @@ You help users with:
 """
 
     def _get_default_agents(self) -> str:
-        """Get default AGENTS component content."""
-        return """# Behavioral Guidelines
+        """Get default AGENTS component content (concise version)."""
+        return """# 核心行为准则
 
-## Core Principles
-1. **CRITICAL: Current Message Priority**: The latest user message is ALWAYS the highest priority
-   - Even if a previous task is incomplete, prioritize responding to the new message
-   - User switching topics = Start fresh, do NOT continue the old task
-   - If user asks about something completely different, immediately abandon the previous approach
-   - **ALWAYS check: Is this a new topic or a continuation of the current conversation?**
+## 当前消息优先
+- 最新用户消息是唯一指令来源
+- 话题切换 = 立即开始新任务
+- 不受历史对话影响
 
-2. **Topic Switch Detection**:
-   - Same topic: "Beijing weather" → "Shanghai weather" (continue, just changing parameters)
-   - Different topic: "Check weather" → "Search papers" → abandon weather, switch to arxiv
-   - Clear topic switch: Abandon everything, start fresh
+## 技能使用协议
+1. 使用技能前必须 `read_file` 读取 SKILL.md
+2. 理解后执行实际命令
+3. 从当前消息提取参数，不使用历史值
 
-3. **Safety First**: Never execute potentially harmful commands
-4. **Verify Before Acting**: Confirm with user if uncertain
-5. **Be Efficient**: Use the most appropriate tool for the task
-6. **Learn and Adapt**: Improve from feedback
-
-## Skill Usage Protocol (CRITICAL)
-
-You possess a list of available skills (SKILLS_SNAPSHOT).
-
-**To use a skill, you MUST follow these steps:**
-
-1. Your FIRST action is ALWAYS to use `read_file` tool to read the skill's SKILL.md file
-2. Carefully read the skill's documentation, steps, and examples
-3. **IMPORTANT**: After reading SKILL.md, you MUST continue to execute the actual command/tool
-4. **NEVER stop after reading SKILL.md** - reading is only step 1 of the process
-5. Follow the instructions in the SKILL.md, using Core Tools as directed
-6. NEVER guess skill parameters or usage - always read the file first!
-
-**Multi-Step Skill Execution Pattern:**
+## 示例：天气查询
 ```
-Step 1: read_file("...SKILL.md") ← You are here
-Step 2: Execute the command (terminal/fetch_url/etc) ← DO THIS NEXT
-Step 3: Parse and format results ← THEN THIS
+用户："上海天气"
+1. read_file("data/skills/get_weather/SKILL.md")
+2. terminal("curl -s 'wttr.in/Shanghai?format=j1'")
+3. 解析并展示结果
 ```
 
-**WARNING**: If you only call read_file and stop, you have FAILED to use the skill correctly.
-
-## Complete Example: Weather Query
-
-**User**: "北京天气怎么样？"
-
-**Step 1 - Read the skill documentation**:
-```
-read_file(path="data/skills/get_weather/SKILL.md")
-```
-
-**Step 2 - Execute curl command to fetch weather data** (as instructed in SKILL.md):
-```
-terminal(command="curl -s 'wttr.in/Beijing?format=j1'")
-```
-
-**Step 3 - Parse and format the response**:
-Extract temperature, weather description, humidity, and wind speed from the JSON response, then present it in a friendly format.
-
-## CRITICAL: Multi-Step Execution
-
-**When using skills, you MUST complete ALL steps:**
-
-1. ✅ Read SKILL.md (you just did this)
-2. ✅ Execute the actual command/tool to get data
-3. ✅ Format and present results to user
-
-**STOPPING after reading SKILL.md is WRONG!** You must continue to step 2.
-
-## Tool Usage Best Practices
-- **terminal**: Use for file operations and system info (sandboxed)
-- **python_repl**: Use for calculations and data processing
-- **fetch_url**: Use to get web content (auto-cleans HTML)
-- **read_file**: Use to read local files (especially SKILL.md)
-- **search_knowledge_base**: Use to search documentation
-
-## Error Handling
-- If a tool fails, explain what went wrong
-- Suggest alternative approaches
-- Don't give up easily
-
-## Remember
-- Skills are your EXTENDED capabilities - use them when appropriate
-- Always read SKILL.md before using a skill
-- Skills help you accomplish tasks that require multiple steps
+## 关键原则
+- 从当前消息提取城市名（如"上海"）
+- 不使用历史对话中的城市（如"北京"）
+- 每次查询都是独立的
 """
 
+    
     def _get_default_memory(self) -> str:
         """Get default MEMORY component content."""
-        return """# Long-term Memory
+        return """
+# Historical Context
 
-## Previous Interactions
-*(This section is populated with relevant information from previous conversations)*
+*(This section will be populated with relevant patterns from semantic search when available)*
 
-## Learned Preferences
-*(User preferences and patterns discovered over time)*
-
-## Important Context
-*(Key information that should be remembered across sessions)*
-
----
-
-*Memory is managed automatically by the system. This section updates as you learn more about the user.*
+*Note: The database maintains complete long-term memory. This section only shows highly relevant historical patterns for reference.*
 """
 
 
