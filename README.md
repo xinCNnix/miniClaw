@@ -37,6 +37,24 @@ miniClaw is a lightweight, highly transparent AI Agent system rebuilt in Python,
 
 ---
 
+## Development & Testing Platform
+
+**Primary Development Environment: Windows 11**
+
+This project is developed and tested primarily on Windows 11. While designed to be cross-platform compatible (Windows, Linux, macOS), some features may have been optimized or tested more extensively on Windows.
+
+**Platform Compatibility:**
+- ✅ **Windows 10/11** - Primary development and testing platform
+- ✅ **Linux** - Compatible (tested on Ubuntu 20.04+)
+- ✅ **macOS** - Compatible (tested on macOS 12+)
+
+**Platform-Specific Notes:**
+- Windows: Use `start.bat` for quick start
+- Linux/macOS: Use `./start.sh` for quick start
+- Docker: Recommended for consistent behavior across platforms
+
+---
+
 ## Tech Stack
 
 ### Backend
@@ -406,6 +424,8 @@ model_name = "BAAI/bge-large-zh-v1.5"  # Chinese embedding model
 ---
 
 ## Testing
+
+**Testing Platform:** All tests are developed and validated on Windows 11. Tests should pass on Linux and macOS as well, but Windows is the primary testing environment.
 
 ### Backend Testing
 
