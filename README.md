@@ -11,29 +11,42 @@
 
 ## Project Introduction
 
-miniClaw is a lightweight, highly transparent AI Agent system rebuilt in Python, designed to replicate and optimize the core experience of OpenClaw. Unlike traditional Agent systems, miniClaw adopts the design philosophy of **File-first Memory** and **Skills as Plugins**, making AI Agent behavior completely transparent, controllable, and extensible.
+miniClaw is a lightweight, highly transparent AI Agent system that combines database-backed memory management with plugin-based extensibility. Unlike traditional black-box Agent systems, miniClaw maintains full visibility into Agent behavior through structured storage, traceable tool execution, and human-readable configuration files.
 
 ### Core Features
 
-- **File-first Memory**
-  - Abandons opaque vector databases
-  - All conversation records, system prompts, and user profiles stored as Markdown/JSON files
-  - Readable, editable, and version-controllable
+- **Dual-Storage Memory System**
+  - **SQLite Database**: Structured storage for conversations, memories, and user profiles
+  - **Vector Database**: ChromaDB for semantic retrieval and similarity search
+  - **Human-Readable Files**: `MEMORY.md` and `USER.md` for manual inspection and editing
+  - LLM-powered automatic memory extraction with confidence scoring
+  - Memory categorization: preferences, facts, context, and patterns
+  - Automatic pruning and deduplication to prevent memory bloat
+  - Seamless synchronization between database and markdown files
 
-- **Skills as Plugins**
+- **Plugin-Based Skills System**
   - Follows Anthropic Agent Skills paradigm
   - Each skill is a folder containing a `SKILL.md` documentation file
-  - Hot-pluggable, drag-and-drop, no code modification required
+  - Automatic dependency detection and installation (Python packages, system tools)
+  - Hot-pluggable design - extend capabilities without code changes
+  - Agent learns skills through natural language documentation
 
-- **Full Transparency**
-  - System prompt assembly logic completely visible
-  - Tool invocation process traceable
-  - Agent decision-making process auditable
+- **Full Transparency & Observability**
+  - System prompt assembly from 6 dynamically generated components
+  - Traceable tool invocation process
+  - Auditable Agent decision-making
+  - Human-readable markdown files for debugging and inspection
 
-- **Security First**
-  - Terminal tool sandboxed with command blacklist
+- **Security-First Design**
+  - Terminal tool sandboxed with cross-platform command blacklist
   - File reading restricted to project directory
   - API keys encrypted and stored securely
+  - Multi-round tool calling with context isolation
+
+- **Multi-LLM Provider Support**
+  - Support for Qwen, OpenAI, DeepSeek, Ollama, Claude, Gemini, and more
+  - Environment variable-based switching
+  - Mix local and cloud models seamlessly
 
 ---
 
