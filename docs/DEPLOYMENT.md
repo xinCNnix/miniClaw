@@ -1,23 +1,144 @@
 # miniClaw Deployment Guide
 
-## Overview
+## 🚀 Quick Start (Recommended)
 
-miniClaw supports two deployment modes:
-1. **Docker Deployment** - Containerized deployment for easy setup and production use
-2. **Local Development** - Direct installation for development and debugging
+### One-Click Installation
+
+**The easiest way to deploy miniClaw is using the provided startup scripts:**
+
+**Windows:**
+```bash
+git clone <repository-url>
+cd miniclaw
+start.bat
+```
+
+**Linux/macOS:**
+```bash
+git clone <repository-url>
+cd miniclaw
+chmod +x start.sh
+./start.sh
+```
+
+**That's all!** The scripts handle everything automatically.
 
 ---
 
-## Prerequisites
+## What the Scripts Do
 
-### Docker Deployment
+The startup scripts (`start.bat` / `start.sh`) automatically:
+
+1. ✅ **Check for required tools** (Python, Node.js, conda, Git)
+2. ✅ **Install missing dependencies** automatically
+3. ✅ **Create and activate virtual environment**
+4. ✅ **Install all packages** (Python + Node.js)
+5. ✅ **Prompt for API key configuration** (first run only)
+6. ✅ **Start backend** (port 8002)
+7. ✅ **Start frontend** (port 3000)
+8. ✅ **Open browser** automatically
+
+**No manual steps required!**
+
+---
+
+## Deployment Options
+
+### Option 1: Automated Setup (Recommended)
+
+**Best for:** Most users, quick start, development
+
+```bash
+# Windows
+start.bat
+
+# Linux/macOS
+./start.sh
+```
+
+**Advantages:**
+- ✅ Zero manual configuration
+- ✅ Automatic dependency installation
+- ✅ Works with existing Python/Node.js or installs them
+- ✅ Interactive API key configuration
+- ✅ Cross-platform compatibility
+
+---
+
+### Option 2: Docker Deployment
+
+**Best for:** Production, containerized environments, consistent behavior
+
+```bash
+git clone <repository-url>
+cd miniclaw
+cp backend/.env.example backend/.env
+# Edit backend/.env with your API keys
+
+docker-compose up -d
+```
+
+**Access:**
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8002
+- API Docs: http://localhost:8002/docs
+
+**Advantages:**
+- ✅ Isolated environment
+- ✅ Easy deployment
+- ✅ Reproducible builds
+- ✅ Simple scaling
+
+**Prerequisites:**
 - Docker 20.10+
 - Docker Compose 2.0+
 
-### Local Development
-- Python 3.10+
-- Node.js 18+
-- npm or yarn
+---
+
+## Advanced Setup (Optional)
+
+**Only needed if:** You want manual control, debugging, or custom configuration.
+
+### Manual Backend Setup
+
+**Using Python venv:**
+```bash
+cd backend
+
+# Create virtual environment
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/macOS
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# Start server
+uvicorn app.main:app --port 8002 --reload
+```
+
+**Using Conda (Windows - Recommended for Data Science):**
+
+See **[Anaconda Setup](#anaconda-environment-setup)** section below.
+
+### Manual Frontend Setup
+
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Configure environment
+echo "NEXT_PUBLIC_API_URL=http://localhost:8002" > .env.local
+
+# Start server
+npm run dev
+```
 
 ---
 
@@ -68,9 +189,309 @@ NEXT_PUBLIC_API_URL=http://localhost:8002
 
 ---
 
-## Docker Deployment (Recommended)
+## Production Deployment
 
-### Quick Start
+### Docker Production
+
+```bash
+# Build and start
+docker-compose -f docker-compose.prod.yml up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+### Traditional Deployment
+
+**Backend with Gunicorn:**
+```bash
+cd backend
+pip install gunicorn
+gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8002
+```
+
+**Frontend Production Build:**
+```bash
+cd frontend
+npm run build
+npm start
+```
+
+---
+
+## Environment Configuration
+
+### Backend Environment Variables
+
+Create `backend/.env`:
+
+```bash
+# LLM Provider (qwen recommended for testing)
+LLM_PROVIDER=qwen
+QWEN_API_KEY=sk-your-api-key
+QWEN_MODEL=qwen-plus
+
+# Alternative: OpenAI
+# LLM_PROVIDER=openai
+# OPENAI_API_KEY=sk-your-api-key
+# OPENAI_MODEL=gpt-4o-mini
+
+# Alternative: Ollama (local)
+# LLM_PROVIDER=ollama
+# OLLAMA_BASE_URL=http://localhost:11434/v1
+# OLLAMA_MODEL=qwen2.5
+
+# Server Configuration
+BACKEND_PORT=8002
+BACKEND_HOST=0.0.0.0
+
+# Paths
+WORKSPACE_PATH=./workspace
+KNOWLEDGE_BASE_PATH=./data/knowledge_base
+SESSIONS_PATH=./data/sessions
+SKILLS_DIR=./data/skills
+VECTOR_STORE_DIR=./data/vector_store
+```
+
+### Frontend Environment
+
+Create `frontend/.env.local`:
+
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8002
+```
+
+---
+
+## Anaconda Environment Setup
+
+**Recommended for:** Windows users, data science development, easy environment management
+
+### Quick Setup with Conda
+
+```bash
+# Install Miniconda (if not installed)
+# Download: https://docs.conda.io/en/latest/miniconda.html
+
+# Create environment
+conda create -n mini_openclaw python=3.10 -y
+
+# Activate environment
+conda activate mini_openclaw
+
+# Navigate to backend
+cd backend
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure and start
+cp .env.example .env
+# Edit .env with API keys
+uvicorn app.main:app --port 8002 --reload
+```
+
+### Export/Import Environment
+
+```bash
+# Export environment (for sharing)
+cd path/to/miniclaw
+conda env export > environment.yml
+
+# Team member imports environment
+conda env create -f environment.yml
+conda activate mini_openclaw
+```
+
+### Useful Conda Commands
+
+```bash
+# Activate environment
+conda activate mini_openclaw
+
+# Deactivate
+conda deactivate
+
+# List environments
+conda env list
+
+# Update conda
+conda update conda
+
+# Install package
+conda install package-name
+```
+
+For more conda details, see the main **[README.md](../README.md)** or **[QUICKSTART.md](../QUICKSTART.md)**.
+
+---
+
+## Troubleshooting
+
+### Startup Script Issues
+
+**Problem:** Script fails with "command not found"
+
+**Solution:** Install Git first
+- Windows: https://git-scm.com/download/win
+- Linux: `sudo apt install git`
+- macOS: `xcode-select --install`
+
+**Problem:** Port already in use
+
+**Solution:** Change ports in `backend/.env`
+```bash
+BACKEND_PORT=8003  # Use different port
+```
+
+**Problem:** Python/Node.js not found
+
+**Solution:** Scripts automatically install them. If fails:
+- Python: https://www.python.org/downloads/
+- Node.js: https://nodejs.org/
+
+### Backend Issues
+
+**Problem:** Backend fails to start
+
+**Solution:**
+```bash
+cd backend
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**Problem:** LLM API connection fails
+
+**Solution:**
+- Verify API key in `.env`
+- Check network connectivity
+- Try testing API key with curl
+
+### Frontend Issues
+
+**Problem:** Frontend can't connect to backend
+
+**Solution:**
+- Ensure backend is running: `curl http://localhost:8002/health`
+- Check `NEXT_PUBLIC_API_URL` in frontend
+- Verify CORS configuration
+
+**Problem:** Build fails
+
+**Solution:**
+```bash
+cd frontend
+rm -rf .next node_modules
+npm install
+npm run build
+```
+
+---
+
+## Monitoring and Maintenance
+
+### Health Checks
+
+```bash
+# Backend health
+curl http://localhost:8002/health
+
+# Frontend
+curl http://localhost:3000
+```
+
+### Logs
+
+```bash
+# View all logs (if using scripts)
+# Check terminal windows for output
+
+# Docker logs
+docker-compose logs -f
+```
+
+### Backup Data
+
+```bash
+# Backup data directory
+tar -czf miniclaw-backup-$(date +%Y%m%d).tar.gz ./data ./backend/.env
+
+# Restore
+tar -xzf miniclaw-backup-20240314.tar.gz
+```
+
+---
+
+## Advanced Configuration
+
+### Using PM2 (Process Manager)
+
+**For production deployment:**
+
+```bash
+# Install PM2
+npm install -g pm2
+
+# Start backend
+cd backend
+pm2 start "uvicorn app.main:app --port 8002" --name miniclaw-backend
+
+# Start frontend
+cd frontend
+pm2 start "npm start" --name miniclaw-frontend
+
+# Save PM2 configuration
+pm2 save
+pm2 startup
+```
+
+### Nginx Reverse Proxy
+
+**For production deployment:**
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+    }
+
+    location /api/ {
+        proxy_pass http://localhost:8002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+
+        # SSE support
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+}
+```
+
+---
+
+## Support
+
+**For issues or questions:**
+- Check logs: Look at terminal/script output
+- Verify environment variables in `backend/.env`
+- Check network connectivity
+- Review documentation in `docs/` directory
+
+---
+
+*Last Updated: 2024-03-14*
 
 1. **Clone the repository:**
 

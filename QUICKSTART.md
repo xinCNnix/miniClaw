@@ -1,211 +1,216 @@
 # miniClaw Quick Start Guide
 
-> Lightweight, highly transparent AI Agent System - Get started in 5 minutes
+> Lightweight, highly transparent AI Agent System - One-Click Setup 🚀
 
-**Development Platform:** This project is developed and tested primarily on **Windows 11**. It is compatible with Linux and macOS, but Windows is the primary platform.
+## 🚀 Super Easy Setup (Recommended)
 
-## Prerequisites
+### Windows Users
 
-- **Python**: 3.10 or higher
-- **Node.js**: 18 or higher
-- **npm**: Usually comes with Node.js
+1. **Download or clone the project**
+   ```bash
+   git clone <repository-url>
+   cd miniclaw
+   ```
 
----
+2. **Double-click `start.bat`**
+   - That's it! Wait for automatic installation to complete
+   - Browser will open automatically when ready
 
-## Step 1: Get API Key
+### Linux/macOS Users
 
-miniClaw requires an LLM service configuration to run. Choose one of the following options:
+1. **Download or clone the project**
+   ```bash
+   git clone <repository-url>
+   cd miniclaw
+   ```
 
-### Option A: Qwen (Free Tier Available)
+2. **Run the startup script**
+   ```bash
+   chmod +x start.sh
+   ./start.sh
+   ```
 
-1. Visit [Alibaba Cloud Dashscope Platform](https://dashscope.aliyun.com/)
-2. Register/Login
-3. Create API Key
-4. Save API Key (format: `sk-xxxxxxxx`)
+3. **Done!** Wait for installation, browser will open automatically
 
-### Option B: OpenAI GPT
+## ✨ What the Startup Script Does
 
-1. Visit [OpenAI Platform](https://platform.openai.com/)
-2. Register/Login
-3. Create API Key
-4. Ensure account has balance
+The `start.bat` (Windows) and `start.sh` (Linux/Mac) scripts automatically:
 
-### Option C: Ollama (Completely Local, Free)
+- ✅ Check for required tools (Python, Node.js, conda)
+- ✅ Install missing dependencies automatically
+- ✅ Set up virtual environments
+- ✅ Install all Python and Node.js packages
+- ✅ Prompt you to configure API keys (first run only)
+- ✅ Start backend service (port 8002)
+- ✅ Start frontend service (port 3000)
+- ✅ Open your browser to http://localhost:3000
 
-1. Download and install from [Ollama Website](https://ollama.com/)
-2. After installation, run: `ollama pull qwen2.5`
-3. No API Key required
+**No manual installation required!**
 
----
+## 🔑 First Run Configuration
 
-## Step 2: Configure Environment Variables
+On first run, the script will ask you to:
+
+1. **Choose an LLM provider**
+   - Qwen (通义千问) - **Recommended**, has free tier
+   - OpenAI GPT - Production quality
+   - DeepSeek - Cost-effective
+   - Ollama - Completely local, free
+
+2. **Enter your API key**
+   - Get your key from the provider's website
+   - Paste it when prompted
+   - Configuration is saved automatically
+
+**That's it!** You're ready to use miniClaw.
+
+## 🎯 Start Using
+
+1. Browser opens to http://localhost:3000
+2. Type your message in the chat box
+3. Examples:
+   - "帮我分析一下当前目录的文件结构"
+   - "Query the weather in Beijing"
+   - "Search arxiv for latest papers on LLM"
+4. Wait for the Agent response
+
+## 🔧 Advanced Setup (Optional)
+
+If you prefer manual setup or need troubleshooting, see below.
+
+### Manual API Key Configuration
+
+Edit `backend/.env` file manually:
 
 ```bash
-# Copy configuration template
+# Copy the example file
 cp backend/.env.example backend/.env
+
+# Edit the file
+# Windows: notepad backend/.env
+# Linux/macOS: nano backend/.env
 ```
 
-Edit `backend/.env` file and configure based on your chosen LLM provider:
+Choose your provider:
 
-### Qwen Configuration
-
+**Qwen (Recommended - Free Tier):**
 ```bash
 LLM_PROVIDER=qwen
-QWEN_API_KEY=sk-your-actual-qwen-api-key-here
+QWEN_API_KEY=sk-your-qwen-api-key
 QWEN_MODEL=qwen-plus
 ```
 
-### OpenAI Configuration
-
+**OpenAI:**
 ```bash
 LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-your-actual-openai-api-key-here
+OPENAI_API_KEY=sk-your-openai-key
 OPENAI_MODEL=gpt-4o-mini
 ```
 
-### Ollama Configuration
-
+**Ollama (Local, Free):**
 ```bash
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434/v1
 OLLAMA_MODEL=qwen2.5
 ```
 
-> 💡 **Tip**: Ensure no spaces or quotes in API Key
+### Manual Startup (If Scripts Fail)
 
----
-
-## Step 3: Start the System
-
-### Windows Users (Easiest)
-
-Double-click `start.bat`, the script will:
-- Automatically check and install dependencies
-- Start backend service (port 8002)
-- Start frontend service (port 3000)
-- Open browser automatically
-
-### Linux/macOS Users
-
-```bash
-chmod +x start.sh
-./start.sh
-```
-
-### Manual Start (For Debugging)
-
-**Terminal 1 - Start Backend:**
+**Terminal 1 - Backend:**
 ```bash
 cd backend
+# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/macOS
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# Start backend
 uvicorn app.main:app --port 8002 --reload
 ```
 
-**Terminal 2 - Start Frontend:**
+**Terminal 2 - Frontend:**
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
----
-
-## Step 4: Start Using
-
-1. Open browser at: **http://localhost:3000**
-2. Type a message in the chat box, such as:
-   - "Help me analyze the current directory structure"
-   - "Query the weather in Beijing"
-   - "Search arxiv for latest papers on LLM"
-3. Wait for Agent response
-
----
-
-## Core Features Preview
+## 📚 Core Features Preview
 
 ### 5 Core Tools
 
-| Tool | Function | Example Usage |
-|------|----------|---------------|
+| Tool | Function | Example |
+|------|----------|---------|
 | **terminal** | Execute Shell commands | "List files in current directory" |
-| **python_repl** | Run Python code | "Calculate Fibonacci sequence with Python" |
+| **python_repl** | Run Python code | "Calculate Fibonacci sequence" |
 | **fetch_url** | Fetch web content | "Get GitHub trending page" |
-| **read_file** | Read local files | "Read README.md content" |
-| **search_kb** | Knowledge base search | "Search knowledge base for relevant content" |
+| **read_file** | Read local files | "Read README.md" |
+| **search_kb** | Knowledge base search | "Search for relevant info" |
 
 ### Built-in Skills
 
 - **get_weather** - Weather query
 - **arxiv-search** - Academic paper search
-- **github** - GitHub operations (requires gh CLI)
-- **find-skill** - Find and install new Skills
-- **skill-creator** - Create custom Skills
-- **skill_validator** - Validate Skills integrity
+- **github** - GitHub operations
+- **find-skill** - Find and install skills
+- **skill-creator** - Create custom skills
+- **skill_validator** - Validate skills
 
----
+## ❓ FAQ
 
-## FAQ
+### Q: Installation takes too long
 
-### Q1: Startup shows "LLM provider not configured"
+**A:** First run downloads dependencies (~500MB for backend, ~200MB for frontend). Future starts are instant.
 
-**Cause**: `.env` file not configured or misconfigured
+### Q: Script fails with "command not found"
 
-**Solutions**:
-1. Check if `backend/.env` exists
-2. Confirm `LLM_PROVIDER` is set
-3. Verify API Key is correct (no extra spaces)
-4. Ensure selected LLM account has balance
+**A:** Install Git first:
+- Windows: https://git-scm.com/download/win
+- Linux: `sudo apt install git`
+- macOS: `xcode-select --install`
 
-### Q2: Backend fails to start, missing dependencies
+### Q: How to get API key?
 
-**Solution**:
+**A:** Visit provider's website:
+- **Qwen**: https://dashscope.aliyun.com/ (Free tier available)
+- **OpenAI**: https://platform.openai.com/
+- **Ollama**: https://ollama.com/ (Local, free)
+
+### Q: Can I use my own Python/Node.js?
+
+**A:** Yes! The scripts work with existing installations. They check if tools are present and only install what's missing.
+
+### Q: How to switch LLM provider later?
+
+**A:** Edit `backend/.env` file and change `LLM_PROVIDER` variable, then restart.
+
+### Q: Port already in use
+
+**A:** Change ports in `backend/.env`:
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+BACKEND_PORT=8003  # Change backend port
 ```
 
-### Q3: Frontend cannot connect to backend
-
-**Checklist**:
-1. Is backend running normally (visit http://localhost:8002/docs)
-2. Is frontend API address correct
-3. Is firewall blocking ports
-
-### Q4: Agent response is slow
-
-**Optimization Suggestions**:
-- Use local Ollama model (fastest, but requires better hardware)
-- Switch to faster models
-- Reduce conversation history length
-
-### Q5: Knowledge base feature is slow on first use
-
-**Cause**: First use requires downloading Embedding model (~8GB)
-
-**Solutions**:
-- Wait for download to complete (HF-Mirror acceleration for China users)
-- Or use LLM provider's Embedding API (no download required)
-
----
-
-## Next Steps
+## 📖 Next Steps
 
 - 📖 Read full documentation: [README.md](./README.md)
 - 🏗️ Learn architecture: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
-- 🔌 View API docs: [docs/API.md](./docs/API.md)
-- 🚀 Learn deployment: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)
+- 🔧 Advanced setup: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)
 
----
+## 💡 Tips
 
-## Get Help
-
-- **Issues**: Submit issues on GitHub
-- **Documentation**: Check `docs/` directory
-- **Examples**: See Skill examples in `backend/data/skills/`
+- **First run** takes 5-10 minutes (downloading dependencies)
+- **Subsequent starts** are instant
+- Use **Ctrl+C** in terminal to stop services
+- Configuration files are preserved between runs
+- All data is stored locally in your project directory
 
 ---
 
