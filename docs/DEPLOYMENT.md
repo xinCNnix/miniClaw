@@ -231,7 +231,195 @@ npm run dev
 
 Frontend will be available at http://localhost:3000
 
-### Using Startup Scripts
+---
+
+## Anaconda Environment Setup (Recommended for Windows)
+
+Anaconda provides an easy way to manage Python environments and dependencies. This is the recommended setup method for Windows users.
+
+### Install Anaconda or Miniconda
+
+**Choose one:**
+
+1. **Anaconda** (Full distribution, ~3GB)
+   - Download: https://www.anaconda.com/download
+   - Includes Python, conda, and 720+ scientific packages
+   - Recommended for data science users
+
+2. **Miniconda** (Minimal installer, ~400MB)
+   - Download: https://docs.conda.io/en/latest/miniconda.html
+   - Includes only conda and Python
+   - Recommended for users who want minimal installation
+
+### Create Conda Environment
+
+```bash
+# Navigate to project directory
+cd path/to/miniclaw
+
+# Create a new conda environment named 'mini_openclaw'
+# Python 3.10 or higher is required
+conda create -n mini_openclaw python=3.10 -y
+
+# Activate the environment
+conda activate mini_openclaw  # Windows/Linux/macOS (zsh/bash)
+# or on Windows with cmd.exe:
+# conda activate mini_openclaw
+```
+
+### Backend Setup with Conda
+
+```bash
+# Activate environment
+conda activate mini_openclaw
+
+# Navigate to backend directory
+cd backend
+
+# Install dependencies
+# Use pip within conda environment for best compatibility
+pip install -r requirements.txt
+
+# Install additional conda packages (if needed)
+conda install -y -c conda-forge uvicorn fastapi
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+notepad .env  # Windows
+# nano .env     # Linux/macOS
+
+# Start development server
+uvicorn app.main:app --port 8002 --reload
+```
+
+### Frontend Setup
+
+```bash
+# Frontend doesn't require conda environment
+# Just use npm/yarn directly
+
+cd frontend
+
+# Install dependencies
+npm install
+
+# Configure environment
+echo "NEXT_PUBLIC_API_URL=http://localhost:8002" > .env.local
+
+# Start development server
+npm run dev
+```
+
+### Managing Conda Environment
+
+```bash
+# Activate environment
+conda activate mini_openclaw
+
+# Deactivate environment
+conda deactivate
+
+# Export environment to share
+# Creates a portable YAML file of the environment
+conda env export > environment.yml
+
+# Create environment from YAML file
+conda env create -f environment.yml
+
+# List all environments
+conda env list
+
+# Remove environment (if needed)
+conda env remove -n mini_openclaw -y
+```
+
+### Create environment.yml for Reproducibility
+
+Create `environment.yml` in the project root:
+
+```yaml
+name: mini_openclaw
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - - fastapi>=0.68.0
+    - - uvicorn[standard]>=0.15.0
+    - - langchain>=0.1.0
+    - - llama-index>=0.9.0
+    - - pydantic>=2.0.0
+    - - python-multipart>=0.0.5
+    # Add all other pip packages from requirements.txt
+```
+
+Recreate environment from file:
+```bash
+conda env create -f environment.yml
+conda activate mini_openclaw
+```
+
+### Common Conda Commands
+
+```bash
+# Update conda
+conda update conda
+
+# Update all packages in environment
+conda update --all
+
+# Install specific package
+conda install package-name
+
+# Install package from conda-forge
+conda install -c conda-forge package-name
+
+# Search for packages
+conda search package-name
+
+# View installed packages
+conda list
+```
+
+### Troubleshooting Conda Issues
+
+**Issue:** `conda: command not found`
+
+**Solution:**
+- Ensure Anaconda/Miniconda is installed
+- Add conda to PATH (installer usually does this automatically)
+- Restart terminal after installation
+
+**Issue:** Environment activation fails
+
+**Solution:**
+```bash
+# Initialize conda for your shell
+conda init bash        # Linux/macOS bash
+conda init zsh         # Linux/macOS zsh
+conda init cmd.exe     # Windows cmd
+conda init powershell  # Windows PowerShell
+
+# Restart terminal and try again
+```
+
+**Issue:** Package conflicts
+
+**Solution:**
+```bash
+# Create new environment with specific versions
+conda create -n mini_openclaw python=3.10 -y
+
+# Or update conda first
+conda update --all
+```
+
+---
+
+## Using Startup Scripts
 
 **Windows:**
 ```bash
