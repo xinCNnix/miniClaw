@@ -1,120 +1,210 @@
 # miniClaw Quick Start Guide
 
-## 快速开始
+> Lightweight, highly transparent AI Agent System - Get started in 5 minutes
 
-### 1. 配置环境变量
+## Prerequisites
 
-复制 `.env.example` 为 `.env`：
+- **Python**: 3.10 or higher
+- **Node.js**: 18 or higher
+- **npm**: Usually comes with Node.js
+
+---
+
+## Step 1: Get API Key
+
+miniClaw requires an LLM service configuration to run. Choose one of the following options:
+
+### Option A: Qwen (Free Tier Available)
+
+1. Visit [Alibaba Cloud Dashscope Platform](https://dashscope.aliyun.com/)
+2. Register/Login
+3. Create API Key
+4. Save API Key (format: `sk-xxxxxxxx`)
+
+### Option B: OpenAI GPT
+
+1. Visit [OpenAI Platform](https://platform.openai.com/)
+2. Register/Login
+3. Create API Key
+4. Ensure account has balance
+
+### Option C: Ollama (Completely Local, Free)
+
+1. Download and install from [Ollama Website](https://ollama.com/)
+2. After installation, run: `ollama pull qwen2.5`
+3. No API Key required
+
+---
+
+## Step 2: Configure Environment Variables
 
 ```bash
-cp .env.example .env
+# Copy configuration template
+cp backend/.env.example backend/.env
 ```
 
-编辑 `.env` 文件，添加你的 API 密钥：
+Edit `backend/.env` file and configure based on your chosen LLM provider:
+
+### Qwen Configuration
 
 ```bash
-# 使用通义千问（推荐用于测试）
 LLM_PROVIDER=qwen
-QWEN_API_KEY=your-qwen-api-key-here
+QWEN_API_KEY=sk-your-actual-qwen-api-key-here
 QWEN_MODEL=qwen-plus
 ```
 
-### 2. 启动系统
+### OpenAI Configuration
 
-#### Windows 用户
-双击运行 `start.bat`
+```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-your-actual-openai-api-key-here
+OPENAI_MODEL=gpt-4o-mini
+```
 
-#### Linux/Mac 用户
+### Ollama Configuration
+
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_MODEL=qwen2.5
+```
+
+> 💡 **Tip**: Ensure no spaces or quotes in API Key
+
+---
+
+## Step 3: Start the System
+
+### Windows Users (Easiest)
+
+Double-click `start.bat`, the script will:
+- Automatically check and install dependencies
+- Start backend service (port 8002)
+- Start frontend service (port 3000)
+- Open browser automatically
+
+### Linux/macOS Users
+
 ```bash
 chmod +x start.sh
 ./start.sh
 ```
 
-#### 使用 Docker（推荐）
-```bash
-docker-compose up -d
-```
+### Manual Start (For Debugging)
 
-### 3. 访问应用
-
-- 前端界面：http://localhost:3000
-- 后端 API：http://localhost:8002
-- API 文档：http://localhost:8002/docs
-
----
-
-## 核心功能
-
-### 5 个核心工具
-
-1. **terminal** - 安全执行 Shell 命令
-2. **python_repl** - 执行 Python 代码
-3. **fetch_url** - 获取和清理网页内容
-4. **read_file** - 读取本地文件
-5. **search_kb** - 知识库搜索（RAG）
-
-### Skills 系统
-
-- 位置：`backend/data/skills/`
-- 预置 Skills：
-  - `get_weather` - 获取天气信息
-  - `find_skill` - 查找其他 Skills
-
-### 文件即记忆
-
-- 对话记录存储在：`backend/data/sessions/`
-- 系统提示词组件：`backend/data/workspace/`
-
----
-
-## 常见问题
-
-### Q: 如何获取 Qwen API 密钥？
-A: 访问 https://dashscope.aliyun.com/ 注册并创建 API Key
-
-### Q: 支持哪些 LLM？
-A:
-- Qwen（通义千问）- 默认推荐
-- OpenAI (GPT-4)
-- DeepSeek
-- Ollama（本地）
-
-### Q: 如何添加自定义 Skill？
-A: 在 `backend/data/skills/` 下创建新文件夹，添加 `SKILL.md` 文件
-
----
-
-## 开发指南
-
-### 后端开发
+**Terminal 1 - Start Backend:**
 ```bash
 cd backend
+python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 uvicorn app.main:app --port 8002 --reload
 ```
 
-### 前端开发
+**Terminal 2 - Start Frontend:**
 ```bash
 cd frontend
+npm install
 npm run dev
-```
-
-### 运行测试
-```bash
-# 后端测试
-cd backend
-pytest
-
-# 前端测试
-cd frontend
-npm test
 ```
 
 ---
 
-## 更多信息
+## Step 4: Start Using
 
-- 完整文档：`docs/ARCHITECTURE.md`
-- API 文档：`docs/API.md`
-- 部署指南：`docs/DEPLOYMENT.md`
-- 开发计划：`DEVELOPMENT_PLAN.md`
+1. Open browser at: **http://localhost:3000**
+2. Type a message in the chat box, such as:
+   - "Help me analyze the current directory structure"
+   - "Query the weather in Beijing"
+   - "Search arxiv for latest papers on LLM"
+3. Wait for Agent response
+
+---
+
+## Core Features Preview
+
+### 5 Core Tools
+
+| Tool | Function | Example Usage |
+|------|----------|---------------|
+| **terminal** | Execute Shell commands | "List files in current directory" |
+| **python_repl** | Run Python code | "Calculate Fibonacci sequence with Python" |
+| **fetch_url** | Fetch web content | "Get GitHub trending page" |
+| **read_file** | Read local files | "Read README.md content" |
+| **search_kb** | Knowledge base search | "Search knowledge base for relevant content" |
+
+### Built-in Skills
+
+- **get_weather** - Weather query
+- **arxiv-search** - Academic paper search
+- **github** - GitHub operations (requires gh CLI)
+- **find-skill** - Find and install new Skills
+- **skill-creator** - Create custom Skills
+- **skill_validator** - Validate Skills integrity
+
+---
+
+## FAQ
+
+### Q1: Startup shows "LLM provider not configured"
+
+**Cause**: `.env` file not configured or misconfigured
+
+**Solutions**:
+1. Check if `backend/.env` exists
+2. Confirm `LLM_PROVIDER` is set
+3. Verify API Key is correct (no extra spaces)
+4. Ensure selected LLM account has balance
+
+### Q2: Backend fails to start, missing dependencies
+
+**Solution**:
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### Q3: Frontend cannot connect to backend
+
+**Checklist**:
+1. Is backend running normally (visit http://localhost:8002/docs)
+2. Is frontend API address correct
+3. Is firewall blocking ports
+
+### Q4: Agent response is slow
+
+**Optimization Suggestions**:
+- Use local Ollama model (fastest, but requires better hardware)
+- Switch to faster models
+- Reduce conversation history length
+
+### Q5: Knowledge base feature is slow on first use
+
+**Cause**: First use requires downloading Embedding model (~8GB)
+
+**Solutions**:
+- Wait for download to complete (HF-Mirror acceleration for China users)
+- Or use LLM provider's Embedding API (no download required)
+
+---
+
+## Next Steps
+
+- 📖 Read full documentation: [README.md](./README.md)
+- 🏗️ Learn architecture: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+- 🔌 View API docs: [docs/API.md](./docs/API.md)
+- 🚀 Learn deployment: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)
+
+---
+
+## Get Help
+
+- **Issues**: Submit issues on GitHub
+- **Documentation**: Check `docs/` directory
+- **Examples**: See Skill examples in `backend/data/skills/`
+
+---
+
+**Happy Using! 🎉**

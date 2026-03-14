@@ -1,39 +1,130 @@
-# Environment variables (contains API keys)
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+# Only ignore Python venv lib in backend directory
+backend/lib/
+backend/lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+test-results/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
 .env
 .env.local
 .env.*.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Encrypted credentials (contains API keys)
+data/credentials.encrypted
+data/credentials.json
 *.key
-backend/data/credentials.encrypted
 
-# Tests and test results
-**/tests/
-**/__tests__/
-**/*test*.py
-**/*test*.ts
-**/*test*.tsx
-**/*.test.ts
-**/*.test.tsx
-**/*.spec.ts
-**/*.spec.tsx
-**/test-results/
-frontend/node_modules/@testing-library/jest-dom/types/__tests__/
+# Spyder project settings
+.spyderproject
+.spyproject
 
-# Coverage reports
-coverage/
-htmlcov/
-.nyc_output/
-*.coverage
-.pytest_cache/
+# Rope project settings
+.ropeproject
 
-# Documentation
-docs/
-# Keep important project documentation
-!README.md
-!CLAUDE.md
-!QUICKSTART.md
-!CHANGELOG.md
+# mkdocs documentation
+/site
 
-# IDE
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# IDEs
 .vscode/
 .idea/
 *.swp
@@ -44,45 +135,105 @@ docs/
 .DS_Store
 Thumbs.db
 
-# Dependencies
-node_modules/
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-.venv/
-
-# Build artifacts
-frontend/.next/
-frontend/out/
-frontend/build/
-frontend/dist/
-frontend/.turbo/
-backend/htmlcov/
-
-# Logs
+# Project specific
+*.db
+*.sqlite
+chroma/
 *.log
-logs/
+storage/
+
+# Session data (conversations)
+sessions/*.json
+backend/data/sessions/*.json
+test_*.json
+
+# Generated workspace files
+workspace/SKILLS_SNAPSHOT.md
+workspace/MEMORY.md
+workspace/USER.md
+
+# Vector store
+backend/data/vector_store/
+
+# Memory metadata
+backend/data/memory_metadata.json
+
+# Test files
+*_test.spec.ts
+*_test.spec.js
+test_*.json
+*_test_*.json
+e2e_*.json
 
 # Temporary files
 *.tmp
 *.temp
 *.bak
-*.backup
+nul
+show_prompt.py
+test_*.json
 
-# Data and cache (keep structure only)
-backend/data/sessions/*
-backend/data/vector_store/*
-backend/data/backup/*
-backend/data/knowledge_base/*
-backend/data/models/
-!backend/data/sessions/.gitkeep
-!backend/data/vector_store/.gitkeep
-!backend/data/backup/.gitkeep
-!backend/data/knowledge_base/.gitkeep
-# Project documentation (keep local only)
+# Screenshots
+*.png
+*.jpg
+*.jpeg
+
+# Frontend dependencies and build artifacts
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.turbo/
+frontend/dist/
+frontend/coverage/
+frontend/*.log
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.tsbuildinfo
+frontend/test-results/
+
+# Knowledge base large files (PDFs)
+backend/data/knowledge_base/*.pdf
+
+# Local launch scripts (not tracked in git)
+启动.bat
+启动-智能版.bat
+stop.bat
+start.ps1
+start-clean.bat
+
+# Backup directories
+backend/backup/
+backup/
+
+# E2E test screenshots and results
+frontend/e2e/
+
+# Temporary sync files
+=0.*
+
+# Project documentation (not tracked in git)
 CLAUDE.md
-DEVELOPMENT_PLAN.md
+
+# Bash crash dumps
+*.stackdump
+
+# Test scripts (development/testing)
+backend/test_*.py
+
+# Temporary and work-in-progress documentation
+docs/*TEST*.md
+docs/*WORK*.md
+docs/*REPORT*.md
+docs/*LOG*.md
+docs/DELIVERY_ASSESSMENT_REPORT.md
+docs/FRONTEND_TEST_*.md
+docs/KNOWLEDGE_BASE_TEST_PLAN.md
+docs/memory-improvement-plan.md
+docs/PROJECT_SUMMARY.md
+docs/TOOLS_UPDATE.md
+
+# Architecture and database documentation (internal use)
+docs/ARCHITECTURE.md
+docs/DATABASE_*.md

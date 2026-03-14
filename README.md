@@ -1,319 +1,626 @@
 # miniClaw
 
-> 轻量级、高度透明的 AI Agent 系统
+> Lightweight, Highly Transparent AI Agent System
 
-## 项目简介
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Latest-green.svg)](https://fastapi.tiangolo.com/)
+[![Next.js](https://img.shields.io/badge/Next.js-14+-black.svg)](https://nextjs.org/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-miniClaw 是一个基于 Python 重构的、轻量级且高度透明的 AI Agent 系统，旨在复刻并优化 OpenClaw（原名 Moltbot/Clawdbot）的核心体验。
+---
 
-### 核心特点
+## Project Introduction
 
-- **文件即记忆 (File-first Memory)**：摒弃不透明的向量数据库，使用 Markdown/JSON 文件系统
-- **技能即插件 (Skills as Plugins)**：遵循 Anthropic Agent Skills 范式，文件夹结构管理能力
-- **透明可控**：所有 System Prompt 拼接逻辑、工具调用过程完全透明
+miniClaw is a lightweight, highly transparent AI Agent system rebuilt in Python, designed to replicate and optimize the core experience of OpenClaw. Unlike traditional Agent systems, miniClaw adopts the design philosophy of **File-first Memory** and **Skills as Plugins**, making AI Agent behavior completely transparent, controllable, and extensible.
 
-## 技术栈
+### Core Features
 
-### 后端
-- **Python 3.10+**
-- **FastAPI** - Web 框架
-- **LangChain 1.x** - Agent 编排引擎 (使用 `create_agent` API)
-- **LlamaIndex** - RAG 混合检索
+- **File-first Memory**
+  - Abandons opaque vector databases
+  - All conversation records, system prompts, and user profiles stored as Markdown/JSON files
+  - Readable, editable, and version-controllable
 
-### 前端
-- **Next.js 14+** - React 框架 (App Router)
-- **TypeScript** - 类型安全
-- **Shadcn/UI** - UI 组件库
-- **Monaco Editor** - 代码编辑器
-- **Tailwind CSS** - 样式 (Frosty Glass 主题)
+- **Skills as Plugins**
+  - Follows Anthropic Agent Skills paradigm
+  - Each skill is a folder containing a `SKILL.md` documentation file
+  - Hot-pluggable, drag-and-drop, no code modification required
 
-## 快速开始
+- **Full Transparency**
+  - System prompt assembly logic completely visible
+  - Tool invocation process traceable
+  - Agent decision-making process auditable
 
-### 环境要求
+- **Security First**
+  - Terminal tool sandboxed with command blacklist
+  - File reading restricted to project directory
+  - API keys encrypted and stored securely
+
+---
+
+## Tech Stack
+
+### Backend
+
+- **Python 3.10+** - Core language
+- **FastAPI** - High-performance web framework
+- **LangChain 1.x** - Agent orchestration engine (using `create_agent` API)
+- **LlamaIndex** - RAG hybrid retrieval engine
+- **Pydantic** - Data validation
+
+### Frontend
+
+- **Next.js 14+** - React framework (App Router)
+- **TypeScript** - Type safety
+- **Shadcn/UI** - High-quality UI component library
+- **Monaco Editor** - Code editor
+- **Tailwind CSS** - Styling framework (Frosty Glass theme)
+
+### Storage & Deployment
+
+- **File System** - Local data storage
+- **Docker** - Containerized deployment
+- **SQLite** - Vector storage (Chroma)
+
+---
+
+## Quick Start
+
+### 5-Minute Quick Start
+
+Please check **[QUICKSTART.md](./QUICKSTART.md)** for detailed quick start guide.
+
+### Requirements
 
 - Python 3.10+
 - Node.js 18+
 - npm
 
-### 安装
+### Quick Install
 
-1. **克隆项目**
 ```bash
+# 1. Clone project
 git clone <repository-url>
 cd miniclaw
-```
 
-2. **配置环境变量**
-```bash
-cp .env.example .env
-# 编辑 .env 文件，填入你的 API Keys
-```
+# 2. Configure environment variables
+cp backend/.env.example backend/.env
+# Edit backend/.env, enter your API Keys
 
-3. **安装后端依赖**
-```bash
-cd backend
-pip install -r requirements.txt
-```
-
-4. **安装前端依赖**
-```bash
-cd frontend
-npm install
-```
-
-### 运行
-
-#### 方式 1: 使用启动脚本 (推荐)
-
-**Windows:**
-```bash
+# 3. One-click start (Windows)
 start.bat
-```
-会自动打开两个窗口：后端 (8002) 和前端 (3000)
 
-**Linux/macOS:**
-```bash
+# One-click start (Linux/Mac)
 ./start.sh
 ```
 
-#### 方式 2: 手动启动
+Visit http://localhost:3000 to start using.
 
-**需要同时开启两个终端：**
-
-**终端 1 - 启动后端** (端口 8002):
-```bash
-cd backend
-# Windows (如果还没创建虚拟环境)
-python -m venv venv
-venv\Scripts\activate
-# Linux/macOS
-# python3 -m venv venv
-# source venv/bin/activate
-
-pip install -r requirements.txt
-uvicorn app.main:app --port 8002 --reload
-```
-
-**终端 2 - 启动前端** (端口 3000):
-```bash
-cd frontend
-npm install  # 首次运行需要
-npm run dev
-```
-
-访问 http://localhost:3000
-
-**启动顺序：先启动后端，再启动前端**
-
-#### 方式 2: Docker
+### Docker Deployment
 
 ```bash
-# 启动完整系统
+# Start complete system
 docker-compose up -d
 
-# 查看日志
+# View logs
 docker-compose logs -f
+
+# Stop system
+docker-compose down
 ```
 
-## 项目结构
+---
+
+## Core Features
+
+### 5 Core Tools
+
+miniClaw includes 5 carefully designed core tools covering the most common AI Agent scenarios:
+
+| Tool | Function | Security Features | Example |
+|------|----------|-------------------|---------|
+| **terminal** | Shell command execution | Sandboxed + command blacklist | `ls -la`, `git status` |
+| **python_repl** | Python code interpreter | Timeout control + exception handling | Data analysis, computation |
+| **fetch_url** | Web scraping | HTML auto-cleaning | News fetching, API calls |
+| **read_file** | File reading | Restricted to project directory | Reading code, documentation |
+| **search_kb** | RAG knowledge base retrieval | Hybrid search (semantic + keyword) | Document queries, knowledge Q&A |
+
+> 💡 All tools can be automatically invoked by Agent through instructions in System Prompt.
+
+### Agent Skills System
+
+Adopts **Instruction-following** paradigm, allowing Agent to learn new capabilities by reading natural language documentation:
+
+**Skill Structure:**
+```
+skill-name/
+├── SKILL.md          # Skill documentation (YAML frontmatter + Markdown)
+├── scripts/          # Optional: executable scripts
+├── references/       # Optional: reference documentation
+└── assets/           # Optional: resource files
+```
+
+**Built-in Skills:**
+
+- **get_weather** - Weather query (using wttr.in)
+- **arxiv-search** - Academic paper search (arXiv API)
+- **github** - GitHub operations (gh CLI)
+- **find-skill** - Find and install new Skills
+- **skill-creator** - Create custom Skills
+- **skill_validator** - Validate Skills integrity
+
+**Creating Custom Skills:**
+
+Simply create a folder and `SKILL.md` file:
+
+```markdown
+---
+name: my-skill
+description: Description of this skill's functionality
+dependencies:
+  python:
+    - "requests>=2.31.0"
+---
+
+# Skill Name
+
+## Usage Steps
+1. First step
+2. Second step
+
+## Examples
+Provide usage examples
+```
+
+Agent will automatically load and learn how to use this skill.
+
+### System Prompt Composition
+
+System Prompt is dynamically assembled from 6 components (in order):
+
+1. **SKILLS_SNAPSHOT.md** - Dynamically generated capability list
+2. **SOUL.md** - Agent core settings (personality, tone, values)
+3. **IDENTITY.md** - Self-awareness (name, capability boundaries)
+4. **USER.md** - User profile (preferences, common locations, terminology)
+5. **AGENTS.md** - Behavioral guidelines & skill invocation protocols
+6. **MEMORY.md** - Long-term memory (important information extraction)
+
+All components can be customized by editing corresponding files.
+
+### File-first Memory System
+
+- **Conversation Records**: `backend/data/sessions/*.json`
+- **System Prompts**: `backend/workspace/`
+- **Knowledge Base**: `backend/data/knowledge_base/`
+- **Vector Storage**: `backend/data/vector_store/`
+
+---
+
+## Project Structure
 
 ```
 miniclaw/
-├── backend/                # Python 后端
+├── backend/                      # Python backend service
 │   ├── app/
-│   │   ├── core/          # 核心模块
-│   │   ├── tools/         # 5 个核心工具
-│   │   ├── skills/        # Skills 系统
-│   │   ├── memory/        # 对话记忆管理
-│   │   ├── api/           # API 路由
-│   │   └── models/        # Pydantic 模型
-│   ├── data/              # 本地数据
-│   └── requirements.txt
+│   │   ├── main.py              # FastAPI application entry
+│   │   ├── config.py            # Configuration management
+│   │   │
+│   │   ├── core/                # Core modules
+│   │   │   ├── agent.py         # LangChain Agent wrapper
+│   │   │   ├── llm.py           # LLM model initialization
+│   │   │   ├── rag_engine.py    # RAG retrieval engine
+│   │   │   └── obfuscation.py   # API key obfuscation
+│   │   │
+│   │   ├── tools/               # 5 core tools
+│   │   │   ├── terminal.py      # Shell command execution
+│   │   │   ├── python_repl.py   # Python code interpreter
+│   │   │   ├── fetch_url.py     # Web scraping
+│   │   │   ├── read_file.py     # File reading
+│   │   │   └── search_kb.py     # Knowledge base search
+│   │   │
+│   │   ├── skills/              # Skills system
+│   │   │   ├── bootstrap.py     # SKILLS_SNAPSHOT generation
+│   │   │   ├── loader.py        # Skill loader
+│   │   │   └── dependencies.py  # Dependency management
+│   │   │
+│   │   ├── memory/              # Conversation memory management
+│   │   │   ├── extractor.py     # Information extraction
+│   │   │   ├── long_term_updater.py  # Long-term memory update
+│   │   │   └── prompts.py       # System Prompt components
+│   │   │
+│   │   ├── api/                 # API routes
+│   │   │   ├── chat.py          # Chat interface (SSE streaming)
+│   │   │   ├── config.py        # Configuration interface
+│   │   │   └── files.py         # File management interface
+│   │   │
+│   │   └── models/              # Pydantic data models
+│   │       ├── sessions.py      # Session models
+│   │       └── messages.py      # Message models
+│   │
+│   ├── data/                    # Local data storage
+│   │   ├── skills/              # Skills definitions
+│   │   ├── sessions/            # Conversation records
+│   │   ├── knowledge_base/      # Knowledge base files
+│   │   ├── vector_store/        # Vector storage
+│   │   └── credentials.encrypted # Encrypted API keys
+│   │
+│   ├── workspace/               # System Prompt components
+│   │   ├── SKILLS_SNAPSHOT.md   # Dynamically generated
+│   │   ├── SOUL.md
+│   │   ├── IDENTITY.md
+│   │   ├── USER.md
+│   │   ├── AGENTS.md
+│   │   └── MEMORY.md
+│   │
+│   ├── tests/                   # Backend tests
+│   └── requirements.txt         # Python dependencies
 │
-├── frontend/              # Next.js 前端
-│   ├── app/
-│   ├── components/
-│   ├── lib/
-│   ├── hooks/
-│   └── types/
+├── frontend/                    # Next.js frontend
+│   ├── app/                     # App Router
+│   │   ├── chat/                # Chat page
+│   │   └── layout.tsx           # Root layout
+│   │
+│   ├── components/              # React components
+│   │   ├── ui/                  # Shadcn/UI components
+│   │   ├── chat/                # Chat components
+│   │   └── editor/              # Code editor
+│   │
+│   ├── lib/                     # Utility libraries
+│   │   └── api.ts               # API client
+│   │
+│   ├── hooks/                   # React Hooks
+│   │   └── useChat.ts           # Chat Hook
+│   │
+│   └── types/                   # TypeScript types
+│       └── chat.ts              # Chat type definitions
 │
-├── docs/                  # 文档
-├── DEVELOPMENT_PLAN.md    # 开发计划
-├── claude.md             # 开发规范
-└── README.md             # 本文件
+├── docs/                        # Documentation
+│   ├── ARCHITECTURE.md          # Architecture documentation
+│   ├── API.md                   # API documentation
+│   └── DEPLOYMENT.md            # Deployment guide
+│
+├── QUICKSTART.md                # Quick start guide
+├── README.md                    # This file
+├── DEVELOPMENT_PLAN.md          # Development plan
+├── start.bat                    # Windows startup script
+├── start.sh                     # Linux/Mac startup script
+└── docker-compose.yml           # Docker orchestration
 ```
 
-## 核心功能
+---
 
-### 5 个核心工具
+## API Interfaces
 
-1. **terminal** - Shell 命令执行 (沙箱化)
-2. **python_repl** - Python 代码解释器
-3. **fetch_url** - 网页抓取 (自动清洗 HTML)
-4. **read_file** - 文件读取
-5. **search_knowledge_base** - RAG 混合检索
+### Core Chat Interface
 
-### Agent Skills 系统
-
-采用 **Instruction-following** 范式：
-- Skills 是 Markdown 格式的说明书
-- Agent 通过阅读 SKILL.md 学习如何使用工具
-- 支持热插拔，拖入即用
-
-### System Prompt 组成
-
-1. SKILLS_SNAPSHOT.md - 能力列表
-2. SOUL.md - 核心设定
-3. IDENTITY.md - 自我认知
-4. USER.md - 用户画像
-5. AGENTS.md - 行为准则
-6. MEMORY.md - 长期记忆
-
-## API 接口
-
-### 核心对话接口
 ```http
 POST /api/chat
 Content-Type: application/json
 
 {
-  "message": "查询一下北京的天气",
+  "message": "Help me check the weather in Beijing",
   "session_id": "main_session",
   "stream": true
 }
 ```
 
-返回 SSE 流式数据。
+Returns SSE streaming data:
 
-### 文件管理接口
+```
+event: message
+data: {"content": "Checking weather..."}
+
+event: tool_call
+data: {"tool": "terminal", "input": "curl wttr.in/Beijing"}
+
+event: message
+data: {"content": "Beijing current weather: Sunny, 15°C"}
+```
+
+### File Management Interface
+
 ```http
-GET /api/files?path=memory/MEMORY.md
+# Read file
+GET /api/files?path=workspace/SOUL.md
+
+# Write file
 POST /api/files
-Body: { "path": "...", "content": "..." }
+Content-Type: application/json
+
+{
+  "path": "workspace/SOUL.md",
+  "content": "# New content\n..."
+}
 ```
 
-## 测试
-
-### 后端测试
-```bash
-cd backend
-pytest tests/
-```
-
-### 前端测试
-```bash
-cd frontend
-npm test              # 单元测试
-npx playwright test   # E2E 测试
-```
-
-## LLM 配置
-
-支持多个 LLM 提供商，通过环境变量 `LLM_PROVIDER` 切换：
-
-- **qwen** (默认) - 通义千问，测试环境
-- **openai** - GPT-4o-mini
-- **deepseek** - DeepSeek-chat
-- **ollama** - 本地模型
-
-详细配置见 `.env.example`
-
-### Embedding 模型配置
-
-知识库功能使用 embedding 模型进行语义检索。系统支持三种配置方式，按优先级自动选择：
-
-#### 方式 1: 使用 LLM 提供商的 API 嵌入（默认）
-
-如果 LLM 提供商支持嵌入 API，系统将优先使用（无需下载模型）：
-
-| LLM 提供商 | 嵌入模型 | 配置 |
-|-----------|---------|------|
-| OpenAI | `text-embedding-3-large` | `OPENAI_API_KEY` |
-| Qwen | `text-embedding-v3` | `QWEN_API_KEY` |
-| DeepSeek | `deepseek-embedding` | `DEEPSEEK_API_KEY` |
-| Ollama | `nomic-embed-text` | `OLLAMA_BASE_URL` |
-
-**优点**：无需下载模型，直接调用 API
-
-#### 方式 2: 使用本地 HuggingFace 模型
-
-当 LLM 不支持嵌入或 API 不可用时，系统将自动下载并使用本地模型：
-
-- **默认模型**: `RamManavalan/Qwen3-VL-Embedding-8B-FP8`
-- **模型缓存目录**: `backend/models/hub/`
-- **自动回退**: HF-Mirror → 官方 HuggingFace
-
-**首次使用知识库功能时会自动下载模型**（约 8GB），国内用户通过 HF-Mirror 下载速度较快。
-
-#### 方式 3: 手动指定模型
-
-编辑 `backend/app/core/rag_engine.py`，修改 `_get_fallback_embedding()` 方法中的 `model_name`：
-
-```python
-# 示例：使用其他模型
-model_name = "BAAI/bge-large-zh-v1.5"  # 中文嵌入模型
-model_name = "sentence-transformers/all-MiniLM-L6-v2"  # 轻量级模型
-```
-
-#### 模型缓存目录
-
-```
-backend/models/hub/models--<用户名>--<模型名>/snapshots/<commit-hash>/
-```
-
-**手动下载模型**：
-
-如果需要离线使用，可以提前下载模型到 `backend/models/` 目录，系统会自动检测并使用缓存。
+For complete API documentation, visit: http://localhost:8002/docs (after starting backend)
 
 ---
 
-## 开发规范
+## LLM Configuration
 
-请参阅 [claude.md](./claude.md) 了解完整的开发规范和 AI 协作协议。
+### Supported LLM Providers
 
-## 文档
+miniClaw supports multiple LLM providers, switchable via `LLM_PROVIDER` environment variable:
 
-- [开发计划](./DEVELOPMENT_PLAN.md) - 完整的开发计划和任务分配
-- [开发规范](./claude.md) - 代码规范和最佳实践
-- [架构文档](./docs/ARCHITECTURE.md) - 系统架构设计（待创建）
-- [API 文档](./docs/API.md) - API 接口文档（待创建）
-- [部署指南](./docs/DEPLOYMENT.md) - Docker 和本地部署（待创建）
+| Provider | Configuration | Description |
+|----------|--------------|-------------|
+| **Qwen** | `QWEN_API_KEY` | Alibaba Qwen, free tier available |
+| **OpenAI** | `OPENAI_API_KEY` | OpenAI official API |
+| **DeepSeek** | `DEEPSEEK_API_KEY` | Cost-effective |
+| **Ollama** | No API Key required | Completely local |
+| **Claude** | `CLAUDE_API_KEY` | Anthropic Claude |
+| **Gemini** | `GEMINI_API_KEY` | Google Gemini |
+| **Custom** | `CUSTOM_API_KEY` + `CUSTOM_BASE_URL` | OpenAI-compatible API |
 
-## 注意事项
+### Configuration Example
 
-⚠️ **安全警告**：
-- Terminal 工具已配置沙箱和命令黑名单
-- read_file 工具限制在项目目录内
-- 请勿在生产环境使用默认 API Keys
+Edit `backend/.env`:
 
-⚠️ **技术要求**：
-- 必须使用 LangChain 1.x 的 `create_agent` API
-- 严禁使用旧版 `AgentExecutor`
-- 强制使用 Type Hinting (Python) 和 strict mode (TypeScript)
+```bash
+# Select provider
+LLM_PROVIDER=qwen  # or openai, deepseek, ollama, claude, gemini
 
-## 贡献指南
+# Qwen configuration
+QWEN_API_KEY=sk-your-api-key
+QWEN_MODEL=qwen-plus
 
-欢迎贡献！请遵循以下流程：
+# OpenAI configuration
+# OPENAI_API_KEY=sk-your-api-key
+# OPENAI_MODEL=gpt-4o-mini
 
-1. Fork 本项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
+# Ollama configuration (local)
+# OLLAMA_BASE_URL=http://localhost:11434/v1
+# OLLAMA_MODEL=qwen2.5
+```
 
-请确保遵循 [claude.md](./claude.md) 中的代码规范。
+### Embedding Model Configuration
 
-## 许可证
+Knowledge base functionality requires Embedding model for semantic retrieval. System supports three configuration methods:
 
-本项目采用 MIT 许可证 - 详见 LICENSE 文件
+#### Method 1: Use LLM Provider's API Embedding (Recommended)
 
-## 致谢
+No model download required, direct API calls:
 
-- OpenClaw 原型项目
-- LangChain 团队
-- LlamaIndex 团队
-- Anthropic Agent Skills 范式
+| LLM Provider | Embedding Model | Configuration |
+|--------------|----------------|--------------|
+| OpenAI | `text-embedding-3-large` | Auto-used |
+| Qwen | `text-embedding-v3` | Auto-used |
+| DeepSeek | `deepseek-embedding` | Auto-used |
+
+#### Method 2: Use Local HuggingFace Model
+
+When LLM doesn't support embedding, system automatically downloads local model:
+
+- **Default Model**: `RamManavalan/Qwen3-VL-Embedding-8B-FP8`
+- **Size**: ~8GB
+- **Download**: HF-Mirror acceleration for China users
+
+#### Method 3: Manually Specify Model
+
+Edit `backend/app/core/rag_engine.py`:
+
+```python
+model_name = "BAAI/bge-large-zh-v1.5"  # Chinese embedding model
+```
+
+---
+
+## Testing
+
+### Backend Testing
+
+```bash
+cd backend
+
+# Run all tests
+pytest tests/
+
+# Run specific test file
+pytest tests/test_tools.py
+
+# View coverage
+pytest --cov=app tests/
+```
+
+### Frontend Testing
+
+```bash
+cd frontend
+
+# Unit tests
+npm test
+
+# E2E tests
+npx playwright test
+
+# View E2E test report
+npx playwright show-report
+```
+
+---
+
+## Development Guide
+
+### Backend Development
+
+```bash
+cd backend
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Start development server (hot reload)
+uvicorn app.main:app --port 8002 --reload
+```
+
+### Frontend Development
+
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+
+# Build production version
+npm run build
+```
+
+### Code Standards
+
+Please refer to [CLAUDE.md](./CLAUDE.md) for complete development standards:
+
+- **Python**: Follow PEP8, use Type Hints
+- **TypeScript**: Strict mode, no `any`
+- **LangChain**: Must use `create_agent` API, legacy `AgentExecutor` prohibited
+
+---
+
+## Documentation
+
+- **[QUICKSTART.md](./QUICKSTART.md)** - 5-minute quick start guide
+- **[CLAUDE.md](./CLAUDE.md)** - Development standards and AI collaboration protocol
+- **[DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)** - Complete development plan
+- **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** - System architecture design
+- **[docs/API.md](./docs/API.md)** - API interface documentation
+- **[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)** - Docker and production deployment
+
+---
+
+## Security Considerations
+
+⚠️ **Before deploying to production, please note:**
+
+1. **API Key Security**
+   - Don't hard-code API keys in code
+   - Use environment variables or key management services
+   - Rotate API keys regularly
+
+2. **File Access Restrictions**
+   - Terminal tool configured with command blacklist
+   - read_file tool restricted to project directory
+   - Container isolation recommended for production
+
+3. **Network Security**
+   - Configure CORS whitelist
+   - Enable HTTPS
+   - Rate limit API access
+
+4. **Log Auditing**
+   - Log all tool invocations
+   - Regularly audit System Prompt changes
+   - Monitor anomalous behavior
+
+---
+
+## FAQ
+
+### Q: How to add custom Skills?
+
+A: Create a new folder under `backend/data/skills/`, add `SKILL.md` file. Agent will load automatically.
+
+Example:
+```bash
+mkdir backend/data/skills/my-skill
+cat > backend/data/skills/my-skill/SKILL.md << 'EOF'
+---
+name: my-skill
+description: My custom skill
+---
+
+# Skill Description
+
+Detailed description of how to use this skill.
+EOF
+```
+
+### Q: How to modify Agent personality?
+
+A: Edit `backend/workspace/SOUL.md` file to define Agent's core settings.
+
+### Q: Where are conversation histories saved?
+
+A: Saved in `backend/data/sessions/*.json` files, can be viewed or edited directly.
+
+### Q: How to disable certain tools?
+
+A: Edit `backend/app/core/tools.py`, comment out unwanted tool registrations.
+
+### Q: Knowledge base slow on first use?
+
+A: First use requires downloading Embedding model (~8GB). Wait for download to complete or use LLM provider's Embedding API.
+
+---
+
+## Contributing
+
+Contributions are welcome! Please follow this process:
+
+1. Fork this project
+2. Create feature branch (`git checkout -b feature/AmazingFeature`)
+3. Follow code standards in [CLAUDE.md](./CLAUDE.md)
+4. Commit changes (`git commit -m 'Add some AmazingFeature'`)
+5. Push to branch (`git push origin feature/AmazingFeature`)
+6. Open Pull Request
+
+### Contribution Areas
+
+- New Skills (tool integrations, domain knowledge)
+- Core tool optimization
+- UI/UX improvements
+- Documentation enhancements
+- Bug fixes
+
+---
+
+## Roadmap
+
+### v0.2 (Planned)
+
+- [ ] Multi-session management
+- [ ] Skill marketplace integration
+- [ ] WebRTC voice chat
+- [ ] Multimodal support (images, files)
+
+### v0.3 (Future)
+
+- [ ] Multi-Agent collaboration
+- [ ] Knowledge graph memory
+- [ ] Plugin system
+- [ ] Mobile support
+
+---
+
+## License
+
+This project is licensed under the **MIT License** - see [LICENSE](LICENSE) file for details
+
+---
+
+## Acknowledgments
+
+- [OpenClaw](https://github.com/openclaw) - Prototype project
+- [LangChain](https://github.com/langchain-ai/langchain) - Powerful Agent framework
+- [LlamaIndex](https://github.com/run-llama/llama_index) - Excellent RAG engine
+- [Anthropic](https://www.anthropic.com) - Agent Skills paradigm
+- [Shadcn/UI](https://ui.shadcn.com) - Beautiful UI component library
+
+---
+
+## Contact
+
+- **Issues**: Submit issues on GitHub
+- **Discussions**: Welcome discussions and feedback
+- **Email**: [Maintainer email]
 
 ---
 
 **Happy Coding! 🚀**
+
+Making AI Agent capabilities transparent and controllable, enabling everyone to create their own intelligent assistants.

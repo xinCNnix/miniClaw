@@ -10,35 +10,7 @@ echo ""
 # Step 0/4: Check and install required tools
 echo "Step 0.1/4: Checking required tools..."
 
-# Check for clawhub CLI
-if ! command -v clawhub &> /dev/null; then
-    echo "ClawHub CLI not found. Installing..."
-    npm i -g clawhub
-    if [ $? -eq 0 ]; then
-        echo "[OK] ClawHub CLI installed"
-    else
-        echo "[WARNING] Failed to install ClawHub CLI"
-    fi
-else
-    echo "[OK] ClawHub CLI already installed"
-fi
-
-# Check for ClawSec security suite
-echo ""
-echo "Step 0.2/4: Checking ClawSec security suite..."
-CLAWSEC_DIR="./backend/data/skills/clawsec-suite"
-if [ ! -d "$CLAWSEC_DIR" ]; then
-    echo "ClawSec not found. Installing to project skills directory..."
-    echo "This may take a minute..."
-    if INSTALL_ROOT="./backend/data/skills" npx clawhub@latest install clawsec-suite; then
-        echo "[OK] ClawSec installed successfully to: $CLAWSEC_DIR"
-    else
-        echo "[WARNING] ClawSec installation failed. Continuing without security monitoring."
-        echo "You can install it later manually."
-    fi
-else
-    echo "[OK] ClawSec already installed. Skipping installation."
-fi
+echo "[OK] Required tools check complete"
 echo ""
 
 # Check if backend/.env exists
