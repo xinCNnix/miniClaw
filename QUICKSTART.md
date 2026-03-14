@@ -2,6 +2,8 @@
 
 > Lightweight, highly transparent AI Agent System - Get started in 5 minutes
 
+**Development Platform:** This project is developed and tested primarily on **Windows 11**. It is compatible with Linux and macOS, but Windows is the primary platform.
+
 ## Prerequisites
 
 - **Python**: 3.10 or higher
