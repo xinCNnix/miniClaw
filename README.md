@@ -83,48 +83,63 @@ This project is developed and tested primarily on Windows 11. While designed to 
 
 ## Quick Start
 
-### 5-Minute Quick Start
+### 🚀 One-Click Installation (Recommended)
 
-Please check **[QUICKSTART.md](./QUICKSTART.md)** for detailed quick start guide.
-
-### Requirements
-
-- Python 3.10+
-- Node.js 18+
-- npm
-
-### Quick Install
-
+**Windows Users:**
 ```bash
-# 1. Clone project
-git clone <repository-url>
-cd miniclaw
-
-# 2. Configure environment variables
-cp backend/.env.example backend/.env
-# Edit backend/.env, enter your API Keys
-
-# 3. One-click start (Windows)
+# Double-click start.bat
+# Or run from command line
 start.bat
+```
 
-# One-click start (Linux/Mac)
+**Linux/macOS Users:**
+```bash
+chmod +x start.sh
 ./start.sh
 ```
 
+**That's it!** The startup scripts will:
+- ✅ Automatically check and install dependencies (Python, Node.js, conda)
+- ✅ Create virtual environments if needed
+- ✅ Install all required packages
+- ✅ Start backend (port 8002) and frontend (port 3000)
+- ✅ Open browser automatically
+
 Visit http://localhost:3000 to start using.
+
+### 📋 Prerequisites
+
+The startup scripts require:
+- **Windows:** Command Prompt or PowerShell
+- **Linux/macOS:** Bash shell
+- **Git** (for cloning the repository)
+- **Internet connection** (for downloading dependencies)
+
+### 🔑 First Run
+
+On the first run, you'll need to configure your LLM API keys. The script will prompt you to:
+1. Choose an LLM provider (Qwen recommended, free tier available)
+2. Enter your API key
+3. The configuration will be saved automatically
+
+For manual configuration, see **[QUICKSTART.md](./QUICKSTART.md)**.
 
 ### Docker Deployment
 
 ```bash
-# Start complete system
+# Clone and start with Docker
+git clone <repository-url>
+cd miniclaw
+cp backend/.env.example backend/.env
+# Edit backend/.env with your API keys
+
 docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop system
-docker-compose down
 ```
+
+Access:
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8002
+- API Docs: http://localhost:8002/docs
 
 ---
 
