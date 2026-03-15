@@ -34,6 +34,18 @@ _agent_manager: AgentManager = None
 _current_provider: str = None
 
 
+def reset_agent_manager() -> None:
+    """
+    Reset the global agent manager to force recreation on next access.
+
+    This should be called when API credentials are updated to ensure
+    the new credentials are picked up immediately.
+    """
+    global _agent_manager, _current_provider
+    _agent_manager = None
+    _current_provider = None
+
+
 def get_agent_manager() -> AgentManager:
     """
     Get or create the global agent manager.

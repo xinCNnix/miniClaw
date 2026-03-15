@@ -48,6 +48,11 @@ class TerminalTool(BaseTool):
     description: str = """
     Execute shell commands in a safe, sandboxed environment.
 
+    IMPORTANT: You MUST provide the 'command' parameter with the shell command to execute.
+
+    Parameter format:
+    - command (required): The shell command string to execute
+
     Important restrictions:
     - Commands are restricted to the project directory
     - Dangerous commands are blocked for both Unix and Windows
@@ -66,10 +71,11 @@ class TerminalTool(BaseTool):
     - Process management: tasklist
     - System info: systeminfo, ver
 
-    Examples:
-    - terminal: ls -la
-    - terminal: cat README.md
-    - terminal: find . -name "*.py"
+    Usage examples:
+    - command="ls -la"
+    - command="cat README.md"
+    - command="find . -name '*.py'"
+    - command="curl -s 'https://api.example.com/data'"
     """
     args_schema: type[TerminalInput] = TerminalInput
 

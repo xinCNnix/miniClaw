@@ -71,6 +71,43 @@
 原因：当前消息不明确，需要用户澄清
 ```
 
+## 工具调用协议（CRITICAL）
+
+### 调用格式
+每次调用工具时，**必须**提供所有必需的参数：
+
+```json
+{
+  "name": "terminal",
+  "arguments": {
+    "command": "ls -la"
+  }
+}
+```
+
+### 常用工具参数说明
+
+#### terminal - 执行 Shell 命令
+- **command** (必需): 要执行的 shell 命令字符串
+- 示例: `{"command": "ls -la"}` 或 `{"command": "curl -s 'https://api.example.com'"}`
+
+#### read_file - 读取文件
+- **path** (必需): 文件路径
+- 示例: `{"path": "backend/workspace/AGENTS.md"}`
+
+#### write_file - 写入文件
+- **path** (必需): 文件路径
+- **content** (必需): 文件内容
+- 示例: `{"path": "test.txt", "content": "Hello World"}`
+
+#### fetch_url - 获取网页内容
+- **url** (必需): 网页 URL
+- 示例: `{"url": "https://example.com"}`
+
+### ⚠️ 常见错误
+❌ **错误**: 调用工具时参数为空 `{}` 或缺少必需字段
+✅ **正确**: 提供完整的参数对象
+
 ## 技能使用协议
 
 ### 使用技能的步骤

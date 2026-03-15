@@ -103,6 +103,10 @@ async def save_llm_config(request: SaveLLMConfigRequest):
         # Clear settings cache so new values are picked up immediately
         clear_settings_cache()
 
+        # Reset agent manager to force recreation with new credentials
+        from app.api.chat import reset_agent_manager
+        reset_agent_manager()
+
         return {
             "success": True,
             "message": f"Configuration saved for {request.provider}",
@@ -381,8 +385,9 @@ async def switch_provider(request: SwitchProviderRequest):
         credentials["_current_provider"] = request.provider
         KeyObfuscator.save_credentials(credentials)
 
-        # Import here to avoid circular dependency
-        from app.api.chat import get_agent_manager
+        # Reset agent manager to force recreation with new provider
+        from app.api.chat import reset_agent_manager, get_agent_manager
+        reset_agent_manager()
 
         # Get new agent manager (will create with new provider)
         agent = get_agent_manager()

@@ -91,14 +91,29 @@ class AgentManager:
             lc_messages.append(response)
 
             for tool_call in response.tool_calls:
-                tool_name = tool_call.get('name', '')
-                tool_args = tool_call.get('args', {})
+                # Handle both dict and object types for tool_call
+                tool_name = (
+                    tool_call.get('name') if hasattr(tool_call, 'get') and tool_call.get('name') else
+                    getattr(tool_call, 'name', None) if hasattr(tool_call, 'name') else
+                    ''
+                )
+                tool_args = (
+                    tool_call.get('args') if hasattr(tool_call, 'get') and tool_call.get('args') is not None else
+                    getattr(tool_call, 'args', {}) if hasattr(tool_call, 'args') else
+                    {}
+                )
+                tool_id = (
+                    tool_call.get('id') if hasattr(tool_call, 'get') and tool_call.get('id') else
+                    getattr(tool_call, 'id', None) if hasattr(tool_call, 'id') else
+                    None
+                ) or ''
+
                 tool_output = self._execute_tool(tool_name, tool_args)
 
                 # Add tool message to conversation
                 lc_messages.append(ToolMessage(
                     content=str(tool_output),
-                    tool_call_id=tool_call.get('id', '')
+                    tool_call_id=tool_id
                 ))
 
             # Get final response after tool execution
@@ -130,13 +145,28 @@ class AgentManager:
             lc_messages.append(response)
 
             for tool_call in response.tool_calls:
-                tool_name = tool_call.get('name', '')
-                tool_args = tool_call.get('args', {})
+                # Handle both dict and object types for tool_call
+                tool_name = (
+                    tool_call.get('name') if hasattr(tool_call, 'get') and tool_call.get('name') else
+                    getattr(tool_call, 'name', None) if hasattr(tool_call, 'name') else
+                    ''
+                )
+                tool_args = (
+                    tool_call.get('args') if hasattr(tool_call, 'get') and tool_call.get('args') is not None else
+                    getattr(tool_call, 'args', {}) if hasattr(tool_call, 'args') else
+                    {}
+                )
+                tool_id = (
+                    tool_call.get('id') if hasattr(tool_call, 'get') and tool_call.get('id') else
+                    getattr(tool_call, 'id', None) if hasattr(tool_call, 'id') else
+                    None
+                ) or ''
+
                 tool_output = await self._aexecute_tool(tool_name, tool_args)
 
                 lc_messages.append(ToolMessage(
                     content=str(tool_output),
-                    tool_call_id=tool_call.get('id', '')
+                    tool_call_id=tool_id
                 ))
 
             response = await self.llm_with_tools.ainvoke(lc_messages)
@@ -178,13 +208,37 @@ class AgentManager:
                 lc_messages.append(response)
 
                 for tool_call in response.tool_calls:
-                    tool_name = tool_call.get('name', '')
-                    tool_args = tool_call.get('args', {})
+                    # Handle both dict and object types for tool_call
+                    tool_id = (
+                        tool_call.get('id') if hasattr(tool_call, 'get') and tool_call.get('id') else
+                        getattr(tool_call, 'id', None) if hasattr(tool_call, 'id') else
+                        None
+                    ) or ''  # Fallback to empty string if None
+                    tool_name = (
+                        tool_call.get('name') if hasattr(tool_call, 'get') and tool_call.get('name') else
+                        getattr(tool_call, 'name', None) if hasattr(tool_call, 'name') else
+                        ''
+                    )
+                    tool_args = (
+                        tool_call.get('args') if hasattr(tool_call, 'get') and tool_call.get('args') is not None else
+                        getattr(tool_call, 'args', {}) if hasattr(tool_call, 'args') else
+                        {}
+                    )
+
+                    # Handle case where args is a JSON string (some LLMs return this format)
+                    if isinstance(tool_args, str):
+                        try:
+                            import json
+                            tool_args = json.loads(tool_args)
+                            logger.debug(f"Parsed JSON string args: {tool_args}")
+                        except Exception as e:
+                            logger.error(f"Failed to parse JSON args: {e}, args: {tool_args}")
+                            tool_args = {}
 
                     yield {
                         "type": "tool_call",
                         "tool_calls": [{
-                            "id": tool_call.get('id', ''),
+                            "id": tool_id,
                             "name": tool_name,
                             "arguments": tool_args,
                         }]
@@ -208,7 +262,7 @@ class AgentManager:
 
                     lc_messages.append(ToolMessage(
                         content=str(tool_output),
-                        tool_call_id=tool_call.get('id', '')
+                        tool_call_id=tool_id
                     ))
 
                 # Get final response
@@ -325,10 +379,38 @@ class AgentManager:
                 # Convert tool_calls to list format for tracking
                 tool_calls_list = []
                 for tc in tool_calls:
+                    # Handle both dict and object types for tool_call
+                    # LangChain tool_calls can be either dict-like or object with attributes
+                    tc_id = (
+                        tc.get('id') if hasattr(tc, 'get') and tc.get('id') else
+                        getattr(tc, 'id', None) if hasattr(tc, 'id') else
+                        None
+                    ) or ''  # Fallback to empty string if None
+                    tc_name = (
+                        tc.get('name') if hasattr(tc, 'get') and tc.get('name') else
+                        getattr(tc, 'name', None) if hasattr(tc, 'name') else
+                        ''
+                    )
+                    tc_args = (
+                        tc.get('args') if hasattr(tc, 'get') and tc.get('args') is not None else
+                        getattr(tc, 'args', {}) if hasattr(tc, 'args') else
+                        {}
+                    )
+
+                    # Handle case where args is a JSON string (some LLMs return this format)
+                    if isinstance(tc_args, str):
+                        try:
+                            import json
+                            tc_args = json.loads(tc_args)
+                            logger.debug(f"Parsed JSON string args: {tc_args}")
+                        except Exception as e:
+                            logger.error(f"Failed to parse JSON args: {e}, args: {tc_args}")
+                            tc_args = {}
+
                     tool_calls_list.append({
-                        'name': tc.get('name', ''),
-                        'args': tc.get('args', {}),
-                        'id': tc.get('id', '')
+                        'name': tc_name,
+                        'args': tc_args,
+                        'id': tc_id
                     })
 
                 # Send tool_call events for all tools
@@ -566,7 +648,10 @@ class AgentManager:
         logger.debug(f"Executing tool (sync): {name} with args: {arguments}")
         tool = self._get_tool_by_name(name)
         if tool:
-            result = tool._run(**arguments)
+            # Validate arguments before execution
+            self._validate_tool_arguments(tool, name, arguments)
+            # Use LangChain's standard invoke method
+            result = tool.invoke(arguments)
             logger.debug(f"Tool {name} result size: {len(str(result))} chars")
             return result
         raise ValueError(f"Tool not found: {name}")
@@ -574,12 +659,14 @@ class AgentManager:
     async def _aexecute_tool(self, name: str, arguments: dict) -> Any:
         """Execute a tool asynchronously."""
         logger.debug(f"Executing tool (async): {name} with args: {arguments}")
+        logger.debug(f"Arguments type: {type(arguments)}, keys: {arguments.keys() if isinstance(arguments, dict) else 'N/A'}")
+
         tool = self._get_tool_by_name(name)
         if tool:
-            if hasattr(tool, '_arun'):
-                result = await tool._arun(**arguments)
-            else:
-                result = tool._run(**arguments)
+            # Validate arguments before execution
+            self._validate_tool_arguments(tool, name, arguments)
+            # Use LangChain's standard ainvoke method
+            result = await tool.ainvoke(arguments)
             logger.debug(f"Tool {name} result size: {len(str(result))} chars")
             return result
         raise ValueError(f"Tool not found: {name}")
@@ -725,6 +812,68 @@ class AgentManager:
             if tool.name == name:
                 return tool
         return None
+
+    def _validate_tool_arguments(self, tool: BaseTool, tool_name: str, arguments: dict) -> None:
+        """
+        Validate tool arguments before execution.
+
+        Checks if all required fields are present in the arguments dict.
+        Raises ValueError with a helpful message if validation fails.
+
+        Args:
+            tool: The tool instance
+            tool_name: Name of the tool (for error messages)
+            arguments: Arguments dict to validate
+
+        Raises:
+            ValueError: If required arguments are missing
+        """
+        if not arguments:
+            # Check if tool has an args_schema with required fields
+            if hasattr(tool, 'args_schema') and tool.args_schema is not None:
+                try:
+                    # Try to get the model fields
+                    schema = tool.args_schema
+                    if hasattr(schema, 'model_fields'):
+                        required_fields = []
+                        for field_name, field_info in schema.model_fields.items():
+                            # Check if field is required (no default value)
+                            if field_info.is_required():
+                                required_fields.append(field_name)
+
+                        if required_fields:
+                            raise ValueError(
+                                f"Tool '{tool_name}' requires the following parameters: "
+                                f"{', '.join(required_fields)}. "
+                                f"LLM provided empty arguments. "
+                                f"Please ensure the LLM properly formats tool calls."
+                            )
+                except ValueError:
+                    # Re-raise ValueError (our validation errors)
+                    raise
+                except Exception as e:
+                    # If we can't validate for other reasons, log a warning but don't block execution
+                    logger.warning(f"Could not validate tool arguments for {tool_name}: {e}")
+        else:
+            # Validate that arguments match the schema
+            if hasattr(tool, 'args_schema') and tool.args_schema is not None:
+                try:
+                    # Try to create a partial validation to detect missing required fields
+                    schema = tool.args_schema
+                    if hasattr(schema, 'model_fields'):
+                        for field_name, field_info in schema.model_fields.items():
+                            if field_info.is_required() and field_name not in arguments:
+                                raise ValueError(
+                                    f"Tool '{tool_name}' is missing required parameter: '{field_name}'. "
+                                    f"Provided arguments: {list(arguments.keys())}. "
+                                    f"LLM needs to include all required parameters when calling tools."
+                                )
+                except ValueError:
+                    # Re-raise ValueError (our validation errors)
+                    raise
+                except Exception as e:
+                    # Log other exceptions but don't block
+                    logger.debug(f"Argument validation check failed (non-critical): {e}")
 
     def _detect_redundancy(self, recent_tool_calls: list) -> bool:
         """
