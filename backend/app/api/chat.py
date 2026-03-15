@@ -8,7 +8,9 @@ import json
 import asyncio
 import logging
 import time
+import hashlib
 from typing import AsyncIterator
+from functools import lru_cache
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
@@ -236,6 +238,133 @@ def _contains_chinese(text: str) -> bool:
         True if text contains Chinese characters
     """
     return any('\u4e00' <= char <= '\u9fff' for char in text)
+
+
+# ============================================================================
+# Performance Optimization: Caching
+# ============================================================================
+
+# Semantic search cache with TTL support
+_semantic_search_cache: dict = {}
+_semantic_search_timestamps: dict = {}
+
+
+def _get_query_hash(query: str) -> str:
+    """Generate MD5 hash for query."""
+    return hashlib.md5(query.encode('utf-8')).hexdigest()
+
+
+def _get_cached_semantic_search(query: str, ttl: int = 300):
+    """
+    Get cached semantic search result if available and not expired.
+
+    Args:
+        query: Search query
+        ttl: Time-to-live in seconds (default 5 minutes)
+
+    Returns:
+        Cached result or None
+    """
+    query_hash = _get_query_hash(query)
+    current_time = time.time()
+
+    if query_hash in _semantic_search_cache:
+        timestamp = _semantic_search_timestamps.get(query_hash, 0)
+        if current_time - timestamp < ttl:
+            logger.debug(f"Semantic search cache hit for query: {query[:50]}...")
+            return _semantic_search_cache[query_hash]
+        else:
+            # Cache expired
+            del _semantic_search_cache[query_hash]
+            del _semantic_search_timestamps[query_hash]
+            logger.debug(f"Semantic search cache expired for query: {query[:50]}...")
+
+    return None
+
+
+def _set_cached_semantic_search(query: str, result):
+    """
+    Cache semantic search result with timestamp.
+
+    Args:
+        query: Search query
+        result: Search result to cache
+    """
+    query_hash = _get_query_hash(query)
+    _semantic_search_cache[query_hash] = result
+    _semantic_search_timestamps[query_hash] = time.time()
+    logger.debug(f"Cached semantic search result for query: {query[:50]}...")
+
+
+def _clear_semantic_search_cache():
+    """Clear all semantic search cache entries."""
+    global _semantic_search_cache, _semantic_search_timestamps
+    _semantic_search_cache.clear()
+    _semantic_search_timestamps.clear()
+    logger.info("Semantic search cache cleared")
+
+
+# Conversation context cache with hash-based invalidation
+_conversation_context_cache: dict = {}
+
+
+def _get_context_hash(messages: list) -> str:
+    """
+    Generate hash for conversation context based on recent messages.
+
+    Args:
+        messages: List of messages
+
+    Returns:
+        Hash string
+    """
+    # Use last 10 messages for hash generation
+    recent_messages = messages[-10:] if len(messages) > 10 else messages
+    content = "".join(f"{m.get('role', '')}:{m.get('content', '')}" for m in recent_messages)
+    return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+
+def _get_cached_conversation_context(session_id: str, messages: list):
+    """
+    Get cached conversation context if available.
+
+    Args:
+        session_id: Session ID
+        messages: Current messages list
+
+    Returns:
+        Cached context or None
+    """
+    current_hash = _get_context_hash(messages)
+    cache_key = f"{session_id}:{current_hash}"
+
+    if cache_key in _conversation_context_cache:
+        logger.debug(f"Conversation context cache hit for session: {session_id}")
+        return _conversation_context_cache[cache_key]
+
+    return None
+
+
+def _set_cached_conversation_context(session_id: str, messages: list, context: str):
+    """
+    Cache conversation context with hash-based key.
+
+    Args:
+        session_id: Session ID
+        messages: Current messages list
+        context: Context to cache
+    """
+    current_hash = _get_context_hash(messages)
+    cache_key = f"{session_id}:{current_hash}"
+    _conversation_context_cache[cache_key] = context
+
+    # Limit cache size
+    if len(_conversation_context_cache) > 64:
+        # Remove oldest entry (first item)
+        oldest_key = next(iter(_conversation_context_cache))
+        del _conversation_context_cache[oldest_key]
+
+    logger.debug(f"Cached conversation context for session: {session_id}")
 
 
 def _extract_conversation_context(
@@ -672,11 +801,25 @@ async def chat(request: ChatRequest):
             from app.memory.memory_manager import get_memory_manager
             memory_manager = get_memory_manager()
 
-            # Search with relevance threshold
-            relevant = await memory_manager.search_relevant_history(
-                request.message,
-                top_k=3
-            )
+            # Try cache first if enabled
+            relevant = None
+            if settings.enable_semantic_search_cache:
+                relevant = _get_cached_semantic_search(
+                    request.message,
+                    ttl=settings.semantic_search_cache_ttl
+                )
+
+            # Cache miss or disabled - perform search
+            if relevant is None:
+                # Search with relevance threshold
+                relevant = await memory_manager.search_relevant_history(
+                    request.message,
+                    top_k=3
+                )
+
+                # Cache the result if enabled
+                if settings.enable_semantic_search_cache and relevant is not None:
+                    _set_cached_semantic_search(request.message, relevant)
 
             # Filter by relevance score (if available) and content quality
             if relevant:
@@ -726,8 +869,29 @@ async def chat(request: ChatRequest):
         if session is not None:
             session_messages = session.get("messages", [])
             if session_messages:
-                conversation_context = _extract_conversation_context(session_messages)
-                logger.debug(f"Extracted conversation context from session")
+                # Try cache first if enabled
+                from app.config import get_settings
+                settings = get_settings()
+
+                if settings.enable_context_cache:
+                    conversation_context = _get_cached_conversation_context(
+                        request.session_id,
+                        session_messages
+                    )
+
+                # Cache miss or disabled - extract context
+                if conversation_context is None:
+                    conversation_context = _extract_conversation_context(session_messages)
+                    logger.debug(f"Extracted conversation context from session")
+
+                    # Cache the result if enabled
+                    if settings.enable_context_cache:
+                        _set_cached_conversation_context(
+                            request.session_id,
+                            session_messages,
+                            conversation_context
+                        )
+
                 logger.info(f"[DEBUG] conversation_context length: {len(conversation_context)} chars")
                 if conversation_context:
                     logger.info(f"[DEBUG] conversation_context preview:\n{conversation_context[:500]}")

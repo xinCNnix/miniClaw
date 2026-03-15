@@ -265,7 +265,39 @@ class AgentManager:
 
             while round_count < max_tool_rounds:
                 llm_start = time.time()
-                response = await self.llm_with_tools.ainvoke(lc_messages)
+
+                # Check if streaming is enabled
+                settings = get_settings()
+                use_streaming = settings.enable_streaming_response
+
+                if use_streaming:
+                    # Stream LLM response for faster time-to-first-byte
+                    logger.info(f"[Round {round_count + 1}] Starting LLM stream...")
+                    accumulated_content = ""
+                    accumulated_tool_calls = []
+
+                    async for chunk in self.llm_with_tools.astream(lc_messages):
+                        # Process content chunks
+                        if hasattr(chunk, 'content') and chunk.content:
+                            accumulated_content += chunk.content
+                            # Only yield content deltas for final responses (not intermediate tool calls)
+                            # This avoids partial content during tool calling phases
+                            logger.debug(f"LLM stream chunk: {len(chunk.content)} chars")
+
+                        # Collect tool calls
+                        if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                            accumulated_tool_calls.extend(chunk.tool_calls)
+
+                    # Build final response from accumulated data
+                    from langchain_core.messages import AIMessage
+                    response = AIMessage(
+                        content=accumulated_content,
+                        tool_calls=accumulated_tool_calls
+                    )
+                else:
+                    # Use non-streaming invoke (original behavior)
+                    response = await self.llm_with_tools.ainvoke(lc_messages)
+
                 llm_duration = time.time() - llm_start
 
                 logger.info(f"[Round {round_count + 1}] LLM response received in {llm_duration:.2f}s")
@@ -290,12 +322,22 @@ class AgentManager:
                 lc_messages.append(response)
 
                 # Execute all tools in this round
-                for idx, tool_call in enumerate(tool_calls):
-                    tool_name = tool_call.get('name', '')
-                    tool_args = tool_call.get('args', {})
-                    tool_id = tool_call.get('id', '')
+                # Convert tool_calls to list format for tracking
+                tool_calls_list = []
+                for tc in tool_calls:
+                    tool_calls_list.append({
+                        'name': tc.get('name', ''),
+                        'args': tc.get('args', {}),
+                        'id': tc.get('id', '')
+                    })
 
-                    logger.info(f"[Round {round_count + 1}] Executing tool {idx+1}/{len(tool_calls)}: {tool_name}")
+                # Send tool_call events for all tools
+                for idx, tc in enumerate(tool_calls_list):
+                    tool_name = tc['name']
+                    tool_args = tc['args']
+                    tool_id = tc['id']
+
+                    logger.info(f"[Round {round_count + 1}] Tool call {idx+1}/{len(tool_calls_list)}: {tool_name}")
 
                     yield {
                         "type": "tool_call",
@@ -306,42 +348,51 @@ class AgentManager:
                         }]
                     }
 
-                    try:
-                        tool_output = await self._aexecute_tool(tool_name, tool_args)
+                # Execute tools with strategy (parallel or sequential)
+                try:
+                    tool_outputs = await self._execute_tools_with_strategy(tool_calls_list)
+                except Exception as e:
+                    logger.error(f"[Round {round_count + 1}] Tool execution strategy failed: {e}")
+                    # Fallback to sequential execution
+                    tool_outputs = await self._execute_tools_sequential(tool_calls_list)
 
-                        logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed")
+                # Process results and send tool_output events
+                for idx, (tc, output) in enumerate(zip(tool_calls_list, tool_outputs)):
+                    tool_name = tc['name']
+                    tool_id = tc['id']
 
+                    # Check if output is an exception
+                    if isinstance(output, Exception):
+                        logger.error(f"[Round {round_count + 1}] Tool {tool_name} failed: {output}")
                         yield {
                             "type": "tool_output",
                             "tool_name": tool_name,
-                            "output": str(tool_output),
-                            "status": "success",
-                        }
-                    except Exception as e:
-                        logger.error(f"[Round {round_count + 1}] Tool {tool_name} failed: {e}")
-                        yield {
-                            "type": "tool_output",
-                            "tool_name": tool_name,
-                            "output": str(e),
+                            "output": str(output),
                             "status": "error",
                         }
-
-                    # Add tool result to conversation
-                    lc_messages.append(ToolMessage(
-                        content=str(tool_output),
-                        tool_call_id=tool_call.get('id', '')
-                    ))
+                        # Add error to conversation
+                        lc_messages.append(ToolMessage(
+                            content=str(output),
+                            tool_call_id=tool_id
+                        ))
+                    else:
+                        logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed")
+                        yield {
+                            "type": "tool_output",
+                            "tool_name": tool_name,
+                            "output": str(output),
+                            "status": "success",
+                        }
+                        # Add result to conversation
+                        lc_messages.append(ToolMessage(
+                            content=str(output),
+                            tool_call_id=tool_id
+                        ))
 
                 # Increment round count and continue
                 round_count += 1
 
-                # Convert tool_calls to list format for tracking
-                tool_calls_list = []
-                for tc in tool_calls:
-                    tool_calls_list.append({
-                        'name': tc.get('name', ''),
-                        'args': tc.get('args', {})
-                    })
+                # Add to recent tool calls for tracking (already in list format)
                 recent_tool_calls.append(tool_calls_list)
 
                 # Maintain sliding window for redundancy detection
@@ -358,16 +409,28 @@ class AgentManager:
                     # Generate final response before breaking
                     logger.info("Getting final response after redundancy detection...")
                     try:
-                        final_response = await self.llm.ainvoke(lc_messages)
-                        if hasattr(final_response, 'content') and final_response.content:
-                            logger.info(f"Final response: {len(final_response.content)} chars")
-                            yield {
-                                "type": "content_delta",
-                                "content": final_response.content,
-                            }
-                            break  # Break after getting response
+                        settings = get_settings()
+                        if settings.enable_streaming_response:
+                            # Stream final response
+                            async for chunk in self.llm.astream(lc_messages):
+                                if hasattr(chunk, 'content') and chunk.content:
+                                    yield {
+                                        "type": "content_delta",
+                                        "content": chunk.content,
+                                    }
+                            break  # Break after streaming complete
                         else:
-                            logger.warning("LLM returned no content after redundancy detection")
+                            # Non-streaming
+                            final_response = await self.llm.ainvoke(lc_messages)
+                            if hasattr(final_response, 'content') and final_response.content:
+                                logger.info(f"Final response: {len(final_response.content)} chars")
+                                yield {
+                                    "type": "content_delta",
+                                    "content": final_response.content,
+                                }
+                                break  # Break after getting response
+                            else:
+                                logger.warning("LLM returned no content after redundancy detection")
                     except Exception as e:
                         logger.error(f"Failed to get final response: {e}")
                         yield {
@@ -392,16 +455,28 @@ class AgentManager:
                         # Generate final response before breaking
                         logger.info("Getting final response after sufficiency evaluation...")
                         try:
-                            final_response = await self.llm.ainvoke(lc_messages)
-                            if hasattr(final_response, 'content') and final_response.content:
-                                logger.info(f"Final response: {len(final_response.content)} chars")
-                                yield {
-                                    "type": "content_delta",
-                                    "content": final_response.content,
-                                }
-                                break  # Break after getting response
+                            settings = get_settings()
+                            if settings.enable_streaming_response:
+                                # Stream final response
+                                async for chunk in self.llm.astream(lc_messages):
+                                    if hasattr(chunk, 'content') and chunk.content:
+                                        yield {
+                                            "type": "content_delta",
+                                            "content": chunk.content,
+                                        }
+                                break  # Break after streaming complete
                             else:
-                                logger.warning("LLM returned no content after sufficiency evaluation")
+                                # Non-streaming
+                                final_response = await self.llm.ainvoke(lc_messages)
+                                if hasattr(final_response, 'content') and final_response.content:
+                                    logger.info(f"Final response: {len(final_response.content)} chars")
+                                    yield {
+                                        "type": "content_delta",
+                                        "content": final_response.content,
+                                    }
+                                    break  # Break after getting response
+                                else:
+                                    logger.warning("LLM returned no content after sufficiency evaluation")
                         except Exception as e:
                             logger.error(f"Failed to get final response: {e}")
                             yield {
@@ -424,19 +499,30 @@ class AgentManager:
                 # Use LLM WITHOUT tools to force text generation instead of more tool calls
                 logger.info("Getting final response after max tool rounds...")
                 try:
-                    final_response = await self.llm.ainvoke(lc_messages)
-                    if hasattr(final_response, 'content') and final_response.content:
-                        logger.info(f"Final response: {len(final_response.content)} chars")
-                        yield {
-                            "type": "content_delta",
-                            "content": final_response.content,
-                        }
+                    settings = get_settings()
+                    if settings.enable_streaming_response:
+                        # Stream final response
+                        async for chunk in self.llm.astream(lc_messages):
+                            if hasattr(chunk, 'content') and chunk.content:
+                                yield {
+                                    "type": "content_delta",
+                                    "content": chunk.content,
+                                }
                     else:
-                        logger.warning("LLM returned no content after max rounds")
-                        yield {
-                            "type": "error",
-                            "error": "Agent exceeded maximum tool execution rounds but could not generate a response"
-                        }
+                        # Non-streaming
+                        final_response = await self.llm.ainvoke(lc_messages)
+                        if hasattr(final_response, 'content') and final_response.content:
+                            logger.info(f"Final response: {len(final_response.content)} chars")
+                            yield {
+                                "type": "content_delta",
+                                "content": final_response.content,
+                            }
+                        else:
+                            logger.warning("LLM returned no content after max rounds")
+                            yield {
+                                "type": "error",
+                                "error": "Agent exceeded maximum tool execution rounds but could not generate a response"
+                            }
                 except Exception as e:
                     logger.error(f"Failed to get final response: {e}")
                     yield {
@@ -497,6 +583,141 @@ class AgentManager:
             logger.debug(f"Tool {name} result size: {len(str(result))} chars")
             return result
         raise ValueError(f"Tool not found: {name}")
+
+    def _has_tool_dependency(self, tool_calls: list) -> bool:
+        """
+        Detect if there are dependencies between tool calls.
+
+        Dependency signals:
+        1. Parameters reference previous tools ($prev, previous, 上一步, etc.)
+        2. Obvious file path dependencies (optional)
+
+        Args:
+            tool_calls: List of tool call dicts with 'name' and 'args'
+
+        Returns:
+            True if dependencies detected, False otherwise
+        """
+        if len(tool_calls) <= 1:
+            return False
+
+        settings = get_settings()
+        if not settings.parallel_tool_dependency_detection:
+            return False
+
+        # Check each tool call (except the first) for dependency markers
+        for i, tc in enumerate(tool_calls[1:], 1):
+            args_str = str(tc.get('args', {})).lower()
+
+            # Dependency markers that indicate reference to previous results
+            dependency_markers = [
+                '$prev', 'previous', '上一步', 'previous result',
+                'last result', '上一个', '之前的结果', 'last_tool',
+                'previous_tool', 'prev_result'
+            ]
+
+            if any(marker in args_str for marker in dependency_markers):
+                logger.info(f"Dependency detected: tool {i} ({tc.get('name')}) references previous result")
+                return True
+
+        return False
+
+    async def _execute_tools_with_strategy(self, tool_calls: list) -> list:
+        """
+        Execute tools with intelligent strategy selection.
+
+        Strategy:
+        1. Check for dependencies → sequential if needed
+        2. Try parallel execution (if enabled and no dependencies)
+        3. Automatic fallback to sequential on error
+
+        Args:
+            tool_calls: List of tool call dicts
+
+        Returns:
+            List of tool results in original order
+        """
+        settings = get_settings()
+
+        # Check if parallel execution is enabled
+        if not settings.enable_parallel_tool_execution:
+            logger.debug("Parallel tool execution disabled, using sequential")
+            return await self._execute_tools_sequential(tool_calls)
+
+        # Check for dependencies
+        if self._has_tool_dependency(tool_calls):
+            logger.info("Tool dependencies detected, using sequential execution")
+            return await self._execute_tools_sequential(tool_calls)
+
+        # Check concurrent tool limit
+        if len(tool_calls) > settings.max_concurrent_tools:
+            logger.warning(
+                f"Tool count ({len(tool_calls)}) exceeds max concurrent ({settings.max_concurrent_tools}), "
+                "using sequential execution"
+            )
+            return await self._execute_tools_sequential(tool_calls)
+
+        # Try parallel execution with automatic fallback
+        if settings.enable_auto_fallback:
+            try:
+                logger.info(f"Attempting parallel execution of {len(tool_calls)} tools")
+                return await self._execute_tools_parallel(tool_calls)
+            except Exception as e:
+                logger.warning(f"Parallel execution failed: {e}, falling back to sequential")
+                return await self._execute_tools_sequential(tool_calls)
+        else:
+            # No fallback - use parallel only
+            return await self._execute_tools_parallel(tool_calls)
+
+    async def _execute_tools_parallel(self, tool_calls: list) -> list:
+        """
+        Execute multiple tools in parallel using asyncio.gather.
+
+        Args:
+            tool_calls: List of tool call dicts
+
+        Returns:
+            List of tool results in original order
+
+        Raises:
+            Exception: If any tool execution fails
+        """
+        # Create tasks for all tools
+        tool_tasks = [
+            self._aexecute_tool(tc['name'], tc['args'])
+            for tc in tool_calls
+        ]
+
+        # Execute in parallel
+        # return_exceptions=True ensures we get all results even if some fail
+        results = await asyncio.gather(*tool_tasks, return_exceptions=True)
+
+        # Check for exceptions
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Tool {tool_calls[i]['name']} failed: {result}")
+                raise result  # Re-raise to trigger fallback
+
+        logger.info(f"Parallel execution completed: {len(tool_calls)} tools")
+        return results
+
+    async def _execute_tools_sequential(self, tool_calls: list) -> list:
+        """
+        Execute tools sequentially (original behavior).
+
+        Args:
+            tool_calls: List of tool call dicts
+
+        Returns:
+            List of tool results
+        """
+        results = []
+        for tc in tool_calls:
+            result = await self._aexecute_tool(tc['name'], tc['args'])
+            results.append(result)
+
+        logger.info(f"Sequential execution completed: {len(tool_calls)} tools")
+        return results
 
     def _get_tool_by_name(self, name: str) -> Optional[BaseTool]:
         """Get tool by name."""

@@ -12,6 +12,7 @@ This module handles the 7 System Prompt components and their assembly:
 """
 
 import os
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -95,6 +96,7 @@ class SystemPromptBuilder:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
         self.components: Dict[str, PromptComponent] = {}
+        self._prompt_cache: Dict[str, str] = {}  # Cache for built prompts
         self._initialize_default_components()
 
     def _initialize_default_components(self) -> None:
@@ -106,6 +108,52 @@ class SystemPromptBuilder:
             "AGENTS.md": self._get_default_agents(),
             # MEMORY.md is excluded - created by long_term_updater for human reference
         }
+
+        for filename, content in defaults.items():
+            file_path = self.workspace_dir / filename
+            if not file_path.exists():
+                file_path.write_text(content, encoding="utf-8")
+
+    def _generate_cache_key(self, session_data: Optional[Dict]) -> str:
+        """
+        Generate cache key based on session data.
+
+        Args:
+            session_data: Session data dict
+
+        Returns:
+            Cache key string
+        """
+        settings = get_settings()
+
+        # If caching is disabled, always return a unique key
+        if not settings.enable_prompt_cache:
+            return f"nocache_{os.urandom(8).hex()}"
+
+        if not session_data:
+            return "default"
+
+        # Generate hash from relevant session data fields
+        key_parts = []
+
+        # User context
+        user_context = session_data.get("user_context", "")
+        if user_context:
+            key_parts.append(f"user:{hashlib.md5(user_context.encode()).hexdigest()}")
+
+        # Conversation context (hash by content, not full content)
+        conv_context = session_data.get("conversation_context", "")
+        if conv_context:
+            conv_hash = hashlib.md5(conv_context.encode()).hexdigest()[:16]
+            key_parts.append(f"conv:{conv_hash}")
+
+        # Semantic history (hash by content)
+        semantic_hist = session_data.get("semantic_history", "")
+        if semantic_hist:
+            sem_hash = hashlib.md5(semantic_hist.encode()).hexdigest()[:16]
+            key_parts.append(f"sem:{sem_hash}")
+
+        return "|".join(key_parts) if key_parts else "default"
 
         for filename, content in defaults.items():
             file_path = self.workspace_dir / filename
@@ -165,7 +213,24 @@ class SystemPromptBuilder:
             >>> prompt = builder.build_system_prompt()
             >>> print(prompt)
         """
-        # Load components in order
+        # Check cache first
+        cache_key = self._generate_cache_key(session_data)
+        settings = get_settings()
+
+        if settings.enable_prompt_cache and cache_key in self._prompt_cache:
+            cached_prompt = self._prompt_cache[cache_key]
+
+            # Check if truncation is needed
+            if max_length and len(cached_prompt) > max_length:
+                cached_prompt = self._truncate_prompt(
+                    cached_prompt,
+                    max_length,
+                    settings.truncation_marker
+                )
+
+            return cached_prompt
+
+        # Build prompt from components
         component_order = [
             "SKILLS_SNAPSHOT",
             "SOUL",
@@ -188,14 +253,30 @@ class SystemPromptBuilder:
         # Join with separators
         full_prompt = "\n\n---\n\n".join(parts)
 
-        # Truncate if needed
+        # Smart truncation if needed
         if max_length:
-            settings = get_settings()
             full_prompt = self._truncate_prompt(
                 full_prompt,
                 max_length,
                 settings.truncation_marker
             )
+        elif settings.enable_smart_truncation:
+            # Use configured max prompt tokens
+            full_prompt = self._smart_truncate_with_budget(
+                full_prompt,
+                settings.max_prompt_tokens
+            )
+
+        # Cache the result if enabled
+        if settings.enable_prompt_cache:
+            self._prompt_cache[cache_key] = full_prompt
+
+            # Limit cache size to prevent memory issues
+            if len(self._prompt_cache) > 100:
+                # Remove oldest entries (first 20)
+                keys_to_remove = list(self._prompt_cache.keys())[:20]
+                for key in keys_to_remove:
+                    del self._prompt_cache[key]
 
         return full_prompt
 
@@ -289,6 +370,74 @@ class SystemPromptBuilder:
             current_length += part_length
 
         return "\n\n---\n\n".join(truncated_parts)
+
+    def _smart_truncate_with_budget(
+        self,
+        prompt: str,
+        max_tokens: int,
+    ) -> str:
+        """
+        Smart truncation with token budget allocation.
+
+        Prioritizes:
+        1. SKILLS_SNAPSHOT (keep完整 - critical for tool usage)
+        2. AGENTS (core behavioral guidelines)
+        3. CONVERSATION_CONTEXT (recent conversation)
+        4. SEMANTIC_HISTORY (historical relevance)
+        5. USER, SOUL, IDENTITY (can be heavily truncated)
+
+        Args:
+            prompt: Full prompt
+            max_tokens: Maximum tokens (approximately 1 token = 3-4 chars)
+
+        Returns:
+            Truncated prompt
+        """
+        # Convert tokens to approximate character limit
+        max_chars = max_tokens * 4
+
+        if len(prompt) <= max_chars:
+            return prompt
+
+        # Split into components
+        parts = prompt.split("\n\n---\n\n")
+        component_names = [
+            "SKILLS_SNAPSHOT",
+            "SOUL",
+            "IDENTITY",
+            "USER",
+            "AGENTS",
+            "CONVERSATION_CONTEXT",
+            "SEMANTIC_HISTORY",
+        ]
+
+        # Get token budget from config
+        settings = get_settings()
+        budget = settings.prompt_token_budget
+
+        # Build result with budget-aware truncation
+        result_parts = []
+        current_length = 0
+
+        for idx, (part, name) in enumerate(zip(parts, component_names)):
+            # Get budget for this component
+            component_budget = budget.get(name, 1000) * 4  # Convert to chars
+
+            # Truncate if needed
+            if len(part) > component_budget:
+                # Keep first part of component
+                truncated = part[:component_budget - 30] + "\n\n...[truncated]"
+                result_parts.append(truncated)
+                current_length += len(truncated)
+            else:
+                result_parts.append(part)
+                current_length += len(part)
+
+            # Add separator (except for last part)
+            if idx < len(parts) - 1:
+                current_length += 5
+
+        return "\n\n---\n\n".join(result_parts)
 
     def _generate_skills_snapshot(self) -> str:
         """Generate SKILLS_SNAPSHOT.md content in enhanced Markdown format."""

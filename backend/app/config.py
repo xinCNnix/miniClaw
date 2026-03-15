@@ -225,6 +225,36 @@ class Settings(BaseSettings):
     redundancy_detection_window: int = 3  # Window size for detecting redundant tool calls
     sufficiency_evaluation_interval: int = 2  # Evaluate information sufficiency every N rounds
 
+    # Performance Optimization: Caching
+    enable_semantic_search_cache: bool = True
+    semantic_search_cache_ttl: int = 300  # 5 minutes
+    enable_context_cache: bool = True
+    context_cache_size: int = 64
+    enable_prompt_cache: bool = True
+
+    # Performance Optimization: Parallel Tool Execution
+    enable_parallel_tool_execution: bool = True
+    enable_auto_fallback: bool = True  # Enable automatic fallback to sequential
+    parallel_tool_dependency_detection: bool = True  # Enable dependency detection
+    max_concurrent_tools: int = 5  # Maximum concurrent tools in parallel
+
+    # Performance Optimization: Streaming Response
+    enable_streaming_response: bool = True  # Enable streaming LLM response
+    streaming_chunk_size: int = 512  # Characters per chunk
+
+    # Performance Optimization: Prompt Compression
+    enable_smart_truncation: bool = True
+    max_prompt_tokens: int = 15000  # Reduced from 20000
+    prompt_token_budget: dict = {
+        "SKILLS_SNAPSHOT": 2000,
+        "AGENTS": 1500,
+        "CONVERSATION_CONTEXT": 3000,
+        "SEMANTIC_HISTORY": 2000,
+        "USER": 1000,
+        "SOUL": 500,
+        "IDENTITY": 500,
+    }
+
     # Memory System
     enable_memory_extraction: bool = True
     enable_semantic_search: bool = True
