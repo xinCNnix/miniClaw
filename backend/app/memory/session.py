@@ -49,12 +49,18 @@ class SessionManager:
         if session_id is None:
             session_id = str(uuid.uuid4())
 
+        now = datetime.now()
+        # Generate filename with timestamp: session-20260315-112045.json
+        timestamp = now.strftime("%Y%m%d-%H%M%S")
+        filename = f"session-{timestamp}.json"
+
         session = {
             "session_id": session_id,
+            "filename": filename,  # Store filename for easy access
             "messages": [],
             "metadata": metadata or {},
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
         }
 
         # Save to file
@@ -78,17 +84,26 @@ class SessionManager:
             >>> if session:
             ...     print(f"Loaded session with {len(session['messages'])} messages")
         """
-        session_file = self.sessions_dir / f"{session_id}.json"
+        # First, try to find session by searching all files
+        # This handles both old format (session_id.json) and new format (session-TIMESTAMP.json)
+        for session_file in self.sessions_dir.glob("*.json"):
+            if session_file.name == ".gitkeep":
+                continue
 
-        if not session_file.exists():
-            return None
+            try:
+                content = session_file.read_text(encoding="utf-8")
+                session = json.loads(content)
 
-        try:
-            content = session_file.read_text(encoding="utf-8")
-            session = json.loads(content)
-            return session
-        except Exception:
-            return None
+                # Check if this file contains the requested session_id
+                if session.get("session_id") == session_id:
+                    # Ensure filename field exists (for old sessions)
+                    if "filename" not in session:
+                        session["filename"] = session_file.name
+                    return session
+            except Exception:
+                continue
+
+        return None
 
     def save_session(self, session: Dict[str, Any]) -> None:
         """
@@ -112,8 +127,20 @@ class SessionManager:
         # Update timestamp
         session["updated_at"] = datetime.now().isoformat()
 
-        # Save to file
-        session_file = self.sessions_dir / f"{session['session_id']}.json"
+        # Determine filename
+        if "filename" not in session:
+            # For old sessions without filename, generate one from created_at timestamp
+            created_at = session.get("created_at", datetime.now().isoformat())
+            try:
+                dt = datetime.fromisoformat(created_at)
+                timestamp = dt.strftime("%Y%m%d-%H%M%S")
+                session["filename"] = f"session-{timestamp}.json"
+            except:
+                # Fallback to session_id if parsing fails
+                session["filename"] = f"{session['session_id']}.json"
+
+        # Save to file using filename
+        session_file = self.sessions_dir / session["filename"]
 
         with open(session_file, "w", encoding="utf-8") as f:
             json.dump(session, f, indent=2, ensure_ascii=False)
