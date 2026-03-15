@@ -237,3 +237,9 @@ docs/TOOLS_UPDATE.md
 # Architecture and database documentation (internal use)
 docs/ARCHITECTURE.md
 docs/DATABASE_*.md
+
+# Project reports and summaries (not tracked in git)
+PROJECT_COMPLETION_REPORT.md
+SKILLS_FIX_SUMMARY.md
+*_REPORT.md
+*_SUMMARY.md
