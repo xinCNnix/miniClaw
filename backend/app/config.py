@@ -239,7 +239,7 @@ class Settings(BaseSettings):
     max_concurrent_tools: int = 5  # Maximum concurrent tools in parallel
 
     # Performance Optimization: Streaming Response
-    enable_streaming_response: bool = True  # Enable streaming LLM response
+    enable_streaming_response: bool = False  # Disable streaming: Qwen API has bug in streaming tool_calls (returns incomplete objects)
     streaming_chunk_size: int = 512  # Characters per chunk
 
     # Performance Optimization: Prompt Compression
