@@ -220,7 +220,10 @@ class Settings(BaseSettings):
     truncation_marker: str = "...[truncated]"
 
     # Agent Execution
-    max_tool_rounds: int = 10  # Maximum rounds of tool calling (prevents infinite loops)
+    max_tool_rounds: int = 50  # Maximum rounds of tool calling (prevents infinite loops)
+    enable_smart_stopping: bool = True  # Enable intelligent tool stopping (redundancy detection + sufficiency evaluation)
+    redundancy_detection_window: int = 3  # Window size for detecting redundant tool calls
+    sufficiency_evaluation_interval: int = 2  # Evaluate information sufficiency every N rounds
 
     # Memory System
     enable_memory_extraction: bool = True

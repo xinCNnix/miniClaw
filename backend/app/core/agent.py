@@ -256,6 +256,13 @@ class AgentManager:
 
             # Multi-round tool calling loop
             round_count = 0
+            recent_tool_calls = []  # Track recent tool calls for redundancy detection
+
+            # Store config values for efficiency
+            enable_smart_stopping = settings.enable_smart_stopping
+            redundancy_window = settings.redundancy_detection_window
+            evaluation_interval = settings.sufficiency_evaluation_interval
+
             while round_count < max_tool_rounds:
                 llm_start = time.time()
                 response = await self.llm_with_tools.ainvoke(lc_messages)
@@ -327,6 +334,82 @@ class AgentManager:
 
                 # Increment round count and continue
                 round_count += 1
+
+                # Convert tool_calls to list format for tracking
+                tool_calls_list = []
+                for tc in tool_calls:
+                    tool_calls_list.append({
+                        'name': tc.get('name', ''),
+                        'args': tc.get('args', {})
+                    })
+                recent_tool_calls.append(tool_calls_list)
+
+                # Maintain sliding window for redundancy detection
+                if len(recent_tool_calls) > redundancy_window:
+                    recent_tool_calls.pop(0)
+
+                # Redundancy detection
+                if enable_smart_stopping and self._detect_redundancy(recent_tool_calls):
+                    logger.warning(f"Detected redundant tool calls in last {len(recent_tool_calls)} rounds, forcing completion")
+                    yield {
+                        "type": "warning",
+                        "message": "Stopped due to repetitive tool calls"
+                    }
+                    # Generate final response before breaking
+                    logger.info("Getting final response after redundancy detection...")
+                    try:
+                        final_response = await self.llm.ainvoke(lc_messages)
+                        if hasattr(final_response, 'content') and final_response.content:
+                            logger.info(f"Final response: {len(final_response.content)} chars")
+                            yield {
+                                "type": "content_delta",
+                                "content": final_response.content,
+                            }
+                            break  # Break after getting response
+                        else:
+                            logger.warning("LLM returned no content after redundancy detection")
+                    except Exception as e:
+                        logger.error(f"Failed to get final response: {e}")
+                        yield {
+                            "type": "error",
+                            "error": f"Failed to generate response: {str(e)}"
+                        }
+                    break
+
+                # Information sufficiency evaluation (based on interval to avoid frequent LLM calls)
+                if enable_smart_stopping and round_count % evaluation_interval == 0:
+                    should_continue = await self._evaluate_sufficiency(
+                        lc_messages=lc_messages,
+                        user_question=messages[0]['content'] if messages else ""
+                    )
+
+                    if not should_continue:
+                        logger.info(f"LLM determined information is sufficient, stopping after {round_count} rounds")
+                        yield {
+                            "type": "info",
+                            "message": f"Completed information gathering after {round_count} tool rounds"
+                        }
+                        # Generate final response before breaking
+                        logger.info("Getting final response after sufficiency evaluation...")
+                        try:
+                            final_response = await self.llm.ainvoke(lc_messages)
+                            if hasattr(final_response, 'content') and final_response.content:
+                                logger.info(f"Final response: {len(final_response.content)} chars")
+                                yield {
+                                    "type": "content_delta",
+                                    "content": final_response.content,
+                                }
+                                break  # Break after getting response
+                            else:
+                                logger.warning("LLM returned no content after sufficiency evaluation")
+                        except Exception as e:
+                            logger.error(f"Failed to get final response: {e}")
+                            yield {
+                                "type": "error",
+                                "error": f"Failed to generate response: {str(e)}"
+                            }
+                        break
+
                 logger.info(f"[Round {round_count}] Completed, checking if more tools needed...")
 
             # Check if we hit the max rounds limit
@@ -421,6 +504,175 @@ class AgentManager:
             if tool.name == name:
                 return tool
         return None
+
+    def _detect_redundancy(self, recent_tool_calls: list) -> bool:
+        """
+        检测最近的工具调用是否存在冗余模式。
+
+        检测条件：
+        1. 连续 N 轮调用了相同的工具
+        2. 工具参数高度相似
+
+        Args:
+            recent_tool_calls: 最近 N 轮的工具调用列表
+
+        Returns:
+            True if redundancy detected, False otherwise
+        """
+        settings = get_settings()
+        window_size = settings.redundancy_detection_window
+
+        if len(recent_tool_calls) < window_size:
+            return False
+
+        # 提取所有工具调用
+        all_calls = []
+        for round_calls in recent_tool_calls:
+            for call in round_calls:
+                all_calls.append({
+                    'name': call.get('name', ''),
+                    'args': call.get('args', {})
+                })
+
+        if not all_calls:
+            return False
+
+        # 检测 1: 所有调用是否使用相同工具
+        tool_names = [call['name'] for call in all_calls]
+        if len(set(tool_names)) == 1:
+            # 所有调用使用相同工具，检查参数
+            first_args = all_calls[0]['args']
+            similar_count = sum(
+                1 for call in all_calls[1:]
+                if self._args_similarity(first_args, call['args']) > 0.8
+            )
+            if similar_count >= len(all_calls) - 1:
+                logger.warning(f"Redundancy detected: {len(all_calls)} identical calls to {tool_names[0]}")
+                return True
+
+        return False
+
+    def _args_similarity(self, args1: dict, args2: dict) -> float:
+        """
+        计算两个工具参数的相似度。
+
+        Returns:
+            0.0 - 1.0 之间的相似度分数
+        """
+        # Both empty dicts are identical
+        if not args1 and not args2:
+            return 1.0
+
+        # One empty, one not - different
+        if not args1 or not args2:
+            return 0.0
+
+        keys1, keys2 = set(args1.keys()), set(args2.keys())
+        if keys1 != keys2:
+            return 0.0
+
+        if not keys1:
+            return 1.0
+
+        # 计算每个键的值相似度
+        similarities = []
+        for key in keys1:
+            val1, val2 = args1[key], args2[key]
+            if val1 == val2:
+                similarities.append(1.0)
+            elif isinstance(val1, str) and isinstance(val2, str):
+                # 字符串相似度（简单版本：检查是否有共同前缀）
+                if val1 and val2:
+                    common_prefix = 0
+                    for c1, c2 in zip(val1, val2):
+                        if c1 == c2:
+                            common_prefix += 1
+                        else:
+                            break
+                    similarity = common_prefix / max(len(val1), len(val2))
+                    similarities.append(similarity)
+                else:
+                    similarities.append(0.0)
+            else:
+                similarities.append(0.0)
+
+        return sum(similarities) / len(similarities) if similarities else 0.0
+
+    async def _evaluate_sufficiency(self, lc_messages: list, user_question: str) -> bool:
+        """
+        评估当前收集的信息是否足以回答用户问题。
+
+        Args:
+            lc_messages: LangChain 消息列表
+            user_question: 用户的原始问题
+
+        Returns:
+            True if should continue tool calling, False if sufficient
+        """
+        try:
+            # 提取工具调用历史
+            tool_history = self._format_tool_history(lc_messages)
+
+            evaluation_prompt = f"""基于以下工具执行结果，评估是否已经足以回答用户问题。
+
+用户问题：{user_question}
+
+已收集的信息：
+{tool_history}
+
+请判断：
+1. 是否已经收集到足够的信息来回答用户问题？
+2. 如果不够，还需要什么信息？
+
+回复格式（严格遵循）：
+- 如果已足够：SUFFICIENT
+- 如果需要继续：CONTINUE: <简短说明原因>
+
+你的判断："""
+
+            # 使用不带工具的 LLM 进行评估
+            response = await self.llm.ainvoke([
+                SystemMessage(content="你是一个信息评估专家。判断信息是否充足，避免过度收集。"),
+                HumanMessage(content=evaluation_prompt)
+            ])
+
+            result = response.content.strip().upper()
+            should_continue = not result.startswith("SUFFICIENT")
+
+            logger.info(f"Sufficiency evaluation: {result[:100]}...")
+            return should_continue
+
+        except Exception as e:
+            logger.error(f"Sufficiency evaluation failed: {e}")
+            # 评估失败时保守地继续
+            return True
+
+    def _format_tool_history(self, lc_messages: list) -> str:
+        """
+        格式化工具调用历史为可读文本。
+
+        Args:
+            lc_messages: LangChain 消息列表
+
+        Returns:
+            格式化的工具调用历史
+        """
+        history_parts = []
+        tool_count = 0
+
+        for msg in lc_messages:
+            if isinstance(msg, ToolMessage):
+                tool_count += 1
+                content = msg.content
+                # 限制每个工具结果长度
+                if len(content) > 500:
+                    content = content[:500] + "...[truncated]"
+                history_parts.append(f"工具 {tool_count}: {content}")
+
+        if not history_parts:
+            return "暂无工具调用结果"
+
+        return "\n\n".join(history_parts)
 
     def get_available_tools(self) -> List[dict]:
         """Get list of available tools."""
