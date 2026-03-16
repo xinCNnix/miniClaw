@@ -92,6 +92,11 @@ class AgentManager:
 
             for tool_call in response.tool_calls:
                 tool_name = tool_call.get('name', '')
+                # Skip empty tool names
+                if not tool_name:
+                    logger.warning(f"Skipping tool call with empty name")
+                    continue
+
                 tool_args = tool_call.get('args', {})
                 tool_output = self._execute_tool(tool_name, tool_args)
 
@@ -131,6 +136,11 @@ class AgentManager:
 
             for tool_call in response.tool_calls:
                 tool_name = tool_call.get('name', '')
+                # Skip empty tool names
+                if not tool_name:
+                    logger.warning(f"Skipping tool call with empty name")
+                    continue
+
                 tool_args = tool_call.get('args', {})
                 tool_output = await self._aexecute_tool(tool_name, tool_args)
 
@@ -179,6 +189,11 @@ class AgentManager:
 
                 for tool_call in response.tool_calls:
                     tool_name = tool_call.get('name', '')
+                    # Skip empty tool names
+                    if not tool_name:
+                        logger.warning(f"Skipping tool call with empty name")
+                        continue
+
                     tool_args = tool_call.get('args', {})
 
                     yield {
@@ -258,21 +273,45 @@ class AgentManager:
             round_count = 0
             while round_count < max_tool_rounds:
                 llm_start = time.time()
+
+                # === Phase 1: 流式获取 LLM 响应 ===
+                # 先使用 astream() 获取增量响应，实现实时输出
+                async for chunk in self.llm_with_tools.astream(lc_messages):
+                    # 输出文本增量（实时显示 LLM tokens）
+                    if hasattr(chunk, 'content') and chunk.content:
+                        yield {
+                            "type": "content_delta",
+                            "content": chunk.content,
+                        }
+
+                    # 输出工具调用片段（让用户看到工具调用的过程）
+                    if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                        for tc in chunk.tool_call_chunks:
+                            # 工具名称片段
+                            if tc.get("name"):
+                                yield {
+                                    "type": "tool_call_chunk",
+                                    "tool_name": tc["name"],
+                                    "tool_id": tc.get("index"),
+                                }
+                            # 工具参数片段（增量显示）
+                            if tc.get("args"):
+                                yield {
+                                    "type": "tool_args_chunk",
+                                    "args": tc["args"],
+                                    "tool_id": tc.get("index"),
+                                }
+
+                # 获取完整响应用于检查工具调用
                 response = await self.llm_with_tools.ainvoke(lc_messages)
                 llm_duration = time.time() - llm_start
+                # === Phase 1 流式输出结束 ===
 
                 logger.info(f"[Round {round_count + 1}] LLM response received in {llm_duration:.2f}s")
 
                 # Check if LLM wants to call tools
                 if not hasattr(response, 'tool_calls') or not response.tool_calls:
                     logger.info(f"[Round {round_count + 1}] No tool calls, returning final response")
-                    # No more tool calls, yield content and break
-                    if hasattr(response, 'content') and response.content:
-                        logger.info(f"[Round {round_count + 1}] Yielding final content: {len(response.content)} chars")
-                        yield {
-                            "type": "content_delta",
-                            "content": response.content,
-                        }
                     break
 
                 # Has tool calls - execute them
@@ -283,12 +322,37 @@ class AgentManager:
                 lc_messages.append(response)
 
                 # Execute all tools in this round
+                # Filter out invalid tool calls (empty names)
+                valid_tool_calls = []
                 for idx, tool_call in enumerate(tool_calls):
+                    # DEBUG: Log raw tool_call structure
+                    logger.debug(f"[DEBUG] Raw tool_call {idx}: type={type(tool_call)}, content={tool_call}")
+
                     tool_name = tool_call.get('name', '')
                     tool_args = tool_call.get('args', {})
                     tool_id = tool_call.get('id', '')
 
-                    logger.info(f"[Round {round_count + 1}] Executing tool {idx+1}/{len(tool_calls)}: {tool_name}")
+                    # DEBUG: Log extracted values
+                    logger.debug(f"[DEBUG] Extracted - name={tool_name}, args={tool_args}, id={tool_id}")
+
+                    # Skip tool calls with empty names
+                    if not tool_name:
+                        logger.warning(f"[Round {round_count + 1}] Skipping tool call {idx+1} with empty name")
+                        continue
+
+                    valid_tool_calls.append({
+                        'name': tool_name,
+                        'args': tool_args,
+                        'id': tool_id
+                    })
+
+                # Execute only valid tool calls
+                for idx, tc in enumerate(valid_tool_calls):
+                    tool_name = tc['name']
+                    tool_args = tc['args']
+                    tool_id = tc['id']
+
+                    logger.info(f"[Round {round_count + 1}] Executing tool {idx+1}/{len(valid_tool_calls)}: {tool_name}")
 
                     yield {
                         "type": "tool_call",
@@ -322,7 +386,7 @@ class AgentManager:
                     # Add tool result to conversation
                     lc_messages.append(ToolMessage(
                         content=str(tool_output),
-                        tool_call_id=tool_call.get('id', '')
+                        tool_call_id=tool_id
                     ))
 
                 # Increment round count and continue
@@ -397,7 +461,8 @@ class AgentManager:
         logger.debug(f"Executing tool (sync): {name} with args: {arguments}")
         tool = self._get_tool_by_name(name)
         if tool:
-            result = tool._run(**arguments)
+            # Use LangChain's standard invoke method (new API)
+            result = tool.invoke(arguments)
             logger.debug(f"Tool {name} result size: {len(str(result))} chars")
             return result
         raise ValueError(f"Tool not found: {name}")
@@ -405,12 +470,11 @@ class AgentManager:
     async def _aexecute_tool(self, name: str, arguments: dict) -> Any:
         """Execute a tool asynchronously."""
         logger.debug(f"Executing tool (async): {name} with args: {arguments}")
+        logger.debug(f"Arguments type: {type(arguments)}, keys: {arguments.keys() if isinstance(arguments, dict) else 'N/A'}")
         tool = self._get_tool_by_name(name)
         if tool:
-            if hasattr(tool, '_arun'):
-                result = await tool._arun(**arguments)
-            else:
-                result = tool._run(**arguments)
+            # Use LangChain's standard ainvoke method (new API)
+            result = await tool.ainvoke(arguments)
             logger.debug(f"Tool {name} result size: {len(str(result))} chars")
             return result
         raise ValueError(f"Tool not found: {name}")
