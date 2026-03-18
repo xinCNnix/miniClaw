@@ -317,7 +317,7 @@ class Settings(BaseSettings):
     max_tool_rounds: int = 50  # Maximum rounds of tool calling (prevents infinite loops)
     enable_smart_stopping: bool = True  # Enable intelligent tool stopping (redundancy detection + sufficiency evaluation)
     redundancy_detection_window: int = 3  # Window size for detecting redundant tool calls
-    sufficiency_evaluation_interval: int = 2  # Evaluate information sufficiency every N rounds
+    sufficiency_evaluation_interval: int = 5  # Evaluate information sufficiency every N rounds (increased from 2)
 
     # Performance Optimization: Caching
     enable_semantic_search_cache: bool = True

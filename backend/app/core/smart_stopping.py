@@ -73,7 +73,7 @@ class SmartToolStopping:
                 return True, f"已执行 {round_count} 轮，信息已充分，应该生成回答"
 
         # 检查 4: 避免无限探索
-        if round_count >= 5:
+        if round_count >= 15:
             return True, f"已达到 {round_count} 轮工具调用，避免过度探索"
 
         return False, ""
@@ -140,8 +140,8 @@ class SmartToolStopping:
 
     def _has_sufficient_info(self, round_count: int, current_tool: str) -> bool:
         """评估是否已有足够信息"""
-        # 如果已经执行了 3 轮以上的工具调用
-        if round_count >= 3:
+        # 如果已经执行了 10 轮以上的工具调用
+        if round_count >= 10:
             # 如果当前还在"探索类"工具（terminal, read_file）
             exploring_tools = ["terminal", "read_file", "search_kb"]
             if current_tool in exploring_tools:
