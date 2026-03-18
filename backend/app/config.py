@@ -361,6 +361,10 @@ class Settings(BaseSettings):
     memory_max_conversations: int = 100  # Maximum conversations to keep indexed
     memory_extraction_max_retries: int = 2  # Max retries when JSON parsing fails
 
+    # Vector Indexing
+    vector_indexing_max_retries: int = 3  # Max retries when embedding model not ready
+    vector_indexing_retry_delay: float = 2.0  # Initial retry delay in seconds
+
     # User Profile
     user_profile_update_interval: int = 10  # Update USER.md every N memory extractions
 

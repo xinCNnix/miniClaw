@@ -111,6 +111,9 @@ class MemoryManager:
         """
         Store conversation in vector store for semantic search.
 
+        This method includes retry logic to handle cases where the embedding
+        model is not yet ready (e.g., still warming up).
+
         Args:
             session_id: Session ID to store
         """
@@ -126,8 +129,43 @@ class MemoryManager:
             logger.warning(f"No messages in session for vector storage: {session_id}")
             return
 
-        # Use RAG engine's conversation indexing
-        await self.rag_engine.index_conversation(session_id, messages)
+        # Retry logic for embedding model not ready
+        max_retries = self.settings.vector_indexing_max_retries
+        retry_delay = self.settings.vector_indexing_retry_delay
+
+        for attempt in range(max_retries):
+            try:
+                # Use RAG engine's conversation indexing
+                await self.rag_engine.index_conversation(session_id, messages)
+                logger.info(f"Successfully indexed conversation for session {session_id}")
+                return  # Success, exit retry loop
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    # Check if error is due to embedding model not ready
+                    error_msg = str(e).lower()
+                    if "embedding model not ready" in error_msg or "not ready" in error_msg:
+                        logger.warning(
+                            f"Embedding model not ready for indexing session {session_id} "
+                            f"(attempt {attempt + 1}/{max_retries}), retrying in {retry_delay:.1f}s..."
+                        )
+                        import asyncio
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 1.5  # Exponential backoff
+                        continue
+                    else:
+                        # Other errors, don't retry
+                        logger.error(
+                            f"Failed to index conversation for session {session_id}: {e}",
+                            exc_info=True
+                        )
+                        break
+                else:
+                    # Final attempt failed
+                    logger.error(
+                        f"Failed to index conversation for session {session_id} after {max_retries} attempts: {e}",
+                        exc_info=True
+                    )
 
     async def search_relevant_history(
         self,

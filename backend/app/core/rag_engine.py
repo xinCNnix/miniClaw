@@ -573,14 +573,28 @@ class RAGEngine:
         Args:
             session_id: Session ID
             messages: List of message dictionaries
+
+        Raises:
+            RuntimeError: If embedding model is not ready and cannot be initialized
         """
         logger.info(f"Indexing conversation for session {session_id}: {len(messages)} messages")
 
         # Check embedding model status
         status_info = self.embedding_manager.get_status()
         if status_info["status"] != EmbeddingLoadStatus.READY:
-            logger.warning(f"Embedding model not ready (status: {status_info['status']}), skipping conversation indexing for {session_id}")
-            return
+            # Try to initialize embedding model
+            logger.info(
+                f"Embedding model not ready (status: {status_info['status']}), "
+                f"attempting to initialize for conversation indexing..."
+            )
+            try:
+                self._embed_model = self._get_embedding_model()
+                logger.info("Embedding model initialized successfully")
+            except Exception as e:
+                # Re-raise as RuntimeError with clear message
+                raise RuntimeError(
+                    f"Embedding model not ready and initialization failed: {e}"
+                ) from e
 
         # Ensure embedding model is initialized
         if self._embed_model is None:
@@ -626,20 +640,24 @@ class RAGEngine:
 
         # Add chunks to vector store
         if chunks:
-            # Create storage context with conversations collection
-            chroma_client = chromadb.PersistentClient(path=str(self.vector_store_dir))
-            conversations_collection = chroma_client.get_or_create_collection("conversations")
-            conversations_store = ChromaVectorStore(chroma_collection=conversations_collection)
-            conversations_storage = StorageContext.from_defaults(vector_store=conversations_store)
+            try:
+                # Create storage context with conversations collection
+                chroma_client = chromadb.PersistentClient(path=str(self.vector_store_dir))
+                conversations_collection = chroma_client.get_or_create_collection("conversations")
+                conversations_store = ChromaVectorStore(chroma_collection=conversations_collection)
+                conversations_storage = StorageContext.from_defaults(vector_store=conversations_store)
 
-            # Create index for this batch
-            VectorStoreIndex(
-                chunks,
-                storage_context=conversations_storage,
-                embed_model=self._embed_model,
-            )
+                # Create index for this batch
+                VectorStoreIndex(
+                    chunks,
+                    storage_context=conversations_storage,
+                    embed_model=self._embed_model,
+                )
 
-            logger.info(f"Indexed {len(chunks)} chunks for session {session_id}")
+                logger.info(f"Indexed {len(chunks)} chunks for session {session_id}")
+            except Exception as e:
+                logger.error(f"Failed to create vector index for session {session_id}: {e}", exc_info=True)
+                raise  # Re-raise to allow retry logic in caller
 
     async def search_conversations(
         self,
