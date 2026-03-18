@@ -885,7 +885,7 @@ async def chat(request: ChatRequest):
     """
     # EARLY DEBUG: Verify function is being called
     import sys
-    with open("I:\\code\\miniclaw\\chat_entry.log", "a") as f:
+    with open("I:\\code\\miniclaw\\chat_entry.log", "a", encoding="utf-8") as f:
         f.write(f"ENTER: chat() function at {__file__}\n")
         f.write(f"Message: {request.message[:100]}\n")
         f.write(f"Python version: {sys.version}\n")
@@ -1069,7 +1069,7 @@ async def chat(request: ChatRequest):
         logger.info(f"=== Using global ToT setting: enable_tot={enable_tot} ===")
 
     # Force write to file to verify execution
-    with open("I:\\code\\miniclaw\\tot_debug.log", "a") as f:
+    with open("I:\\code\\miniclaw\\tot_debug.log", "a", encoding="utf-8") as f:
         f.write(f"[DEBUG] ToT Config: enable_tot={enable_tot}\n")
 
     print(f"[DEBUG] === ToT Config: enable_tot={enable_tot} ===")
