@@ -13,11 +13,14 @@ This module handles the 7 System Prompt components and their assembly:
 
 import os
 import hashlib
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 
 from app.config import get_settings
 from app.skills.bootstrap import bootstrap_skills
+
+logger = logging.getLogger(__name__)
 
 
 class PromptComponent:
@@ -124,6 +127,8 @@ class SystemPromptBuilder:
         Returns:
             Cache key string
         """
+        import json
+
         settings = get_settings()
 
         # If caching is disabled, always return a unique key
@@ -136,21 +141,26 @@ class SystemPromptBuilder:
         # Generate hash from relevant session data fields
         key_parts = []
 
-        # User context
+        # User context (can be dict or string)
         user_context = session_data.get("user_context", "")
         if user_context:
-            key_parts.append(f"user:{hashlib.md5(user_context.encode()).hexdigest()}")
+            # Convert dict to JSON string for hashing
+            if isinstance(user_context, dict):
+                user_context_str = json.dumps(user_context, sort_keys=True)
+            else:
+                user_context_str = str(user_context)
+            key_parts.append(f"user:{hashlib.md5(user_context_str.encode()).hexdigest()}")
 
         # Conversation context (hash by content, not full content)
         conv_context = session_data.get("conversation_context", "")
         if conv_context:
-            conv_hash = hashlib.md5(conv_context.encode()).hexdigest()[:16]
+            conv_hash = hashlib.md5(str(conv_context).encode()).hexdigest()[:16]
             key_parts.append(f"conv:{conv_hash}")
 
         # Semantic history (hash by content)
         semantic_hist = session_data.get("semantic_history", "")
         if semantic_hist:
-            sem_hash = hashlib.md5(semantic_hist.encode()).hexdigest()[:16]
+            sem_hash = hashlib.md5(str(semantic_hist).encode()).hexdigest()[:16]
             key_parts.append(f"sem:{sem_hash}")
 
         return "|".join(key_parts) if key_parts else "default"
@@ -213,6 +223,20 @@ class SystemPromptBuilder:
             >>> prompt = builder.build_system_prompt()
             >>> print(prompt)
         """
+        # Add current date to session_data for injection
+        from datetime import datetime
+        if session_data is None:
+            session_data = {}
+
+        # Inject current date/time
+        current_time = datetime.now()
+        session_data["current_date"] = current_time.strftime("%Y-%m-%d")
+        session_data["current_datetime"] = current_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+        session_data["current_year"] = current_time.year
+        session_data["current_month"] = current_time.strftime("%B")
+
+        logger.debug(f"Injected current date into system prompt: {session_data['current_date']}")
+
         # Check cache first
         cache_key = self._generate_cache_key(session_data)
         settings = get_settings()
@@ -301,8 +325,21 @@ class SystemPromptBuilder:
         content = component.content
         component_name = component.name
 
+        # Add current date/time to AGENTS component (most visible place)
+        if component_name == "AGENTS":
+            current_date = session_data.get("current_date", "")
+            current_datetime = session_data.get("current_datetime", "")
+            current_year = session_data.get("current_year", "")
+
+            if current_date:
+                content += f"\n\n## Current Date/Time\n"
+                content += f"- **Today's Date**: {current_date}\n"
+                content += f"- **Current Time**: {current_datetime}\n"
+                content += f"- **Year**: {current_year}\n"
+                content += f"\n⚠️ **IMPORTANT**: Always consider the current date when answering questions about 'latest', 'recent', or 'up-to-date' information."
+
         # Customize USER component with session data
-        if component_name == "USER":
+        elif component_name == "USER":
             user_context = session_data.get("user_context", "")
             if user_context:
                 content += f"\n\n# Current User Context\n{user_context}"

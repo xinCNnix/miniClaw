@@ -31,74 +31,59 @@ router = APIRouter(tags=["chat"])
 
 # Global agent manager (singleton)
 _agent_manager: AgentManager = None
-_current_provider: str = None
+_current_llm_id: str = None
 
 
 def reset_agent_manager() -> None:
     """
     Reset the global agent manager to force recreation on next access.
 
-    This should be called when API credentials are updated to ensure
-    the new credentials are picked up immediately.
+    This should be called when LLM configuration is updated to ensure
+    the new configuration is picked up immediately.
     """
-    global _agent_manager, _current_provider
+    global _agent_manager, _current_llm_id
     _agent_manager = None
-    _current_provider = None
+    _current_llm_id = None
 
 
 def get_agent_manager() -> AgentManager:
     """
-    Get or create the global agent manager.
+    Get or create the global agent manager with current LLM.
 
-    This function implements hot-switching by checking if the configured
-    provider has changed and recreating the agent manager if necessary.
-
-    Returns:
-        AgentManager instance
-
-    Raises:
-        HTTPException: If initialization fails
+    每次都重新加载当前 LLM 配置，确保前端设置与后端使用一致。
     """
-    global _agent_manager, _current_provider
+    global _agent_manager, _current_llm_id
 
     try:
-        from app.config import get_settings
-        settings = get_settings()
+        from app.core.llm_config import get_current_llm_id, load_llm_config
+        from app.core.llm import create_llm_from_config
+        from app.tools import CORE_TOOLS
 
-        # Check if provider has changed (hot-switch support)
-        if _current_provider != settings.llm_provider:
+        # 获取当前 LLM ID
+        current_llm_id = get_current_llm_id()
+
+        # 检查是否需要重新创建 Agent Manager
+        if _current_llm_id != current_llm_id or _agent_manager is None:
             import logging
-            logging.info(f"=== LLM provider changed: {_current_provider} → {settings.llm_provider} ===")
+            logging.info(f"=== LLM changed: {_current_llm_id} → {current_llm_id} ===")
 
-            # Import tools directly
-            from app.tools import CORE_TOOLS
-            logging.info(f"Tools: {[t.name for t in CORE_TOOLS]}")
+            # 加载当前 LLM 配置
+            llm_config = load_llm_config(current_llm_id)
 
-            # Recreate agent manager with new provider
+            if llm_config is None:
+                raise ValueError(f"Current LLM {current_llm_id} not found")
+
+            # 创建 LLM 实例
+            llm = create_llm_from_config(llm_config)
+
+            # 创建 Agent Manager
             _agent_manager = create_agent_manager(
                 tools=CORE_TOOLS,
-                llm_provider=settings.llm_provider,
+                llm=llm,
             )
-            _current_provider = settings.llm_provider
+            _current_llm_id = current_llm_id
 
-            logging.info("=== Agent manager recreated successfully ===")
-
-        elif _agent_manager is None:
-            import logging
-            logging.info(f"=== Creating agent manager ===")
-            logging.info(f"Tools type: {type(CORE_TOOLS)}")
-            logging.info(f"Tools: {[t.name for t in CORE_TOOLS]}")
-
-            # Create agent manager
-            logging.info(f"Creating agent with provider: {settings.llm_provider}")
-
-            _agent_manager = create_agent_manager(
-                tools=CORE_TOOLS,
-                llm_provider=settings.llm_provider,
-            )
-            _current_provider = settings.llm_provider
-
-            logging.info("=== Agent manager created successfully ===")
+            logging.info(f"=== Agent Manager recreated with LLM: {current_llm_id} ===")
 
         return _agent_manager
 
@@ -687,6 +672,106 @@ async def chat_stream_generator(
             )
 
 
+async def tot_stream_generator(
+    request: ChatRequest,
+    orchestrator: any,
+    system_prompt: str,
+) -> AsyncIterator[str]:
+    """
+    Generate SSE stream for ToT-based chat response.
+
+    Args:
+        request: Chat request
+        orchestrator: ToT orchestrator
+        system_prompt: System prompt
+
+    Yields:
+        SSE formatted strings
+    """
+    from app.core.tot.streaming import ToTEventStreamer
+
+    try:
+        logger.info(f"=== ToT stream generator: New request - Session: {request.session_id} ===")
+        logger.info(f"=== User message: {request.message[:100]}... ===")
+
+        # Load or create session
+        session_manager = get_session_manager()
+        session = session_manager.load_session(request.session_id)
+
+        if session is None:
+            session = session_manager.create_session(
+                session_id=request.session_id,
+                metadata=request.context,
+            )
+            logger.info(f"=== New session created: {request.session_id} ===")
+
+        # Prepare messages
+        messages = [{"role": "user", "content": request.message}]
+        logger.info(f"=== Prepared {len(messages)} message(s) ===")
+
+        # Stream ToT reasoning
+        assistant_message_parts = []
+        event_count = 0
+
+        logger.info("=== Starting orchestrator.process_request with enable_tot=True ===")
+        async for event in orchestrator.process_request(
+            messages=messages,
+            system_prompt=system_prompt,
+            enable_tot=True,
+        ):
+            event_count += 1
+            event_type = event.get("type", "unknown")
+            logger.debug(f"ToT event #{event_count}: {event_type}")
+
+            # Yield SSE event
+            yield format_sse_event(ChatEvent(**event))
+
+            # Collect content
+            if event.get("type") == "content_delta":
+                assistant_message_parts.append(event.get("content", ""))
+
+        logger.info(f"=== ToT stream completed. Total events: {event_count} ===")
+
+        # Save messages to session
+        session_manager.add_message(
+            session_id=request.session_id,
+            role="user",
+            content=request.message,
+            images=request.images,
+        )
+
+        if assistant_message_parts:
+            assistant_full_response = "".join(assistant_message_parts)
+            session_manager.add_message(
+                session_id=request.session_id,
+                role="assistant",
+                content=assistant_full_response,
+            )
+            logger.info(f"=== Saved assistant response: {len(assistant_full_response)} chars ===")
+
+        # Trigger background memory extraction
+        try:
+            from app.config import get_settings
+            settings = get_settings()
+            if settings.enable_memory_extraction:
+                asyncio.create_task(
+                    _background_memory_extraction(request.session_id)
+                )
+        except Exception as e:
+            logger.warning(f"Failed to trigger memory extraction: {e}")
+
+    except Exception as e:
+        logger.error(f"=== ToT stream generator error: {e} ===")
+        import traceback
+        logger.error(f"=== Traceback: {traceback.format_exc()} ===")
+        yield format_sse_event(
+            ChatEvent(
+                type="error",
+                error=str(e),
+            )
+        )
+
+
 @router.post("")
 async def chat(request: ChatRequest):
     """
@@ -777,6 +862,17 @@ async def chat(request: ChatRequest):
     Raises:
         HTTPException: If agent initialization fails
     """
+    # EARLY DEBUG: Verify function is being called
+    import sys
+    with open("I:\\code\\miniclaw\\chat_entry.log", "a") as f:
+        f.write(f"ENTER: chat() function at {__file__}\n")
+        f.write(f"Message: {request.message[:100]}\n")
+        f.write(f"Python version: {sys.version}\n")
+        f.write("-" * 50 + "\n")
+
+    print(f"[EARLY DEBUG] chat() function called with message: {request.message[:50]}")
+    logger.info(f"[EARLY DEBUG] chat() function called with message: {request.message[:50]}")
+
     # Ensure skills are loaded
     bootstrap_skills()
 
@@ -784,6 +880,7 @@ async def chat(request: ChatRequest):
     semantic_history = ""
     try:
         from app.config import get_settings
+        # get_settings() always returns fresh instance (no caching)
         settings = get_settings()
 
         # Only trigger semantic search for substantial queries (not simple greetings)
@@ -932,7 +1029,128 @@ async def chat(request: ChatRequest):
     # Get agent manager
     agent = get_agent_manager()
 
-    # Return SSE stream
+    # Check if ToT should be enabled for this request
+    from app.config import get_settings
+    settings = get_settings()
+
+    # Check if ToT is enabled globally or per-request
+    # Pydantic model: request.enable_tot will be None if not provided in request
+    request_enable_tot = request.enable_tot
+    logger.info(f"=== DEBUG: request.enable_tot={request_enable_tot} ===")
+
+    if request_enable_tot is not None:
+        # Per-request setting overrides global setting
+        enable_tot = request_enable_tot
+        logger.info(f"=== ToT per-request setting: enable_tot={enable_tot} ===")
+    else:
+        # Use global setting
+        enable_tot = settings.enable_tot
+        logger.info(f"=== Using global ToT setting: enable_tot={enable_tot} ===")
+
+    # Force write to file to verify execution
+    with open("I:\\code\\miniclaw\\tot_debug.log", "a") as f:
+        f.write(f"[DEBUG] ToT Config: enable_tot={enable_tot}\n")
+
+    print(f"[DEBUG] === ToT Config: enable_tot={enable_tot} ===")
+    logger.info(f"=== ToT Config: enable_tot={enable_tot} ===")
+
+    # Check if query complexity requires ToT
+    should_use_tot = False
+
+    # Check if research mode is requested and determine thinking mode
+    research_mode = None
+    thinking_config = None
+    custom_branching = None
+
+    if request.context:
+        research_mode = request.context.get("research_mode", None)
+        # Read custom branching factor if provided
+        custom_branching = request.context.get("branching_factor", None)
+
+        if research_mode in settings.thinking_modes:
+            thinking_config = settings.thinking_modes[research_mode]
+            # Use custom branching factor if provided, otherwise use default
+            branching = custom_branching if custom_branching else thinking_config['branching']
+            logger.info(f"=== Thinking mode: {thinking_config['name']} (depth={thinking_config['depth']}, branching={branching}) ===")
+            if custom_branching:
+                logger.info(f"=== Custom branching factor: {custom_branching} ===")
+
+    # Check if ToT is explicitly enabled per-request (force mode)
+    is_force_tot = False
+
+    # request_enable_tot was already set above
+    logger.info(f"=== DEBUG: request_enable_tot={request_enable_tot}, type={type(request_enable_tot)} ===")
+
+    if request_enable_tot is not None:
+        logger.info(f"=== DEBUG: request_enable_tot is not None, value={request_enable_tot} ===")
+        # If user explicitly sets enable_tot=True, force ToT regardless of complexity
+        if request_enable_tot:
+            logger.info("=== DEBUG: Setting force mode ===")
+            is_force_tot = True
+            should_use_tot = True
+            logger.info("=== ToT explicitly enabled via request parameter (force mode) ===")
+        else:
+            logger.info(f"=== DEBUG: request_enable_tot is False ===")
+    else:
+        logger.info("=== DEBUG: request_enable_tot is None, using global setting ===")
+
+    # For global enable_tot setting, still check complexity
+    if enable_tot and not is_force_tot:
+        from app.core.tot.router import TaskComplexityClassifier
+        classifier = TaskComplexityClassifier()
+        complexity = classifier.classify(request.message)
+        should_use_tot = (complexity == "complex")
+        logger.info(f"=== Query: '{request.message[:50]}...' ===")
+        logger.info(f"=== Complexity: {complexity}, should_use_tot: {should_use_tot} ===")
+
+    if research_mode:
+        should_use_tot = True
+        logger.info(f"=== Research mode '{research_mode}' requested, enabling ToT ===")
+
+    logger.info(f"=== Final decision: should_use_tot={should_use_tot} ===")
+
+    # Use ToT orchestrator for complex queries, otherwise use standard agent
+    if should_use_tot:
+        logger.info("=== Using ToT Orchestrator for complex query ===")
+        try:
+            from app.core.tot.router import ToTOrchestrator
+            from app.core.tot.streaming import ToTEventStreamer
+
+            # Determine ToT parameters based on thinking mode
+            tot_depth = thinking_config['depth'] if thinking_config else settings.tot_max_depth
+            # Use custom branching factor if provided, otherwise use config default
+            tot_branching = custom_branching if custom_branching else (
+                thinking_config['branching'] if thinking_config else settings.tot_branching_factor
+            )
+
+            logger.info(f"=== Creating ToTOrchestrator with depth={tot_depth}, branching={tot_branching} ===")
+            orchestrator = ToTOrchestrator(
+                agent_manager=agent,
+                max_depth=tot_depth,
+                branching_factor=tot_branching
+            )
+            logger.info("=== ToTOrchestrator created successfully ===")
+
+            logger.info("=== Starting tot_stream_generator ===")
+            response = StreamingResponse(
+                tot_stream_generator(request, orchestrator, system_prompt),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                },
+            )
+            logger.info("=== Returning ToT StreamingResponse ===")
+            return response
+        except Exception as e:
+            logger.error(f"=== FAILED to create/use ToT Orchestrator: {e} ===")
+            import traceback
+            logger.error(f"=== Traceback: {traceback.format_exc()} ===")
+            logger.info("=== Falling back to standard agent ===")
+            # Fall through to standard agent below
+
+    # Standard agent path (either should_use_tot=False or ToT failed)
+    logger.info("=== Using standard Agent Manager ===")
     return StreamingResponse(
         chat_stream_generator(request, agent, system_prompt),
         media_type="text/event-stream",

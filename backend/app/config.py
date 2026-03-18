@@ -5,11 +5,50 @@ This module handles all configuration management using environment variables,
 obfuscated storage, and pydantic-settings for type safety and validation.
 """
 
-from functools import lru_cache
-from typing import List, Dict, Any, Literal
+from typing import List, Dict, Any, Literal, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
+from dataclasses import dataclass
+
+
+# ============================================================================
+# Data Models
+# ============================================================================
+
+@dataclass
+class LLMConfig:
+    """
+    单个 LLM 配置（不包含明文 API Key）
+
+    注意：此类用于后端内部使用，包含明文 API Key 仅用于 LLM 初始化
+    前端永远不应该接触到明文 Key
+    """
+    id: str
+    provider: str
+    name: str
+    model: str
+    base_url: str
+    api_key: str  # 仅在后端内存中使用，不发送到前端
+
+    def to_dict(self, include_api_key: bool = False) -> Dict[str, Any]:
+        """转换为字典（前端显示时不包含 API Key）"""
+        data = {
+            "id": self.id,
+            "provider": self.provider,
+            "name": self.name,
+            "model": self.model,
+            "base_url": self.base_url,
+        }
+
+        if include_api_key:
+            data["api_key"] = self.api_key
+        else:
+            # 前端显示：只返回脱敏信息
+            data["has_api_key"] = bool(self.api_key)
+            data["api_key_preview"] = f"{self.api_key[:8]}***" if self.api_key else ""
+
+        return data
 
 
 class Settings(BaseSettings):
@@ -44,25 +83,25 @@ class Settings(BaseSettings):
     ]
 
     # LLM Configuration
-    llm_provider: Literal["openai", "deepseek", "qwen", "ollama", "claude", "gemini", "custom"] = "qwen"
+    llm_provider: Literal["openai", "deepseek", "qwen", "ollama", "claude", "gemini", "custom"] = Field(default="qwen", env="LLM_PROVIDER")
 
     # OpenAI
     openai_api_key: str = Field(default="", env="OPENAI_API_KEY")
     openai_model: str = Field(default="", env="OPENAI_MODEL")  # 留空由用户配置，避免硬编码过时模型
-    openai_base_url: str = "https://api.openai.com/v1"
+    openai_base_url: str = Field(default="https://api.openai.com/v1", env="OPENAI_BASE_URL")
 
     # DeepSeek
     deepseek_api_key: str = Field(default="", env="DEEPSEEK_API_KEY")
     deepseek_model: str = Field(default="", env="DEEPSEEK_MODEL")  # 留空由用户配置
-    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_base_url: str = Field(default="https://api.deepseek.com", env="DEEPSEEK_BASE_URL")
 
     # Qwen (通义千问)
     qwen_api_key: str = Field(default="", env="QWEN_API_KEY")
     qwen_model: str = Field(default="", env="QWEN_MODEL")  # 留空由用户配置
-    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_base_url: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1", env="QWEN_BASE_URL")
 
     # Ollama (Local)
-    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_base_url: str = Field(default="http://localhost:11434/v1", env="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="", env="OLLAMA_MODEL")  # 留空由用户配置
 
     # Claude (Anthropic) - Using OpenAI-compatible mode
@@ -172,6 +211,61 @@ class Settings(BaseSettings):
     python_monitor_interval: int = 5  # seconds
     python_warning_threshold: float = 0.7
 
+    # Tree of Thoughts Configuration
+    enable_tot: bool = True
+    # Default values (will be overridden by thinking_mode)
+    tot_max_depth: int = 2
+    tot_branching_factor: int = 3
+    tot_quality_threshold: float = 6.0
+    tot_auto_enable_keywords: list[str] = [
+        "deep research",
+        "comprehensive analysis",
+        "detailed investigation",
+        "thorough review",
+        "in-depth study"
+    ]
+    tot_checkpoint_path: str = "data/tot_checkpoints.db"
+
+    # Deep Research Configuration
+    enable_deep_research: bool = True
+    research_mode: Literal["heuristic", "analytical", "exhaustive"] = "heuristic"
+
+    # Thinking Mode Configurations
+    # heuristic (启发式推理): 2层深度 × 3层宽度 = 最多9个思维节点，快速启发式探索
+    # analytical (分析式推理): 4层深度 × 4层宽度 = 最多256个思维节点，系统性分析
+    # exhaustive (穷尽式推理): 7层深度 × 6层宽度 = 最多279,936个思维节点，极限穷尽
+    thinking_modes: dict = {
+        "heuristic": {
+            "depth": 2,
+            "branching": 3,
+            "timeout": 180,
+            "name": "启发式推理 (Heuristic Reasoning)",
+            "name_en": "Heuristic Reasoning",
+            "description": "快速探索问题核心，适用于时间敏感的查询",
+            "icon": "⚡"
+        },
+        "analytical": {
+            "depth": 4,
+            "branching": 4,
+            "timeout": 1800,
+            "name": "分析式推理 (Analytical Reasoning)",
+            "name_en": "Analytical Reasoning",
+            "description": "平衡深度与广度，适用于复杂问题分析",
+            "icon": "🔬"
+        },
+        "exhaustive": {
+            "depth": 7,
+            "branching": 6,
+            "timeout": 36000,
+            "name": "穷尽式推理 (Exhaustive Reasoning)",
+            "name_en": "Exhaustive Reasoning",
+            "description": "极限探索所有可能性，适用于深度研究",
+            "icon": "🌌"
+        }
+    }
+
+    research_sources_priority: list[str] = ["knowledge_base", "arxiv", "web"]
+
     # RAG / Knowledge Base
     enable_rag: bool = True  # Enable RAG by default
     embedding_model: str = "text-embedding-ada-002"
@@ -239,7 +333,7 @@ class Settings(BaseSettings):
     max_concurrent_tools: int = 5  # Maximum concurrent tools in parallel
 
     # Performance Optimization: Streaming Response
-    enable_streaming_response: bool = False  # Disable streaming: Qwen API has bug in streaming tool_calls (returns incomplete objects)
+    enable_streaming_response: bool = True  # Enable streaming response for real-time output
     streaming_chunk_size: int = 512  # Characters per chunk
 
     # Performance Optimization: Prompt Compression
@@ -307,80 +401,77 @@ def _load_obfuscated_config() -> None:
     """
     Load API keys from obfuscated storage and set as environment variables.
 
-    This is called before Settings initialization to populate environment
-    variables with deobfuscated API keys.
+    支持新旧两种配置格式。
+
+    优先级：加密存储 > 环境变量 > 默认值
     """
     try:
         from app.core.obfuscation import KeyObfuscator
 
         credentials = KeyObfuscator.load_credentials()
 
-        # Set environment variables from obfuscated storage
-        for provider, config in credentials.items():
-            # Skip internal keys
-            if provider.startswith("_"):
-                continue
+        # 检查是否是新格式（多 LLM 支持）
+        if "llms" in credentials:
+            # 新格式：多 LLM 配置
+            current_llm_id = credentials.get("current_llm_id", "qwen-default")
+            llms = credentials.get("llms", {})
 
-            # Map provider names to environment variable format
-            provider_upper = provider.upper()
+            # 设置当前 LLM 的环境变量（兼容性）
+            if current_llm_id in llms:
+                current_llm = llms[current_llm_id]
+                provider = current_llm.get("provider", "custom")
+                os.environ["LLM_PROVIDER"] = provider
 
-            if "api_key" in config:
-                # Only set if not already in environment (env vars take precedence)
-                env_key = f"{provider_upper}_API_KEY"
-                if env_key not in os.environ:
+                if "api_key" in current_llm:
+                    # 尝试解密
+                    encrypted_key = current_llm["api_key"]
+                    decrypted = KeyObfuscator.deobfuscate(encrypted_key)
+                    api_key = decrypted if decrypted else encrypted_key
+
+                    env_key = f"{provider.upper()}_API_KEY"
+                    os.environ[env_key] = api_key
+
+                if "model" in current_llm:
+                    env_key = f"{provider.upper()}_MODEL"
+                    os.environ[env_key] = current_llm["model"]
+
+                if "base_url" in current_llm:
+                    env_key = f"{provider.upper()}_BASE_URL"
+                    os.environ[env_key] = current_llm["base_url"]
+        else:
+            # 旧格式：单一提供商配置（兼容性）
+            for provider, config in credentials.items():
+                if provider.startswith("_"):
+                    continue
+
+                provider_upper = provider.upper()
+
+                if "api_key" in config:
+                    env_key = f"{provider_upper}_API_KEY"
                     os.environ[env_key] = config["api_key"]
 
-            if "model" in config and config["model"]:
-                env_key = f"{provider_upper}_MODEL"
-                if env_key not in os.environ:
+                if "model" in config and config["model"]:
+                    env_key = f"{provider_upper}_MODEL"
                     os.environ[env_key] = config["model"]
 
-            if "base_url" in config and config["base_url"]:
-                env_key = f"{provider_upper}_BASE_URL"
-                if env_key not in os.environ:
+                if "base_url" in config and config["base_url"]:
+                    env_key = f"{provider_upper}_BASE_URL"
                     os.environ[env_key] = config["base_url"]
 
-        # Restore current provider choice if stored
-        if "_current_provider" in credentials:
-            provider = credentials["_current_provider"]
-            if "LLM_PROVIDER" not in os.environ:
+            if "_current_provider" in credentials:
+                provider = credentials["_current_provider"]
                 os.environ["LLM_PROVIDER"] = provider
 
     except Exception:
-        # Silently fail if obfuscated storage is corrupted or inaccessible
-        # This allows fallback to environment variables
+        # Silently fail - allows fallback to environment variables
         pass
 
 
-@lru_cache
 def get_settings() -> Settings:
     """
-    Get cached settings instance.
+    Get settings instance (always fresh, no caching).
 
-    This function is cached to avoid recreating settings on every call.
-    Use this to access settings throughout the application.
-    """
-    # Load obfuscated config before creating Settings
-    _load_obfuscated_config()
-    return Settings()
-
-
-def clear_settings_cache() -> None:
-    """
-    Clear the cached Settings instance.
-
-    Call this when configuration changes (provider switch, credential update).
-    This ensures the next get_settings() call loads fresh configuration.
-    """
-    get_settings.cache_clear()
-
-
-def get_settings_uncached() -> Settings:
-    """
-    Get a fresh Settings instance without using cache.
-
-    Use this when you need the absolute latest configuration,
-    such as in API endpoints that display current settings to users.
+    每次调用都重新加载配置，确保前端设置与后端使用一致。
     """
     _load_obfuscated_config()
     return Settings()
