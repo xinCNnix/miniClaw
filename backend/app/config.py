@@ -359,6 +359,7 @@ class Settings(BaseSettings):
     memory_extraction_interval: int = 5  # Extract every N messages
     memory_min_confidence: float = 0.6  # Minimum confidence for storing memories
     memory_max_conversations: int = 100  # Maximum conversations to keep indexed
+    memory_extraction_max_retries: int = 2  # Max retries when JSON parsing fails
 
     # User Profile
     user_profile_update_interval: int = 10  # Update USER.md every N memory extractions

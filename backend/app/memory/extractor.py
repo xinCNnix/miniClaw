@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.memory import Memory, MemoryExtractionResult
 from app.memory.session import get_session_manager
-from app.core.llm import get_default_llm, create_current_llm
+from app.core.llm import get_default_llm
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +30,16 @@ class MemoryExtractor:
     - Patterns (recurring requests, common workflows)
     """
 
-    def __init__(self, llm: BaseChatModel | None = None):
+    def __init__(self, llm: BaseChatModel | None = None, max_retries: int = 2):
         """
         Initialize the memory extractor.
 
         Args:
-            llm: Optional LLM instance. If not provided, uses current active LLM.
+            llm: Optional LLM instance. If not provided, uses default LLM.
+            max_retries: Maximum number of retries when JSON parsing fails.
         """
-        self.llm = llm or create_current_llm()
+        self.llm = llm or get_default_llm()
+        self.max_retries = max_retries
 
     async def extract(
         self,
@@ -78,27 +80,51 @@ class MemoryExtractor:
         # Build extraction prompt
         system_prompt = self._build_extraction_prompt()
 
-        # Call LLM
-        try:
-            result = await self._call_llm(system_prompt, conversation_text)
-        except Exception as e:
-            logger.error(f"LLM extraction failed for session {session_id}: {e}")
-            # Return empty result on failure
-            return MemoryExtractionResult(
-                memories=[],
-                summary="",
-                topics=[],
-            )
+        # Retry loop for LLM call and parsing
+        last_error = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                # Call LLM
+                result = await self._call_llm(system_prompt, conversation_text)
 
-        # Parse and validate result
-        extraction_result = self._parse_extraction_result(result, session_id)
+                # Parse and validate result
+                extraction_result = self._parse_extraction_result(result, session_id)
 
-        logger.info(
-            f"Extracted {len(extraction_result.memories)} memories "
-            f"from session {session_id}"
+                # If we got here, parsing succeeded
+                if attempt > 0:
+                    logger.info(f"Memory extraction succeeded on retry {attempt + 1}")
+
+                logger.info(
+                    f"Extracted {len(extraction_result.memories)} memories "
+                    f"from session {session_id}"
+                )
+
+                return extraction_result
+
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"Memory extraction attempt {attempt + 1}/{self.max_retries + 1} failed: {e}"
+                )
+
+                if attempt < self.max_retries:
+                    # Wait a bit before retrying (exponential backoff)
+                    import asyncio
+                    wait_time = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s...
+                    await asyncio.sleep(wait_time)
+                else:
+                    # All retries exhausted
+                    logger.error(
+                        f"Memory extraction failed after {self.max_retries + 1} attempts: {e}"
+                    )
+                    break
+
+        # Return empty result on failure after all retries
+        return MemoryExtractionResult(
+            memories=[],
+            summary="",
+            topics=[],
         )
-
-        return extraction_result
 
     def _format_conversation(self, messages: List[Dict]) -> str:
         """
@@ -121,96 +147,10 @@ class MemoryExtractor:
             elif role == "assistant":
                 lines.append(f"Assistant: {content}")
             elif role == "tool":
-                # Extract important information from tool outputs
-                tool_name = msg.get("name", msg.get("tool_name", "unknown"))
-                tool_output = content
-
-                # Only include important tools in memory extraction
-                if self._is_important_tool(tool_name):
-                    summarized = self._summarize_tool_output(tool_name, tool_output)
-                    if summarized:
-                        lines.append(f"[Tool: {tool_name}]\n{summarized}")
+                # Skip tool messages for memory extraction
+                continue
 
         return "\n".join(lines)
-
-    def _is_important_tool(self, tool_name: str) -> bool:
-        """
-        Check if a tool output is important enough to include in memory.
-
-        Args:
-            tool_name: Name of the tool
-
-        Returns:
-            True if tool output should be extracted
-        """
-        # Tools that produce important, persistent information
-        important_tools = {
-            # Research & information retrieval
-            "terminal",  # Can run arxiv_search and other info tools
-            "fetch",     # Web content retrieval
-            "arxiv",     # Academic paper search
-
-            # Knowledge tools
-            "search_knowledge_base",
-            "read_file",
-
-            # Data analysis
-            "python_repl",  # Analysis results
-        }
-
-        # Check if tool name contains any important keyword
-        tool_lower = tool_name.lower()
-        for important in important_tools:
-            if important in tool_lower:
-                return True
-
-        return False
-
-    def _summarize_tool_output(self, tool_name: str, tool_output: str) -> str:
-        """
-        Summarize tool output for memory extraction.
-
-        Args:
-            tool_name: Name of the tool
-            tool_output: Raw tool output
-
-        Returns:
-            Summarized output (truncated if too long)
-        """
-        if not tool_output or not tool_output.strip():
-            return ""
-
-        # Clean up output
-        output = tool_output.strip()
-
-        # For terminal output, try to extract structured data
-        if "terminal" in tool_name.lower():
-            # Check if it's JSON output (e.g., from arxiv_search)
-            if output.startswith("{") and output.endswith("}"):
-                try:
-                    import json
-                    data = json.loads(output)
-                    # Extract key information from structured output
-                    if "papers" in data:
-                        paper_count = len(data.get("papers", []))
-                        return f"Retrieved {paper_count} papers from arXiv"
-                    elif "total_results" in data:
-                        return f"Query returned {data.get('returned', 0)} results"
-                except json.JSONDecodeError:
-                    pass
-
-            # For other terminal output, limit length
-            max_length = 500
-            if len(output) > max_length:
-                return output[:max_length] + "\n...[truncated]"
-            return output
-
-        # For other tools, truncate very long outputs
-        max_length = 1000
-        if len(output) > max_length:
-            return output[:max_length] + "\n...[truncated]"
-
-        return output
 
     def _build_extraction_prompt(self) -> str:
         """
@@ -219,7 +159,7 @@ class MemoryExtractor:
         Returns:
             System prompt string
         """
-        return """You are a memory extraction assistant. Your task is to analyze conversations and extract key information about the user and important research results.
+        return """You are a memory extraction assistant. Your task is to analyze conversations and extract key information about the user.
 
 Analyze the conversation and extract:
 
@@ -234,27 +174,17 @@ Analyze the conversation and extract:
    - Technical stack (e.g., "uses Python 3.10+, FastAPI, Next.js")
    - Domain knowledge
    - Role or background
-   - Research findings (e.g., "retrieved 20 papers on agent long-term memory from arXiv")
-   - Important data retrieved (e.g., "found 5 relevant academic papers on topic X")
 
 3. **Context** (type: "context")
    - Project goals
    - Constraints or limitations
    - Deadlines or timeframes
    - Current problems or challenges
-   - Research topics being investigated
 
 4. **Patterns** (type: "pattern")
    - Recurring requests
    - Common workflows
    - Frequently asked topics
-   - Research interests
-
-Special attention to tool outputs:
-- When you see "[Tool: terminal]" or similar markers, extract the key information
-- For research results (e.g., arXiv papers), note the topic and paper count
-- For data retrieval, note what information was found
-- These are important "fact" or "context" memories worth preserving
 
 For each extracted item, provide:
 - type: One of "preference", "fact", "context", "pattern"
@@ -339,12 +269,8 @@ Be conservative - only extract information you're confident about. If uncertain,
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM output as JSON: {e}")
             logger.debug(f"LLM output: {llm_output}")
-            # Return empty result
-            return MemoryExtractionResult(
-                memories=[],
-                summary="",
-                topics=[],
-            )
+            # Raise exception to trigger retry
+            raise ValueError(f"JSON parsing failed: {e}") from e
 
         # Parse memories
         memories = []
@@ -385,7 +311,11 @@ def get_memory_extractor() -> MemoryExtractor:
     global _extractor_instance
 
     if _extractor_instance is None:
-        _extractor_instance = MemoryExtractor()
+        from app.config import get_settings
+        settings = get_settings()
+        _extractor_instance = MemoryExtractor(
+            max_retries=settings.memory_extraction_max_retries
+        )
 
     return _extractor_instance
 
@@ -394,8 +324,7 @@ def reset_memory_extractor() -> None:
     """
     Reset the global memory extractor to force recreation on next access.
 
-    This should be called when LLM configuration is updated to ensure
-    the new configuration is picked up immediately.
+    This should be called when configuration is updated.
     """
     global _extractor_instance
     _extractor_instance = None
