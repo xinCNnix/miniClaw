@@ -1,73 +1,106 @@
 """
-Configuration API - Manage obfuscated LLM API keys and provider switching
+Configuration API - Multi-LLM Management
 
-This module provides endpoints for:
-- Saving/loading obfuscated API keys
-- Getting current provider info
-- Hot-switching LLM providers
+This module provides endpoints for managing multiple LLM configurations.
 """
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
-import os
+from typing import Optional, List
+import logging
 
 from app.core.obfuscation import KeyObfuscator
 from app.core.trusted_domains import is_trusted_domain
-from app.config import get_settings, get_available_providers, clear_settings_cache, get_settings_uncached
+from app.core.llm_config import (
+    load_all_llm_configs,
+    load_llm_config,
+    save_llm_config as save_llm_config_to_storage,
+    delete_llm_config as delete_llm_from_storage,
+    get_current_llm_id,
+    set_current_llm_id as set_current_llm,
+    llm_exists,
+    generate_llm_id,
+)
 
 
 router = APIRouter(tags=["config"])
+logger = logging.getLogger(__name__)
 
 
-class SaveLLMConfigRequest(BaseModel):
-    """Request model for saving LLM configuration."""
+# ============================================================================
+# Request/Response Models
+# ============================================================================
 
-    provider: str = Field(..., description="LLM provider name (e.g., qwen, openai)")
-    api_key: str = Field(..., description="API key for the provider")
-    model: str = Field(default="", description="Model name")
-    base_url: str = Field(default="", description="Custom base URL (optional)")
-    user_confirmed: bool = Field(default=False, description="User confirmed non-trusted domain")
-
-
-class ConfigStatusResponse(BaseModel):
-    """Response model for configuration status."""
-
-    has_credentials: bool
-    providers: list[str]
-
-
-class DomainCheckRequest(BaseModel):
-    """Request model for checking if a domain is trusted."""
-
-    domain: str = Field(..., description="Domain to check")
+class LLMInfo(BaseModel):
+    """LLM information (for frontend display, no API key)."""
+    id: str
+    provider: str
+    name: str
+    model: str
+    base_url: str
+    has_api_key: bool  # True if API key is configured
+    api_key_preview: str  # 脱敏预览（sk-1234***）
+    is_current: bool
 
 
-@router.post("/save")
-async def save_llm_config(request: SaveLLMConfigRequest):
+class SaveLLMRequest(BaseModel):
+    """Request for saving/updating LLM configuration."""
+    id: Optional[str] = Field(None, description="LLM ID (auto-generated if empty)")
+    provider: str = Field(..., description="Provider name (qwen, openai, custom, etc.)")
+    name: str = Field(..., description="Display name")
+    model: str = Field(..., description="Model name")
+    base_url: str = Field(..., description="Base URL")
+    api_key: Optional[str] = Field(None, description="API key (empty if not changing)")
+    user_confirmed: Optional[bool] = Field(False, description="User confirmed untrusted domain")
+
+
+class SwitchLLMRequest(BaseModel):
+    """Request for switching LLM."""
+    llm_id: str
+
+
+# ============================================================================
+# API Endpoints
+# ============================================================================
+
+@router.get("/llms")
+async def list_llms():
     """
-    Save LLM configuration with obfuscated API key.
-
-    The API key is obfuscated using device fingerprint before storage.
-    This prevents Agent tools from accidentally reading the key.
-
-    ## Request Example
-    ```json
-    {
-      "provider": "qwen",
-      "api_key": "sk-xxxxxxxx",
-      "model": "qwen-turbo",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    }
-    ```
+    List all configured LLMs (without API keys).
     """
     try:
-        # Check domain trust if base_url provided
-        if request.base_url:
-            domain = request.base_url.replace("https://", "").replace("http://", "").split("/")[0]
-            domain = domain.split(":")[0]  # Remove port
+        current_llm_id = get_current_llm_id()
+        llms = load_all_llm_configs()
 
-            if not is_trusted_domain(domain) and not request.user_confirmed:
+        return {
+            "current_llm_id": current_llm_id,
+            "llms": [
+                {
+                    **llm.to_dict(include_api_key=False),
+                    "is_current": llm.id == current_llm_id
+                }
+                for llm in llms
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list LLMs: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list LLMs: {str(e)}",
+        )
+
+
+@router.post("/llms")
+async def save_llm(request: SaveLLMRequest):
+    """Save or update LLM configuration."""
+    try:
+        # 检查域名信任（仅在用户未确认时）
+        if request.base_url and not request.user_confirmed:
+            domain = request.base_url.replace("https://", "").replace("http://", "").split("/")[0]
+            domain = domain.split(":")[0]
+
+            if not is_trusted_domain(domain):
                 return {
                     "success": False,
                     "requires_confirmation": True,
@@ -75,336 +108,250 @@ async def save_llm_config(request: SaveLLMConfigRequest):
                     "domain": domain,
                 }
 
-        # Load existing credentials
-        credentials = KeyObfuscator.load_credentials()
+        # 生成或使用提供的 ID
+        llm_id = request.id or generate_llm_id(
+            provider=request.provider,
+            model=request.model,
+            base_url=request.base_url or "",
+            name=request.name or ""
+        )
 
-        # Add or update provider config
-        provider_config = {
-            "api_key": request.api_key,
+        # 如果是更新，加载现有配置
+        existing_llm = None
+        if request.id:
+            existing_llm = load_llm_config(request.id)
+
+        # 确定 API Key
+        api_key = request.api_key
+        if not api_key and existing_llm:
+            # 未提供 API Key，保持原有
+            api_key = existing_llm.api_key
+        elif not api_key and not existing_llm:
+            # 新建但未提供 API Key
+            return {
+                "success": False,
+                "message": "新建 LLM 配置必须提供 API Key"
+            }
+
+        # 创建 LLMConfig
+        from app.config import LLMConfig
+        llm_config = LLMConfig(
+            id=llm_id,
+            provider=request.provider,
+            name=request.name,
+            model=request.model,
+            base_url=request.base_url,
+            api_key=api_key,
+        )
+
+        # 保存
+        save_llm_config_to_storage(llm_config)
+
+        # 如果是第一个 LLM，自动设为当前
+        all_llms = load_all_llm_configs()
+        if len(all_llms) == 1:
+            set_current_llm(llm_id)
+            # 重置 Agent Manager 以使用新的 LLM
+            from app.api.chat import reset_agent_manager
+            reset_agent_manager()
+
+        return {
+            "success": True,
+            "llm_id": llm_id
         }
 
-        if request.model:
-            provider_config["model"] = request.model
+    except Exception as e:
+        logger.error(f"Failed to save LLM: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save LLM: {str(e)}",
+        )
 
-        if request.base_url:
-            provider_config["base_url"] = request.base_url
 
-        if request.user_confirmed:
-            provider_config["user_confirmed"] = True
+@router.post("/llms/switch")
+async def switch_llm(request: SwitchLLMRequest):
+    """Switch to a different LLM (hot-switch)."""
+    try:
+        if not llm_exists(request.llm_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"LLM {request.llm_id} not found"
+            )
 
-        credentials[request.provider] = provider_config
+        # 切换当前 LLM
+        set_current_llm(request.llm_id)
 
-        # Update current provider to ensure it persists after restart
-        credentials["_current_provider"] = request.provider
-
-        # Save obfuscated credentials
-        KeyObfuscator.save_credentials(credentials)
-
-        # Clear settings cache so new values are picked up immediately
-        clear_settings_cache()
-
-        # Reset agent manager to force recreation with new credentials
+        # 重置 Agent Manager
         from app.api.chat import reset_agent_manager
         reset_agent_manager()
 
         return {
             "success": True,
-            "message": f"Configuration saved for {request.provider}",
+            "current_llm_id": request.llm_id
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Failed to switch LLM: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save configuration: {str(e)}",
+            detail=f"Failed to switch LLM: {str(e)}",
         )
 
 
-@router.get("/status", response_model=ConfigStatusResponse)
-async def get_config_status():
-    """
-    Get current configuration status.
-
-    Returns information about saved providers without revealing API keys.
-
-    ## Response Example
-    ```json
-    {
-      "has_credentials": true,
-      "providers": ["qwen", "openai"]
-    }
-    ```
-    """
+@router.delete("/llms/{llm_id}")
+async def delete_llm(llm_id: str):
+    """Delete LLM configuration."""
     try:
-        credentials = KeyObfuscator.load_credentials()
-        providers = [k for k in credentials.keys() if not k.startswith("_")]
+        current_llm_id = get_current_llm_id()
 
-        return ConfigStatusResponse(
-            has_credentials=len(providers) > 0,
-            providers=providers,
-        )
-
-    except Exception:
-        return ConfigStatusResponse(
-            has_credentials=False,
-            providers=[],
-        )
-
-
-@router.delete("/{provider}")
-async def delete_provider_config(provider: str):
-    """
-    Delete configuration for a specific provider.
-
-    Args:
-        provider: Provider name (e.g., qwen, openai)
-
-    ## Response Example
-    ```json
-    {
-      "success": true,
-      "message": "Configuration deleted for qwen"
-    }
-    ```
-    """
-    try:
-        credentials = KeyObfuscator.load_credentials()
-
-        if provider not in credentials:
+        if llm_id == current_llm_id:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No configuration found for provider: {provider}",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete current LLM. Please switch to another LLM first."
             )
 
-        # Remove provider
-        del credentials[provider]
+        if not delete_llm_from_storage(llm_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"LLM {llm_id} not found"
+            )
 
-        # Save updated credentials
-        if credentials:
-            KeyObfuscator.save_credentials(credentials)
+        return {"success": True}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete LLM: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete LLM: {str(e)}",
+        )
+
+
+# ============================================================================
+# Legacy Endpoints (兼容性)
+# ============================================================================
+
+class LegacySaveRequest(BaseModel):
+    """Legacy request format for frontend compatibility."""
+    provider: str = Field(..., description="Provider name")
+    api_key: Optional[str] = Field(None, description="API key")
+    model: Optional[str] = Field(None, description="Model name")
+    base_url: Optional[str] = Field(None, description="Base URL")
+    user_confirmed: Optional[bool] = Field(False, description="User confirmed untrusted domain")
+    name: Optional[str] = Field(None, description="Display name")
+
+
+@router.post("/save")
+async def save_config(request: LegacySaveRequest):
+    """
+    Legacy endpoint for saving LLM config (compatibility with frontend).
+    Maps to the new /llms endpoint.
+    """
+    try:
+        # Generate name if not provided - use better logic for display name
+        if request.name:
+            display_name = request.name
+        elif request.model:
+            # Use model name as display name (e.g., "gpt-4", "claude-3-opus")
+            display_name = request.model
         else:
-            # Delete file if no providers left
-            KeyObfuscator.CREDENTIALS_FILE.unlink(missing_ok=True)
+            # Fallback to provider name
+            display_name = request.provider.capitalize()
+
+        # Check domain trust
+        if request.base_url and not request.user_confirmed:
+            domain = request.base_url.replace("https://", "").replace("http://", "").split("/")[0]
+            domain = domain.split(":")[0]
+
+            if not is_trusted_domain(domain):
+                return {
+                    "success": False,
+                    "requires_confirmation": True,
+                    "message": f"⚠️ 域名 {domain} 不在预置的可信服务商列表中。请确认要使用此 API 吗？",
+                    "domain": domain,
+                }
+
+        # Generate LLM ID (pass base_url and name for uniqueness)
+        llm_id = generate_llm_id(
+            provider=request.provider,
+            model=request.model or "default",
+            base_url=request.base_url or "",
+            name=display_name
+        )
+
+        # Check if updating existing config
+        existing_llm = load_llm_config(llm_id)
+
+        # Determine API key
+        api_key = request.api_key
+        if not api_key and existing_llm:
+            api_key = existing_llm.api_key
+        elif not api_key and not existing_llm:
+            return {
+                "success": False,
+                "message": "新建 LLM 配置必须提供 API Key"
+            }
+
+        # Create LLMConfig
+        from app.config import LLMConfig
+        llm_config = LLMConfig(
+            id=llm_id,
+            provider=request.provider,
+            name=display_name,
+            model=request.model or "default",
+            base_url=request.base_url or "",
+            api_key=api_key,
+        )
+
+        # Save
+        save_llm_config_to_storage(llm_config)
+
+        # Auto-set as current if first LLM
+        all_llms = load_all_llm_configs()
+        if len(all_llms) == 1:
+            set_current_llm(llm_id)
+            # 重置 Agent Manager 以使用新的 LLM
+            from app.api.chat import reset_agent_manager
+            reset_agent_manager()
 
         return {
             "success": True,
-            "message": f"Configuration deleted for {provider}",
+            "message": f"已保存 {display_name} 配置",
+            "llm_id": llm_id
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete configuration: {str(e)}",
-        )
+        logger.error(f"Failed to save config (legacy endpoint): {e}")
+        return {
+            "success": False,
+            "message": f"保存失败: {str(e)}"
+        }
 
 
-@router.post("/check-domain")
-async def check_domain(request: DomainCheckRequest):
-    """
-    Check if a domain is in the trusted list.
-
-    ## Request Example
-    ```json
-    {
-      "domain": "api.example.com"
+@router.get("/status")
+async def get_config_status():
+    """Legacy endpoint for config status."""
+    llms = load_all_llm_configs()
+    return {
+        "has_credentials": len(llms) > 0,
+        "providers": list(set([llm.provider for llm in llms]))
     }
-    ```
 
-    ## Response Example
-    ```json
-    {
-      "trusted": false,
-      "domain": "api.example.com"
-    }
-    ```
-    """
-    trusted = is_trusted_domain(request.domain)
+
+@router.get("/provider")
+async def get_current_provider():
+    """Legacy endpoint for current provider info."""
+    current_llm_id = get_current_llm_id()
+    current_llm = load_llm_config(current_llm_id)
+    llms = load_all_llm_configs()
 
     return {
-        "trusted": trusted,
-        "domain": request.domain,
+        "current_provider": current_llm.provider if current_llm else "qwen",
+        "current_model": current_llm.model if current_llm else "",
+        "current_llm_id": current_llm_id,
+        "available_providers": [],
+        "configured_providers": list(set([llm.provider for llm in llms]))
     }
-
-
-class CurrentProviderResponse(BaseModel):
-    """Response model for current provider info."""
-    current_provider: str
-    current_model: str
-    available_providers: List[Dict[str, Any]]
-    configured_providers: List[str]
-
-
-@router.get("/provider", response_model=CurrentProviderResponse)
-async def get_current_provider():
-    """
-    Get current LLM provider information.
-
-    Returns the current provider, model, and list of all available providers.
-
-    ## Response Example
-    ```json
-    {
-      "current_provider": "qwen",
-      "current_model": "qwen-plus",
-      "available_providers": [
-        {
-          "id": "openai",
-          "name": "OpenAI",
-          "default_model": "gpt-4o-mini",
-          "requires_api_key": true,
-          "description": "OpenAI GPT models"
-        },
-        ...
-      ],
-      "configured_providers": ["qwen", "openai"]
-    }
-    ```
-    """
-    try:
-        # Use uncached settings to get latest configuration
-        settings = get_settings_uncached()
-        available = get_available_providers()
-
-        # Get current provider from environment (source of truth)
-        current_provider = os.environ.get("LLM_PROVIDER", settings.llm_provider)
-
-        # Get current model from obfuscated storage (most reliable source)
-        current_model = ""
-        try:
-            credentials = KeyObfuscator.load_credentials()
-            if current_provider in credentials and "model" in credentials[current_provider]:
-                current_model = credentials[current_provider]["model"]
-        except Exception:
-            pass
-
-        # Fallback to environment variable if not in storage
-        if not current_model:
-            env_model_key = f"{current_provider.upper()}_MODEL"
-            current_model = os.environ.get(env_model_key, "")
-
-        # Get configured providers (exclude internal keys like _current_provider)
-        try:
-            credentials = KeyObfuscator.load_credentials()
-            configured = [k for k in credentials.keys() if not k.startswith("_")]
-        except Exception:
-            configured = []
-
-        return CurrentProviderResponse(
-            current_provider=current_provider,
-            current_model=current_model,
-            available_providers=available,
-            configured_providers=configured,
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get provider info: {str(e)}",
-        )
-
-
-class SwitchProviderRequest(BaseModel):
-    """Request model for switching provider."""
-    provider: str = Field(..., description="Target provider ID (e.g., qwen, openai)")
-
-
-class SwitchProviderResponse(BaseModel):
-    """Response model for switch provider result."""
-    success: bool
-    provider: str
-    model: str
-    message: str
-
-
-@router.post("/switch-provider", response_model=SwitchProviderResponse)
-async def switch_provider(request: SwitchProviderRequest):
-    """
-    Switch to a different LLM provider (hot-switch).
-
-    This endpoint allows switching between pre-configured LLM providers
-    without restarting the service. The provider must have been
-    previously configured via /save endpoint.
-
-    ## Request Example
-    ```json
-    {
-      "provider": "deepseek"
-    }
-    ```
-
-    ## Response Example
-    ```json
-    {
-      "success": true,
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "message": "Switched to deepseek (deepseek-chat)"
-    }
-    ```
-
-    ## Errors
-    - 400: Provider not in the supported list
-    - 404: Provider not configured (use /save first)
-    - 500: Failed to switch (internal error)
-    """
-    try:
-        # Clear settings cache to ensure fresh reads
-        clear_settings_cache()
-
-        # Validate provider
-        available = get_available_providers()
-        available_ids = [p["id"] for p in available]
-
-        if request.provider not in available_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported provider: {request.provider}. "
-                f"Available providers: {', '.join(available_ids)}",
-            )
-
-        # Load credentials to check if configured and get model name
-        credentials = KeyObfuscator.load_credentials()
-        model = ""
-        if request.provider in credentials:
-            model = credentials[request.provider].get("model", "")
-
-        if request.provider not in credentials:
-            # Special case: ollama doesn't need API key
-            if request.provider != "ollama":
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Provider '{request.provider}' is not configured. "
-                    f"Please use POST /api/config/save to configure it first.",
-                )
-
-        # Update environment variable
-        os.environ['LLM_PROVIDER'] = request.provider
-
-        # Persist provider choice in obfuscated storage
-        credentials["_current_provider"] = request.provider
-        KeyObfuscator.save_credentials(credentials)
-
-        # Reset agent manager to force recreation with new provider
-        from app.api.chat import reset_agent_manager, get_agent_manager
-        reset_agent_manager()
-
-        # Get new agent manager (will create with new provider)
-        agent = get_agent_manager()
-
-        return SwitchProviderResponse(
-            success=True,
-            provider=request.provider,
-            model=model,
-            message=f"Switched to {request.provider} ({model})",
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to switch provider: {str(e)}",
-        )

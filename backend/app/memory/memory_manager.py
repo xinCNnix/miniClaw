@@ -223,3 +223,17 @@ def get_memory_manager() -> MemoryManager:
         _memory_manager_instance = MemoryManager()
 
     return _memory_manager_instance
+
+
+def reset_memory_manager() -> None:
+    """
+    Reset the global memory manager to force recreation on next access.
+
+    This should be called when LLM configuration is updated to ensure
+    the new configuration is picked up immediately.
+    """
+    global _memory_manager_instance
+    _memory_manager_instance = None
+    # Also reset the extractor since it holds an LLM instance
+    from app.memory.extractor import reset_memory_extractor
+    reset_memory_extractor()

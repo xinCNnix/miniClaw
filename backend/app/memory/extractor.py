@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.memory import Memory, MemoryExtractionResult
 from app.memory.session import get_session_manager
-from app.core.llm import get_default_llm
+from app.core.llm import get_default_llm, create_current_llm
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,9 @@ class MemoryExtractor:
         Initialize the memory extractor.
 
         Args:
-            llm: Optional LLM instance. If not provided, uses default LLM.
+            llm: Optional LLM instance. If not provided, uses current active LLM.
         """
-        self.llm = llm or get_default_llm()
+        self.llm = llm or create_current_llm()
 
     async def extract(
         self,
@@ -388,3 +388,14 @@ def get_memory_extractor() -> MemoryExtractor:
         _extractor_instance = MemoryExtractor()
 
     return _extractor_instance
+
+
+def reset_memory_extractor() -> None:
+    """
+    Reset the global memory extractor to force recreation on next access.
+
+    This should be called when LLM configuration is updated to ensure
+    the new configuration is picked up immediately.
+    """
+    global _extractor_instance
+    _extractor_instance = None

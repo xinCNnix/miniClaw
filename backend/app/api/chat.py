@@ -45,6 +45,10 @@ def reset_agent_manager() -> None:
     _agent_manager = None
     _current_llm_id = None
 
+    # Also reset memory manager to ensure it uses the new LLM
+    from app.memory.memory_manager import reset_memory_manager
+    reset_memory_manager()
+
 
 def get_agent_manager() -> AgentManager:
     """
