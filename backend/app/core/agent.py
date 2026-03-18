@@ -325,20 +325,62 @@ class AgentManager:
 
                     # 构建完整 response 对象
                     if full_response_chunks:
-                        # 使用最后一个 chunk（包含 tool_calls 信息）
-                        response = full_response_chunks[-1]
+                        # 从所有 chunks 中找到第一个包含有效 tool_calls 的 chunk
+                        # 修复：最后一个 chunk 可能没有 tool_calls
+                        response_with_tool_calls = None
+                        for chunk in full_response_chunks:
+                            if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                                # 检查是否有有效的 tool_calls（非空名称）
+                                valid_calls = [tc for tc in chunk.tool_calls if tc.get('name')]
+                                if valid_calls:
+                                    response_with_tool_calls = chunk
+                                    logger.debug(f"[DEBUG] Found chunk with tool_calls: {len(valid_calls)} calls")
+                                    break
+
+                        # 如果没找到有 tool_calls 的 chunk，使用最后一个 chunk
+                        if response_with_tool_calls is None:
+                            response_with_tool_calls = full_response_chunks[-1]
+                            logger.debug(f"[DEBUG] No chunk with tool_calls found, using last chunk")
+
+                        response = response_with_tool_calls
 
                         # 确保包含完整的 content（合并所有文本）
-                        if all_content and hasattr(response, 'content'):
+                        if all_content:
                             from langchain_core.messages import AIMessage
                             merged_content = ''.join(all_content)
-                            # 创建新的 AIMessage，保留 tool_calls 但使用合并的 content
+
+                            # 获取 tool_calls（优先使用找到的有 tool_calls 的 chunk）
+                            tool_calls_to_use = getattr(response, 'tool_calls', [])
+
+                            # 如果 tool_calls 的 args 是空的，尝试从 tool_call_chunks 组装
+                            if tool_calls_to_use:
+                                for i, tc in enumerate(tool_calls_to_use):
+                                    if not tc.get('args') or tc.get('args') == {}:
+                                        # 从 tool_call_chunks 组装 args
+                                        args_parts = []
+                                        for chunk in full_response_chunks:
+                                            if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                                                for tcc in chunk.tool_call_chunks:
+                                                    if tcc.get('index') == i and tcc.get('args'):
+                                                        args_parts.append(tcc['args'])
+
+                                        if args_parts:
+                                            args_str = ''.join(args_parts)
+                                            try:
+                                                import json
+                                                parsed_args = json.loads(args_str)
+                                                tool_calls_to_use[i]['args'] = parsed_args
+                                                logger.debug(f"[DEBUG] Assembled args for tool {i}: {parsed_args}")
+                                            except json.JSONDecodeError as e:
+                                                logger.warning(f"[DEBUG] Failed to parse args for tool {i}: {e}")
+
+                            # 创建新的 AIMessage
                             response = AIMessage(
                                 content=merged_content,
-                                tool_calls=getattr(response, 'tool_calls', []),
+                                tool_calls=tool_calls_to_use,
                                 additional_kwargs=getattr(response, 'additional_kwargs', {}),
                             )
-                            logger.debug(f"[DEBUG] Merged content length: {len(merged_content)}, chunks: {len(all_content)}")
+                            logger.debug(f"[DEBUG] Merged content length: {len(merged_content)}, chunks: {len(all_content)}, tool_calls: {len(tool_calls_to_use)}")
                     else:
                         # 如果没有 chunks（异常情况），使用空响应
                         from langchain_core.messages import AIMessage

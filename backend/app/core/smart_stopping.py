@@ -88,15 +88,40 @@ class SmartToolStopping:
             "在吗", "在不在", "你是谁", "what's up", "sup"
         ]
 
-        # 去除空格和标点
+        # 检查是否包含问候语
+        has_greeting = any(greeting in message_lower for greeting in greetings)
+
+        # 如果没有问候语，肯定不是简单问候
+        if not has_greeting:
+            return False
+
+        # ✅ 修复：检查是否包含请求关键词（如果有，则不是简单问候）
+        request_keywords = [
+            "请", "帮我", "搜索", "检索", "查找", "分析", "写", "生成",
+            "please", "help", "search", "find", "analyze", "write", "generate",
+            "arxiv", "论文", "资料", "最新", "recent", "paper"
+        ]
+
+        has_request = any(keyword in message_lower for keyword in request_keywords)
+
+        # 如果有请求关键词，不是简单问候
+        if has_request:
+            logger.debug(f"[SMART_STOP] 消息包含请求关键词，不是简单问候: {message_lower[:50]}")
+            return False
+
+        # ✅ 修复：检查消息长度（简单问候应该很短）
+        # 去除空格和标点后的纯文本
         import re
         clean_message = re.sub(r'[^\w\u4e00-\u9fff]', '', message_lower)
 
-        for greeting in greetings:
-            if greeting in clean_message:
-                return True
+        # 如果消息很长（>20个字符），不是简单问候
+        if len(clean_message) > 20:
+            logger.debug(f"[SMART_STOP] 消息过长({len(clean_message)}字符)，不是简单问候")
+            return False
 
-        return False
+        # 通过所有检查，确认为简单问候
+        logger.debug(f"[SMART_STOP] 检测到简单问候: {message_lower[:30]}")
+        return True
 
     def _is_redundant_tool_call(self, tool_name: str, tool_args: Dict) -> bool:
         """检测冗余工具调用"""

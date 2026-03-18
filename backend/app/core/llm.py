@@ -11,10 +11,11 @@ This module handles LLM initialization with support for multiple providers:
 - Custom OpenAI-compatible APIs
 """
 
-from typing import Literal
+from typing import Literal, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 from app.config import settings, get_settings
+from app.config import LLMConfig as PydanticLLMConfig
 
 LLMProvider = Literal["openai", "deepseek", "qwen", "ollama", "claude", "gemini", "custom"]
 
@@ -125,7 +126,7 @@ def create_llm(
         api_key=config["api_key"],
         model=config["model"],
         temperature=config["temperature"],
-        max_tokens=2000,
+        max_tokens=4000,  # Increased from 2000 to prevent truncation
         streaming=True,  # Enable streaming for SSE
     )
 
@@ -194,3 +195,62 @@ def validate_provider_config(provider: LLMProvider) -> tuple[bool, str]:
         return False, f"API key appears invalid for provider '{provider}'"
     else:
         return True, ""
+
+
+# ============================================================================
+# New Multi-LLM Support Functions
+# ============================================================================
+
+def create_llm_from_config(llm_config: PydanticLLMConfig) -> BaseChatModel:
+    """
+    Create an LLM instance from LLMConfig.
+
+    Args:
+        llm_config: LLMConfig object
+
+    Returns:
+        Configured ChatOpenAI instance
+
+    Raises:
+        ValueError: If configuration is invalid
+    """
+    # 验证配置
+    if not llm_config.model:
+        raise ValueError(f"Model name not configured for LLM {llm_config.id}")
+
+    provider = llm_config.provider
+    if provider != "ollama" and not llm_config.api_key:
+        raise ValueError(f"API key not found for LLM {llm_config.id}")
+
+    # 创建 ChatOpenAI 实例
+    llm = ChatOpenAI(
+        base_url=llm_config.base_url,
+        api_key=llm_config.api_key,
+        model=llm_config.model,
+        temperature=0.1,
+        max_tokens=4000,  # Increased from 2000 to prevent truncation
+        streaming=True,  # Enable streaming for SSE
+    )
+
+    return llm
+
+
+def create_current_llm() -> BaseChatModel:
+    """
+    Create LLM instance for current active configuration.
+
+    Returns:
+        Configured LLM instance
+
+    Raises:
+        ValueError: If current LLM not configured
+    """
+    from app.core.llm_config import get_current_llm_id, load_llm_config
+
+    current_llm_id = get_current_llm_id()
+    llm_config = load_llm_config(current_llm_id)
+
+    if llm_config is None:
+        raise ValueError(f"Current LLM {current_llm_id} not found")
+
+    return create_llm_from_config(llm_config)
