@@ -219,11 +219,28 @@ def detect_task_boundary(msg1: dict, msg2: dict) -> bool:
         except:
             pass
 
-    # Paper/Code/File switches
+    # Paper/Code/File switches (with time gap check)
     if (has_keywords(content1, paper_keywords) and has_keywords(content2, code_keywords)) or \
        (has_keywords(content1, code_keywords) and has_keywords(content2, paper_keywords)):
-        logger.info("Task boundary: paper ↔ code")
-        return True
+        # Check time gap to avoid false positives for continuous workflows
+        try:
+            time1 = datetime.fromisoformat(msg1.get("timestamp", ""))
+            time2 = datetime.fromisoformat(msg2.get("timestamp", ""))
+            time_diff = (time2 - time1).total_seconds()
+
+            # Only treat as task boundary if there's a significant time gap
+            # This prevents false positives for continuous workflows (e.g., research → write doc)
+            if time_diff > 300:  # 5 minutes
+                logger.info(f"Task boundary: paper ↔ code (time gap: {time_diff}s)")
+                return True
+            else:
+                logger.info(f"Paper ↔ code detected but time gap is short ({time_diff}s), treating as continuous workflow")
+                return False
+        except Exception as e:
+            # If time parsing fails, be conservative and treat as boundary
+            logger.warning(f"Failed to parse timestamps for paper/code boundary: {e}")
+            logger.info("Task boundary: paper ↔ code (conservative)")
+            return True
 
     return False
 
