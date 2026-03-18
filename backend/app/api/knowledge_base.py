@@ -579,7 +579,7 @@ async def check_batch_upload(
     )
 
 
-@router.post("/upload/batch", response_model=KBUploadTaskResponse)
+@router.post("/upload/batch", response_model=KBBatchUploadComplete)
 async def upload_batch(
     background_tasks: BackgroundTasks,
     upload_token: Optional[str] = None,
@@ -764,10 +764,12 @@ async def upload_batch(
         message=f"Batch upload completed: {successful} successful, {failed} failed",
     )
 
-    return KBUploadTaskResponse(
-        success=True,
+    return KBBatchUploadComplete(
         task_id=batch_task_id,
-        filename=f"batch_upload_{batch_task_id}",
+        total=len(files),
+        successful=successful,
+        failed=failed,
+        failed_files=[KBRejectedFile(**f) for f in failed_files],
         message=f"Batch upload completed: {successful} succeeded, {failed} failed",
     )
 
