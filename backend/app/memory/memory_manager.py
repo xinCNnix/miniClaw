@@ -78,14 +78,14 @@ class MemoryManager:
 
             if not extraction_result.memories:
                 logger.info(f"No memories extracted from session {session_id}")
-                return extraction_result
+                # Don't return early - still need to index conversation for semantic search
+            else:
+                logger.info(
+                    f"Extracted {len(extraction_result.memories)} memories, "
+                    f"summary: {extraction_result.summary[:100]}..."
+                )
 
-            logger.info(
-                f"Extracted {len(extraction_result.memories)} memories, "
-                f"summary: {extraction_result.summary[:100]}..."
-            )
-
-            # Step 2: Store conversation in vector store
+            # Step 2: Store conversation in vector store (always do this, even if extraction fails)
             if self.settings.enable_semantic_search:
                 await self.store_conversation_vector(session_id)
                 logger.info(f"Stored conversation in vector store: {session_id}")
