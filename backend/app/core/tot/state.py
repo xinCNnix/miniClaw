@@ -94,6 +94,10 @@ class ToTState(TypedDict):
     research_sources: Optional[List[Dict[str, Any]]]
     research_stage: Optional[str]
 
+    # Tool Execution Tracking (Phase 1 improvement)
+    collected_info: Dict[str, Any]  # Information collected from tool results
+    information_gaps: List[str]  # Gaps that still need investigation
+
     # Results
     final_answer: Optional[str]
 

@@ -226,6 +226,40 @@ class Settings(BaseSettings):
     ]
     tot_checkpoint_path: str = "data/tot_checkpoints.db"
 
+    # ========== ToT Tool Call Validation (Phase 1) ==========
+    tot_enable_tool_validation: bool = True
+    tot_max_tool_retries: int = 2
+
+    # ========== ToT Smart Stopping (Phase 2 - Relaxed for Research) ==========
+    # NOTE: In ToT mode, each depth level has branching_factor thoughts
+    # Total nodes can be: 1 + BF + BF^2 + BF^3 + ... = (BF^(depth+1) - 1) / (BF - 1)
+    # Example: BF=3, depth=4 → 1+3+9+27+81 = 121 nodes
+    # Each node may have 1-2 tool calls, so total can be 100-300+ calls!
+    tot_enable_smart_stopping: bool = True
+    tot_min_successful_tools: int = 50  # Relaxed: 50 successful tools (not 10)
+    tot_redundancy_window: int = 15  # Increased: 15-tool window (not 5)
+    tot_score_plateau_threshold: float = 0.3  # More sensitive plateau detection
+    tot_enable_llm_evaluation: bool = True  # Can be disabled to save cost
+    tot_llm_eval_interval: int = 3  # Evaluate every N depths (not rounds)
+    tot_max_depth_multiplier: float = 2.0  # Allow exceeding max_depth by this factor
+
+    # ========== ToT Path Selection (Phase 3 - Beam Search + Backtracking) ==========
+    tot_enable_beam_search: bool = True  # Enable Beam Search (vs greedy)
+    tot_beam_width: int = 3  # Number of candidate paths to maintain
+    tot_path_score_weights: dict = {
+        "eval_score": 0.5,  # Average evaluation score
+        "tool_success": 0.3,  # Tool execution success rate
+        "diversity": 0.15,  # Information diversity
+        "length_penalty": 0.05  # Shorter paths preferred
+    }
+    tot_enable_backtracking: bool = True  # Enable backtracking on failures
+    tot_backtrack_failure_threshold: float = 0.5  # Failure rate to trigger backtrack
+    tot_backtrack_plateau_threshold: float = 0.3  # Score improvement to trigger backtrack
+
+    # ========== ToT Tool Result Cache (Phase 4) ==========
+    tot_enable_cache: bool = True  # Enable tool result caching
+    tot_cache_ttl: int = 300  # Cache TTL in seconds (5 minutes)
+
     # Deep Research Configuration
     enable_deep_research: bool = True
     research_mode: Literal["heuristic", "analytical", "exhaustive"] = "heuristic"
@@ -314,10 +348,9 @@ class Settings(BaseSettings):
     truncation_marker: str = "...[truncated]"
 
     # Agent Execution
-    max_tool_rounds: int = 50  # Maximum rounds of tool calling (prevents infinite loops)
-    enable_smart_stopping: bool = True  # Enable intelligent tool stopping (redundancy detection + sufficiency evaluation)
-    redundancy_detection_window: int = 3  # Window size for detecting redundant tool calls
-    sufficiency_evaluation_interval: int = 5  # Evaluate information sufficiency every N rounds (increased from 2)
+    max_tool_rounds: int = 60  # Maximum rounds of tool calling (hard limit to prevent infinite loops)
+    enable_smart_stopping: bool = True  # Enable intelligent tool stopping
+    sufficiency_evaluation_interval: int = 5  # Let LLM evaluate every N rounds
 
     # Performance Optimization: Caching
     enable_semantic_search_cache: bool = True

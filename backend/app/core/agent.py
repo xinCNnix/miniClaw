@@ -16,7 +16,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from app.core.llm import create_llm, LLMProvider
 from app.config import get_settings
 from app.logging_config import get_agent_logger
-from app.core.smart_stopping import should_stop_tool_calling
+from app.core.smart_stopping import (
+    should_stop_before_execution,
+    should_stop_after_execution,
+)
 
 # Multi-round tool calling configuration
 MAX_TOOL_ROUNDS = 10  # Maximum rounds of tool calling (prevents infinite loops)
@@ -268,6 +271,11 @@ class AgentManager:
             logger.debug(f"Messages count: {len(messages)}")
             logger.debug(f"System prompt length: {len(system_prompt)} chars")
 
+            # Get settings early (needed before smart stopping reset)
+            settings = get_settings()
+
+            # 智能停止已在 SmartToolStopping 类中管理状态
+
             self.system_prompt = system_prompt
             lc_messages = self._convert_messages(messages, system_prompt)
 
@@ -275,7 +283,6 @@ class AgentManager:
             logger.info("Thinking...")
 
             # Get max_tool_rounds from settings
-            settings = get_settings()
             max_tool_rounds = settings.max_tool_rounds
 
             # Multi-round tool calling loop
@@ -422,19 +429,18 @@ class AgentManager:
                 tool_calls = response.tool_calls
                 logger.info(f"[Round {round_count + 1}] Tool calls requested: {len(tool_calls)}")
 
-                # === 智能停止检查 ===
+                # === 智能停止检查（工具执行前）===
                 # 检查是否应该停止工具调用（简单问候、冗余检测等）
                 for tool_call in tool_calls:
                     tool_name = tool_call.get('name', '')
                     tool_args = tool_call.get('args', {})
 
-                    should_stop, stop_reason = should_stop_tool_calling(
+                    should_stop, stop_reason = should_stop_before_execution(
                         settings=settings,
                         round_count=round_count,
                         tool_name=tool_name,
                         tool_args=tool_args,
-                        user_message=messages[-1].get('content', '') if messages else '',
-                        current_round_time=llm_duration
+                        user_message=messages[-1].get('content', '') if messages else ''
                     )
 
                     if should_stop:
@@ -541,6 +547,31 @@ class AgentManager:
                 # Increment round count and continue
                 round_count += 1
                 logger.info(f"[Round {round_count}] Completed, checking if more tools needed...")
+
+                # === 智能停止检查（工具执行后）===
+                # 每隔 N 轮让 LLM 评估是否应该停止
+                if settings.enable_smart_stopping:
+                    should_stop, stop_reason = await should_stop_after_execution(
+                        settings=settings,
+                        round_count=round_count,
+                        user_message=messages[-1].get('content', '') if messages else '',
+                        conversation_messages=lc_messages,
+                        llm=self.llm
+                    )
+
+                    if should_stop:
+                        logger.info(f"[SMART_STOP] {stop_reason}")
+                        logger.info(f"[SMART_STOP] 停止工具调用，生成最终响应")
+
+                        # 生成最终响应
+                        final_response = await self.llm.ainvoke(lc_messages)
+                        if hasattr(final_response, 'content') and final_response.content:
+                            yield {
+                                "type": "content_delta",
+                                "content": final_response.content,
+                            }
+                        return  # 退出循环
+                # === 智能停止检查结束 ===
 
             # Check if we hit the max rounds limit
             if round_count >= max_tool_rounds:

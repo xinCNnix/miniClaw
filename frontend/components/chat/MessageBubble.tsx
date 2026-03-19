@@ -19,6 +19,7 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
 
   return (
     <div
+      data-testid={isUser ? "message-user" : "message-assistant"}
       className={clsx(
         "flex gap-3",
         isUser ? "justify-end" : "justify-start",
