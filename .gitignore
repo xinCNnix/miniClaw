@@ -273,3 +273,9 @@ TOT_TEST_PLAN.md
 
 # Skills directory (user-specific, not tracked in git)
 backend/data/skills/
+
+# Encrypted credentials (contains API keys)
+backend/data/credentials.encrypted
+backend/data/credentials.json
+*.key
+
