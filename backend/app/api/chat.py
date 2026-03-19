@@ -654,7 +654,7 @@ async def chat(request: ChatRequest):
         system_prompt = build_system_prompt(
             session_data={
                 "user_context": request.context,
-                "recent_history": recent_history,
+                "semantic_history": recent_history,
             }
         )
     except Exception as e:
