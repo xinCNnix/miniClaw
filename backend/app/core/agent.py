@@ -377,58 +377,58 @@ class AgentManager:
 
                         response = response_with_tool_calls
 
+                        # 获取 tool_calls（优先使用找到的有 tool_calls 的 chunk）
+                        tool_calls_to_use = getattr(response, 'tool_calls', [])
+
+                        logger.debug(f"[ASSEMBLY] tool_calls count: {len(tool_calls_to_use)}")
+
+                        # 🔧 修复：即使 all_content 为空，也要处理 tool_calls 的 args 组装
+                        # 这解决了 LLM 只返回工具调用而没有文本内容时，args 为空导致验证失败的问题
+                        if tool_calls_to_use:
+                            for i, tc in enumerate(tool_calls_to_use):
+                                tc_args = tc.get('args')
+                                logger.debug(f"[ASSEMBLY] Tool {i}: name={tc.get('name')}, "
+                                           f"has_args={tc_args is not None}, args_empty={tc_args == {}}")
+
+                                if not tc.get('args') or tc.get('args') == {}:
+                                    logger.warning(f"[ASSEMBLY] Tool {i} ({tc.get('name')}) has empty args, attempting assembly")
+                                    # 从 tool_call_chunks 组装 args
+                                    args_parts = []
+                                    for chunk_idx, chunk in enumerate(full_response_chunks):
+                                        if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                                            for tcc in chunk.tool_call_chunks:
+                                                if tcc.get('index') == i and tcc.get('args'):
+                                                    args_parts.append(tcc['args'])
+                                                    logger.debug(f"[ASSEMBLY] Found args part at chunk {chunk_idx}: "
+                                                               f"len={len(tcc['args'])}")
+
+                                    logger.debug(f"[ASSEMBLY] Total args parts for tool {i}: {len(args_parts)}")
+
+                                    if args_parts:
+                                        args_str = ''.join(args_parts)
+                                        logger.debug(f"[ASSEMBLY] Raw args string for tool {i}: {args_str}")
+                                        try:
+                                            import json
+                                            parsed_args = json.loads(args_str)
+                                            tool_calls_to_use[i]['args'] = parsed_args
+                                            logger.info(f"[ASSEMBLY] ✓ Successfully assembled args for tool {i}: {parsed_args}")
+                                        except json.JSONDecodeError as e:
+                                            logger.error(f"[ASSEMBLY] ✗ Failed to parse args for tool {i}: {e}")
+                                            logger.error(f"[ASSEMBLY] Raw parts: {args_parts}")
+                                    else:
+                                        logger.error(f"[ASSEMBLY] ✗ No args parts found for tool {i}, args will remain {{}}")
+
                         # 确保包含完整的 content（合并所有文本）
-                        if all_content:
-                            from langchain_core.messages import AIMessage
-                            merged_content = ''.join(all_content)
+                        from langchain_core.messages import AIMessage
+                        merged_content = ''.join(all_content) if all_content else ""
 
-                            # 获取 tool_calls（优先使用找到的有 tool_calls 的 chunk）
-                            tool_calls_to_use = getattr(response, 'tool_calls', [])
-
-                            logger.debug(f"[ASSEMBLY] tool_calls count: {len(tool_calls_to_use)}")
-
-                            # 如果 tool_calls 的 args 是空的，尝试从 tool_call_chunks 组装
-                            if tool_calls_to_use:
-                                for i, tc in enumerate(tool_calls_to_use):
-                                    tc_args = tc.get('args')
-                                    logger.debug(f"[ASSEMBLY] Tool {i}: name={tc.get('name')}, "
-                                               f"has_args={tc_args is not None}, args_empty={tc_args == {}}")
-
-                                    if not tc.get('args') or tc.get('args') == {}:
-                                        logger.warning(f"[ASSEMBLY] Tool {i} ({tc.get('name')}) has empty args, attempting assembly")
-                                        # 从 tool_call_chunks 组装 args
-                                        args_parts = []
-                                        for chunk_idx, chunk in enumerate(full_response_chunks):
-                                            if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
-                                                for tcc in chunk.tool_call_chunks:
-                                                    if tcc.get('index') == i and tcc.get('args'):
-                                                        args_parts.append(tcc['args'])
-                                                        logger.debug(f"[ASSEMBLY] Found args part at chunk {chunk_idx}: "
-                                                                   f"len={len(tcc['args'])}")
-
-                                        logger.debug(f"[ASSEMBLY] Total args parts for tool {i}: {len(args_parts)}")
-
-                                        if args_parts:
-                                            args_str = ''.join(args_parts)
-                                            logger.debug(f"[ASSEMBLY] Raw args string for tool {i}: {args_str}")
-                                            try:
-                                                import json
-                                                parsed_args = json.loads(args_str)
-                                                tool_calls_to_use[i]['args'] = parsed_args
-                                                logger.info(f"[ASSEMBLY] ✓ Successfully assembled args for tool {i}: {parsed_args}")
-                                            except json.JSONDecodeError as e:
-                                                logger.error(f"[ASSEMBLY] ✗ Failed to parse args for tool {i}: {e}")
-                                                logger.error(f"[ASSEMBLY] Raw parts: {args_parts}")
-                                        else:
-                                            logger.error(f"[ASSEMBLY] ✗ No args parts found for tool {i}, args will remain {{}}")
-
-                            # 创建新的 AIMessage
-                            response = AIMessage(
-                                content=merged_content,
-                                tool_calls=tool_calls_to_use,
-                                additional_kwargs=getattr(response, 'additional_kwargs', {}),
-                            )
-                            logger.debug(f"[DEBUG] Merged content length: {len(merged_content)}, chunks: {len(all_content)}, tool_calls: {len(tool_calls_to_use)}")
+                        # 创建新的 AIMessage
+                        response = AIMessage(
+                            content=merged_content,
+                            tool_calls=tool_calls_to_use,
+                            additional_kwargs=getattr(response, 'additional_kwargs', {}),
+                        )
+                        logger.debug(f"[DEBUG] Merged content length: {len(merged_content)}, chunks: {len(all_content)}, tool_calls: {len(tool_calls_to_use)}")
                     else:
                         # 如果没有 chunks（异常情况），使用空响应
                         from langchain_core.messages import AIMessage
