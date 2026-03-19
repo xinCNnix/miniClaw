@@ -15,10 +15,11 @@ interface UseChatReturn {
   thinkingEvents: ThinkingEvent[]
   isLoading: boolean
   currentSessionId: string | null
-  sendMessage: (content: string, images?: any[]) => Promise<void>
+  sendMessage: (content: string, images?: any[], context?: Record<string, any>) => Promise<void>
   stopGeneration: () => void
   clearMessages: () => void
   loadMessages: (messages: Message[]) => void
+  loadSessionMessages: (sessionId: string) => Promise<Message[]>
   setSession: (sessionId: string) => void
   newSession: () => Promise<void>
 }
@@ -32,7 +33,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  const sendMessage = useCallback(async (content: string, images: any[] = []) => {
+  const sendMessage = useCallback(async (content: string, images: any[] = [], context: Record<string, any> = {}) => {
     // Add user message
     const userMessage: Message = {
       role: "user",
@@ -58,6 +59,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         message: content,
         session_id: currentSessionId || "default",
         stream: true,
+        context: Object.keys(context).length > 0 ? context : undefined,
         ...(images.length > 0 && { images: images.map(img => ({
           type: "image",
           content: img.base64,
@@ -111,7 +113,99 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                 case "thinking_start":
                   setThinkingEvents((prev) => [
                     ...prev,
-                    { type: "thinking_start", timestamp: new Date().toISOString() },
+                    {
+                      type: "thinking_start",
+                      timestamp: new Date().toISOString(),
+                      mode: data.mode || 'simple'
+                    },
+                  ])
+                  break
+
+                // ToT events
+                case "tot_reasoning_start":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_reasoning_start",
+                      mode: "tot",
+                      max_depth: data.max_depth,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_thoughts_generated":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_thoughts_generated",
+                      depth: data.depth,
+                      count: data.count,
+                      thoughts: data.thoughts,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_thoughts_evaluated":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_thoughts_evaluated",
+                      best_path: data.best_path,
+                      best_score: data.best_score,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_tools_executed":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_tools_executed",
+                      thought_id: data.thought_id,
+                      content: data.content,
+                      tool_count: data.tool_count,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_tree_update":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_tree_update",
+                      tree: data.tree,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_termination":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_termination",
+                      reason: data.reason,
+                      score: data.score,
+                      depth: data.depth,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_reasoning_complete":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_reasoning_complete",
+                      final_answer: data.final_answer,
+                      best_path: data.best_path,
+                      total_thoughts: data.total_thoughts,
+                      timestamp: new Date().toISOString(),
+                    },
                   ])
                   break
 
@@ -238,6 +332,35 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
     setThinkingEvents([])
   }, [])
 
+  const loadSessionMessages = useCallback(async (sessionId: string) => {
+    try {
+      const response = await fetch(`${apiUrl || ""}/api/sessions/${sessionId}/messages`)
+
+      if (!response.ok) {
+        throw new Error(`Failed to load session: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+
+      // Convert backend messages to frontend format
+      const messages: Message[] = data.messages.map((msg: any) => ({
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
+        ...(msg.images && { images: msg.images }),
+      }))
+
+      loadMessages(messages)
+      setCurrentSessionId(sessionId)
+
+      return messages
+    } catch (error) {
+      console.error("Failed to load session messages:", error)
+      throw error
+    }
+  }, [apiUrl, loadMessages])
+
   const setSession = useCallback((sessionId: string) => {
     setCurrentSessionId(sessionId)
   }, [])
@@ -256,6 +379,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
     stopGeneration,
     clearMessages,
     loadMessages,
+    loadSessionMessages,
     setSession,
     newSession,
   }

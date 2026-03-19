@@ -120,10 +120,15 @@ class KeyObfuscator:
         # Obfuscate each API key
         obfuscated_data = {}
         for provider, config in credentials.items():
-            obfuscated_config = config.copy()
-            if "api_key" in config:
-                obfuscated_config["api_key"] = cls.obfuscate(config["api_key"])
-            obfuscated_data[provider] = obfuscated_config
+            # Handle both dict config (provider settings) and non-dict values (e.g., _current_provider)
+            if isinstance(config, dict):
+                obfuscated_config = config.copy()
+                if "api_key" in config:
+                    obfuscated_config["api_key"] = cls.obfuscate(config["api_key"])
+                obfuscated_data[provider] = obfuscated_config
+            else:
+                # Store non-dict values as-is (e.g., "_current_provider": "qwen")
+                obfuscated_data[provider] = config
 
         # Ensure directory exists
         cls.CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -150,14 +155,19 @@ class KeyObfuscator:
             # Deobfuscate each API key
             credentials = {}
             for provider, config in obfuscated_data.items():
-                deobfuscated_config = config.copy()
-                if "api_key" in config:
-                    decrypted = cls.deobfuscate(config["api_key"])
-                    if decrypted is None:
-                        # Deobfuscation failed (wrong machine or corrupted)
-                        continue
-                    deobfuscated_config["api_key"] = decrypted
-                credentials[provider] = deobfuscated_config
+                # Handle both dict config (provider settings) and non-dict values
+                if isinstance(config, dict):
+                    deobfuscated_config = config.copy()
+                    if "api_key" in config:
+                        decrypted = cls.deobfuscate(config["api_key"])
+                        if decrypted is None:
+                            # Deobfuscation failed (wrong machine or corrupted)
+                            continue
+                        deobfuscated_config["api_key"] = decrypted
+                    credentials[provider] = deobfuscated_config
+                else:
+                    # Store non-dict values as-is (e.g., "_current_provider": "qwen")
+                    credentials[provider] = config
 
             return credentials
 

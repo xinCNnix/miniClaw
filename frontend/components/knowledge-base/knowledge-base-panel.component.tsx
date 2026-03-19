@@ -222,7 +222,7 @@ export function KnowledgeBasePanel() {
       const response = await apiClient.uploadBatch(files, uploadToken);
 
       // Refresh document list if upload was successful
-      if (response.success) {
+      if (response.successful > 0) {
         await fetchDocuments();
       }
 
@@ -258,7 +258,7 @@ export function KnowledgeBasePanel() {
       const response = await apiClient.uploadFolder(zipFile);
 
       // Refresh document list if upload was successful
-      if (response.success) {
+      if (response.successful > 0) {
         await fetchDocuments();
       }
 
@@ -303,15 +303,14 @@ export function KnowledgeBasePanel() {
           error: null,
         });
       }
-    } catch (error: {
-      message?: string
-    }) {
+    } catch (error: unknown) {
+      const err = error as { message?: string }
       console.error('Upload failed:', error);
       setUploadStatus({
         isUploading: false,
         progress: 0,
         currentFile: null,
-        error: error.message || t('knowledge_base.error_upload_failed'),
+        error: err.message || t('knowledge_base.error_upload_failed'),
       });
     }
   };
@@ -524,7 +523,7 @@ export function KnowledgeBasePanel() {
           )}
           <p className="text-sm text-gray-600 mb-1">
             {uploadStatus.isUploading
-              ? t('knowledge_base.uploading', { filename: uploadStatus.currentFile })
+              ? t('knowledge_base.uploading', { filename: uploadStatus.currentFile || '' })
               : largeFileCheck.file
               ? t('knowledge_base.large_file_pending')
               : batchCheck.files

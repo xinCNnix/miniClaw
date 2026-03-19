@@ -170,6 +170,40 @@ const zhTranslations = {
     upload_only_images: '请只上传图片文件',
     upload_too_large: '图片 {name} 太大，请上传小于 10MB 的图片',
   },
+  // Research Mode
+  research_mode: {
+    title: '研究模式',
+    thinking_mode: '思考模式',
+    branching_factor: '分支因子',
+    thoughts_per_node: '个思路/节点',
+    narrow: '窄',
+    wide: '宽',
+    heuristic: {
+      name: '启发式推理',
+      name_en: 'Heuristic',
+      short_desc: '快速探索，时间敏感',
+      description: '快速启发式探索，适用于时间敏感的查询。{depth}层深度×{branching}宽度，{time}完成。'
+    },
+    analytical: {
+      name: '分析式推理',
+      name_en: 'Analytical',
+      short_desc: '系统分析，平衡深度',
+      description: '系统性分析，平衡深度与广度。{depth}层深度×{branching}宽度，{time}完成。'
+    },
+    exhaustive: {
+      name: '穷尽式推理',
+      name_en: 'Exhaustive',
+      short_desc: '极限穷尽，深度研究',
+      description: '深度探索所有可能性，适用于复杂研究。{depth}层深度×{branching}宽度，{time}完成。'
+    },
+    time_estimate: {
+      very_fast: '约3-5分钟',
+      fast: '约10-30分钟',
+      medium: '约30-60分钟',
+      slow: '约1-2小时',
+      very_slow: '约2-10小时'
+    }
+  },
   // Common
   common: {
     loading: '加载中...',
@@ -313,6 +347,40 @@ const enTranslations = {
     upload_image_title: 'Upload image',
     upload_only_images: 'Please upload only image files',
     upload_too_large: 'Image {name} is too large, please upload images smaller than 10MB',
+  },
+  // Research Mode
+  research_mode: {
+    title: 'Research Mode',
+    thinking_mode: 'Thinking Mode',
+    branching_factor: 'Branching Factor',
+    thoughts_per_node: 'thoughts/node',
+    narrow: 'narrow',
+    wide: 'wide',
+    heuristic: {
+      name: 'Heuristic Reasoning',
+      name_en: 'Heuristic',
+      short_desc: 'Fast exploration, time-sensitive',
+      description: 'Fast heuristic exploration for time-sensitive queries. Depth {depth}×Branching {branching}, {time}.'
+    },
+    analytical: {
+      name: 'Analytical Reasoning',
+      name_en: 'Analytical',
+      short_desc: 'Systematic analysis, balanced depth',
+      description: 'Systematic analysis balancing depth and breadth. Depth {depth}×Branching {branching}, {time}.'
+    },
+    exhaustive: {
+      name: 'Exhaustive Reasoning',
+      name_en: 'Exhaustive',
+      short_desc: 'Exhaustive exploration, deep research',
+      description: 'Deep exploration of all possibilities for complex research. Depth {depth}×Branching {branching}, {time}.'
+    },
+    time_estimate: {
+      very_fast: '3-5 minutes',
+      fast: '10-30 minutes',
+      medium: '30-60 minutes',
+      slow: '1-2 hours',
+      very_slow: '2-10 hours'
+    }
   },
   // Common
   common: {

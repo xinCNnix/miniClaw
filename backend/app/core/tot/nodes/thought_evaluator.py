@@ -173,6 +173,8 @@ def _update_best_path(state: ToTState):
 
     This implements a greedy approach: at each depth, select the highest-scoring
     thought to extend the best path.
+
+    Enhanced to prioritize thoughts with tool calls for research mode.
     """
     all_thoughts = state["thoughts"]
 
@@ -197,8 +199,22 @@ def _update_best_path(state: ToTState):
         thoughts_at_depth = depth_groups[depth]
 
         if depth == 0:
-            # Root: select highest scoring thought
-            best = max(thoughts_at_depth, key=lambda t: t.evaluation_score or 0.0)
+            # Root: prioritize thoughts with tool calls
+            thoughts_with_tools = [t for t in thoughts_at_depth if t.tool_calls]
+            thoughts_without_tools = [t for t in thoughts_at_depth if not t.tool_calls]
+
+            if thoughts_with_tools:
+                # Select highest scoring thought with tools
+                best = max(thoughts_with_tools, key=lambda t: t.evaluation_score or 0.0)
+                logger.info(f"Root depth: Selected thought WITH tools ({best.id}), score={best.evaluation_score:.2f}")
+            elif thoughts_without_tools:
+                # Fallback to thoughts without tools (should not happen in research mode)
+                best = max(thoughts_without_tools, key=lambda t: t.evaluation_score or 0.0)
+                logger.warning(f"Root depth: No thoughts with tools! Selected thought WITHOUT tools ({best.id})")
+            else:
+                # Should not happen
+                break
+
             best_path.append(best.id)
             previous_best = best
         else:
@@ -208,13 +224,23 @@ def _update_best_path(state: ToTState):
                 if t.parent_id == previous_best.id
             ]
 
-            if children:
-                best = max(children, key=lambda t: t.evaluation_score or 0.0)
-                best_path.append(best.id)
-                previous_best = best
-            else:
+            if not children:
                 # No children found, stop here
                 break
+
+            # Prioritize children with tool calls
+            children_with_tools = [t for t in children if t.tool_calls]
+            children_without_tools = [t for t in children if not t.tool_calls]
+
+            if children_with_tools:
+                best = max(children_with_tools, key=lambda t: t.evaluation_score or 0.0)
+                logger.info(f"Depth {depth}: Selected child WITH tools ({best.id}), score={best.evaluation_score:.2f}")
+            else:
+                best = max(children_without_tools, key=lambda t: t.evaluation_score or 0.0)
+                logger.warning(f"Depth {depth}: No children with tools! Selected child WITHOUT tools ({best.id})")
+
+            best_path.append(best.id)
+            previous_best = best
 
     state["best_path"] = best_path
 

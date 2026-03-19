@@ -194,9 +194,9 @@ async def _warmup_embedding_model(embedding_manager, timeout: int):
         logger.info(f"Starting embedding model warmup (timeout: {timeout}s)...")
         success = await embedding_manager.warmup(timeout=timeout)
         if success:
-            logger.info("✓ Embedding model warmed up successfully")
+            logger.info("[OK] Embedding model warmed up successfully")
         else:
-            logger.warning("✗ Embedding model warmup failed or timed out (requests will skip semantic search)")
+            logger.warning("[FAILED] Embedding model warmup failed or timed out (requests will skip semantic search)")
     except Exception as e:
         logger.error(f"Embedding warmup error: {e}", exc_info=True)
 

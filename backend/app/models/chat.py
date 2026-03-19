@@ -63,6 +63,11 @@ class ChatRequest(BaseModel):
         description="Image attachments for multimodal LLMs",
     )
 
+    enable_tot: Optional[bool] = Field(
+        default=None,
+        description="Force enable/disable ToT (overrides global setting)",
+    )
+
 
 class ToolCall(BaseModel):
     """Tool call information."""

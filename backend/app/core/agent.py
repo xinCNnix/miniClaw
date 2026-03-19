@@ -16,6 +16,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from app.core.llm import create_llm, LLMProvider
 from app.config import get_settings
 from app.logging_config import get_agent_logger
+from app.core.smart_stopping import should_stop_tool_calling
 
 # Multi-round tool calling configuration
 MAX_TOOL_ROUNDS = 10  # Maximum rounds of tool calling (prevents infinite loops)
@@ -33,6 +34,7 @@ class AgentManager:
     def __init__(
         self,
         tools: List[BaseTool],
+        llm: Optional[BaseChatModel] = None,
         llm_provider: LLMProvider = "qwen",
     ):
         """
@@ -40,11 +42,18 @@ class AgentManager:
 
         Args:
             tools: List of available tools
-            llm_provider: LLM provider to use
+            llm: LLM instance (优先使用)
+            llm_provider: LLM provider (如果 llm 未提供)
         """
         self.tools = tools
         self.llm_provider = llm_provider
-        self.llm = create_llm(llm_provider)
+
+        # 如果未提供 LLM，从 provider 创建
+        if llm is None:
+            self.llm = create_llm(llm_provider)
+        else:
+            self.llm = llm
+
         self.system_prompt = ""
 
         # Bind tools to LLM
@@ -259,6 +268,14 @@ class AgentManager:
             logger.debug(f"Messages count: {len(messages)}")
             logger.debug(f"System prompt length: {len(system_prompt)} chars")
 
+            # Get settings early (needed before smart stopping reset)
+            settings = get_settings()
+
+            # 重置智能停止的历史记录（新对话开始）
+            if settings.enable_smart_stopping:
+                from app.core.smart_stopping import SmartToolStopping
+                SmartToolStopping().reset_history()
+
             self.system_prompt = system_prompt
             lc_messages = self._convert_messages(messages, system_prompt)
 
@@ -266,7 +283,6 @@ class AgentManager:
             logger.info("Thinking...")
 
             # Get max_tool_rounds from settings
-            settings = get_settings()
             max_tool_rounds = settings.max_tool_rounds
 
             # Multi-round tool calling loop
@@ -274,49 +290,173 @@ class AgentManager:
             while round_count < max_tool_rounds:
                 llm_start = time.time()
 
-                # === Phase 1: 流式获取 LLM 响应 ===
-                # 先使用 astream() 获取增量响应，实现实时输出
-                async for chunk in self.llm_with_tools.astream(lc_messages):
-                    # 输出文本增量（实时显示 LLM tokens）
-                    if hasattr(chunk, 'content') and chunk.content:
+                # === 流式响应开关 ===
+                use_streaming = settings.enable_streaming_response
+
+                if use_streaming:
+                    # 流式模式：只使用 astream()，不调用 ainvoke()
+                    # 收集完整的响应用于后续工具调用检查
+                    full_response_chunks = []
+                    all_content = []  # 收集所有文本内容
+
+                    async for chunk in self.llm_with_tools.astream(lc_messages):
+                        # 收集所有 chunks
+                        full_response_chunks.append(chunk)
+
+                        # 收集文本内容
+                        if hasattr(chunk, 'content') and chunk.content:
+                            all_content.append(chunk.content)
+                            # 输出文本增量（实时显示 LLM tokens）
+                            yield {
+                                "type": "content_delta",
+                                "content": chunk.content,
+                            }
+
+                        # 输出工具调用片段（让用户看到工具调用的过程）
+                        if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                            for tc in chunk.tool_call_chunks:
+                                # 工具名称片段
+                                if tc.get("name"):
+                                    yield {
+                                        "type": "tool_call_chunk",
+                                        "tool_name": tc["name"],
+                                        "tool_id": tc.get("index"),
+                                    }
+                                # 工具参数片段（增量显示）
+                                if tc.get("args"):
+                                    yield {
+                                        "type": "tool_args_chunk",
+                                        "args": tc["args"],
+                                        "tool_id": tc.get("index"),
+                                    }
+
+                    # 构建完整 response 对象
+                    if full_response_chunks:
+                        # 从所有 chunks 中找到第一个包含有效 tool_calls 的 chunk
+                        # 修复：最后一个 chunk 可能没有 tool_calls
+                        response_with_tool_calls = None
+                        for chunk in full_response_chunks:
+                            if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                                # 检查是否有有效的 tool_calls（非空名称）
+                                valid_calls = [tc for tc in chunk.tool_calls if tc.get('name')]
+                                if valid_calls:
+                                    response_with_tool_calls = chunk
+                                    logger.debug(f"[DEBUG] Found chunk with tool_calls: {len(valid_calls)} calls")
+                                    break
+
+                        # 如果没找到有 tool_calls 的 chunk，使用最后一个 chunk
+                        if response_with_tool_calls is None:
+                            response_with_tool_calls = full_response_chunks[-1]
+                            logger.debug(f"[DEBUG] No chunk with tool_calls found, using last chunk")
+
+                        response = response_with_tool_calls
+
+                        # 确保包含完整的 content（合并所有文本）
+                        if all_content:
+                            from langchain_core.messages import AIMessage
+                            merged_content = ''.join(all_content)
+
+                            # 获取 tool_calls（优先使用找到的有 tool_calls 的 chunk）
+                            tool_calls_to_use = getattr(response, 'tool_calls', [])
+
+                            # 如果 tool_calls 的 args 是空的，尝试从 tool_call_chunks 组装
+                            if tool_calls_to_use:
+                                for i, tc in enumerate(tool_calls_to_use):
+                                    if not tc.get('args') or tc.get('args') == {}:
+                                        # 从 tool_call_chunks 组装 args
+                                        args_parts = []
+                                        for chunk in full_response_chunks:
+                                            if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                                                for tcc in chunk.tool_call_chunks:
+                                                    if tcc.get('index') == i and tcc.get('args'):
+                                                        args_parts.append(tcc['args'])
+
+                                        if args_parts:
+                                            args_str = ''.join(args_parts)
+                                            try:
+                                                import json
+                                                parsed_args = json.loads(args_str)
+                                                tool_calls_to_use[i]['args'] = parsed_args
+                                                logger.debug(f"[DEBUG] Assembled args for tool {i}: {parsed_args}")
+                                            except json.JSONDecodeError as e:
+                                                logger.warning(f"[DEBUG] Failed to parse args for tool {i}: {e}")
+
+                            # 创建新的 AIMessage
+                            response = AIMessage(
+                                content=merged_content,
+                                tool_calls=tool_calls_to_use,
+                                additional_kwargs=getattr(response, 'additional_kwargs', {}),
+                            )
+                            logger.debug(f"[DEBUG] Merged content length: {len(merged_content)}, chunks: {len(all_content)}, tool_calls: {len(tool_calls_to_use)}")
+                    else:
+                        # 如果没有 chunks（异常情况），使用空响应
+                        from langchain_core.messages import AIMessage
+                        response = AIMessage(content="")
+                else:
+                    # 非流式模式：只使用 ainvoke()，不使用流式
+                    response = await self.llm_with_tools.ainvoke(lc_messages)
+
+                    # 输出完整内容
+                    if hasattr(response, 'content') and response.content:
                         yield {
                             "type": "content_delta",
-                            "content": chunk.content,
+                            "content": response.content,
                         }
+                # === 流式响应开关结束 ===
 
-                    # 输出工具调用片段（让用户看到工具调用的过程）
-                    if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
-                        for tc in chunk.tool_call_chunks:
-                            # 工具名称片段
-                            if tc.get("name"):
-                                yield {
-                                    "type": "tool_call_chunk",
-                                    "tool_name": tc["name"],
-                                    "tool_id": tc.get("index"),
-                                }
-                            # 工具参数片段（增量显示）
-                            if tc.get("args"):
-                                yield {
-                                    "type": "tool_args_chunk",
-                                    "args": tc["args"],
-                                    "tool_id": tc.get("index"),
-                                }
-
-                # 获取完整响应用于检查工具调用
-                response = await self.llm_with_tools.ainvoke(lc_messages)
                 llm_duration = time.time() - llm_start
-                # === Phase 1 流式输出结束 ===
 
                 logger.info(f"[Round {round_count + 1}] LLM response received in {llm_duration:.2f}s")
 
                 # Check if LLM wants to call tools
                 if not hasattr(response, 'tool_calls') or not response.tool_calls:
                     logger.info(f"[Round {round_count + 1}] No tool calls, returning final response")
+                    # Debug: Log response content
+                    if hasattr(response, 'content'):
+                        content_len = len(response.content) if response.content else 0
+                        logger.info(f"[Round {round_count + 1}] Response content length: {content_len}")
+                        if content_len > 0:
+                            logger.info(f"[Round {round_count + 1}] Response content preview: {str(response.content)[:200]}")
+                        else:
+                            logger.warning(f"[Round {round_count + 1}] Response content is EMPTY!")
+                            # 如果 LLM 没有返回任何内容，生成一个默认响应
+                            logger.warning(f"[Round {round_count + 1}] LLM returned empty response, this might indicate a prompt or model issue")
+                    else:
+                        logger.warning(f"[Round {round_count + 1}] Response has no content attribute")
                     break
 
                 # Has tool calls - execute them
                 tool_calls = response.tool_calls
                 logger.info(f"[Round {round_count + 1}] Tool calls requested: {len(tool_calls)}")
+
+                # === 智能停止检查 ===
+                # 检查是否应该停止工具调用（简单问候、冗余检测等）
+                for tool_call in tool_calls:
+                    tool_name = tool_call.get('name', '')
+                    tool_args = tool_call.get('args', {})
+
+                    should_stop, stop_reason = should_stop_tool_calling(
+                        settings=settings,
+                        round_count=round_count,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        user_message=messages[-1].get('content', '') if messages else '',
+                        current_round_time=llm_duration
+                    )
+
+                    if should_stop:
+                        logger.warning(f"[SMART_STOP] {stop_reason}")
+                        logger.warning(f"[SMART_STOP] 强制停止工具调用，生成最终响应")
+
+                        # 生成最终响应（不使用工具）
+                        final_response = await self.llm.ainvoke(lc_messages)
+                        if hasattr(final_response, 'content') and final_response.content:
+                            yield {
+                                "type": "content_delta",
+                                "content": final_response.content,
+                            }
+                        return  # 退出循环
+                # === 智能停止检查结束 ===
 
                 # Add assistant message to conversation history
                 lc_messages.append(response)
@@ -655,6 +795,7 @@ class AgentManager:
 
 def create_agent_manager(
     tools: List[BaseTool],
+    llm: Optional[BaseChatModel] = None,
     llm_provider: LLMProvider = "qwen",
 ) -> AgentManager:
     """
@@ -662,9 +803,15 @@ def create_agent_manager(
 
     Args:
         tools: List of available tools
-        llm_provider: LLM provider
+        llm: LLM instance (优先使用)
+        llm_provider: LLM provider (如果 llm 未提供)
 
     Returns:
         Configured AgentManager
     """
-    return AgentManager(tools=tools, llm_provider=llm_provider)
+    # 如果未提供 LLM，从 provider 创建
+    if llm is None:
+        from app.core.llm import create_llm
+        llm = create_llm(llm_provider)
+
+    return AgentManager(tools=tools, llm=llm)

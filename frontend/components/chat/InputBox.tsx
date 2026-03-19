@@ -153,6 +153,7 @@ export function InputBox({
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
           title={t('chat.upload_image_title')}
+          data-testid="image-upload-button"
         >
           <ImageIcon className="w-5 h-5" />
         </Button>
@@ -165,6 +166,7 @@ export function InputBox({
           placeholder={placeholder || t('chat.type_message')}
           disabled={disabled}
           rows={1}
+          data-testid="chat-input"
           className={cn(
             "flex-1 resize-none rounded-md border border-gray-300 px-3 py-2",
             "focus:outline-none focus:ring-2 focus:ring-[var(--ink-green)] focus:border-transparent",
@@ -176,6 +178,7 @@ export function InputBox({
           variant="primary"
           onClick={handleSend}
           disabled={disabled || (!content.trim() && images.length === 0)}
+          data-testid="send-button"
         >
           {disabled ? (
             <Loader2 className="w-5 h-5 animate-spin" />

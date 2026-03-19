@@ -1,31 +1,26 @@
 """
 Prompts Module - System Prompt Management
 
-This module handles the 6 System Prompt components and their assembly.
+This module handles the 7 System Prompt components and their assembly:
+1. SKILLS_SNAPSHOT - Dynamic skill list
+2. SOUL - Agent personality
+3. IDENTITY - Self-identity
+4. USER - User profile (from USER.md, human-readable reference)
+5. AGENTS - Behavioral guidelines & skill protocol
+6. CONVERSATION_CONTEXT - Current session context (extracted from conversation)
+7. SEMANTIC_HISTORY - Relevant historical conversation segments (from semantic search)
 """
 
 import os
+import hashlib
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 
 from app.config import get_settings
 from app.skills.bootstrap import bootstrap_skills
 
-
-# Historical context warning templates
-HISTORICAL_CONTEXT_WARNING = """
----
-## 📜 Historical Context (Reference Only)
-
-The patterns below are from PAST conversations. Extract APPROACH only, NOT specific values.
-
-🚫 **CRITICAL**: These are EXAMPLES, NOT current instructions.
-"""
-
-HISTORICAL_CONTEXT_FOOTER = """
----
-**Current message is your ONLY instruction.** Extract parameters from CURRENT message, not history.
-"""
+logger = logging.getLogger(__name__)
 
 
 class PromptComponent:
@@ -75,23 +70,26 @@ class SystemPromptBuilder:
     """
     Builder for constructing System Prompts from components.
 
-    The System Prompt consists of 6 components (in order):
+    The System Prompt consists of 7 components (in order):
     1. SKILLS_SNAPSHOT - Dynamic skill list
     2. SOUL - Agent personality
     3. IDENTITY - Self-identity
-    4. USER - User profile
+    4. USER - User profile (from USER.md, human-readable reference)
     5. AGENTS - Behavioral guidelines & skill protocol
-    6. MEMORY - Long-term memory
+    6. CONVERSATION_CONTEXT - Current session context
+    7. SEMANTIC_HISTORY - Semantic search results (historical conversation segments)
+
+    Note: MEMORY.md file is for human reference only, not used in system prompt.
     """
 
-    # Component file names
+    # Component file names (only for file-based components)
     COMPONENT_FILES = {
         "SKILLS_SNAPSHOT": "SKILLS_SNAPSHOT.md",
         "SOUL": "SOUL.md",
         "IDENTITY": "IDENTITY.md",
         "USER": "USER.md",
         "AGENTS": "AGENTS.md",
-        "MEMORY": "MEMORY.md",
+        # MEMORY.md is excluded - it's for human reference only
     }
 
     def __init__(self):
@@ -101,6 +99,7 @@ class SystemPromptBuilder:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
         self.components: Dict[str, PromptComponent] = {}
+        self._prompt_cache: Dict[str, str] = {}  # Cache for built prompts
         self._initialize_default_components()
 
     def _initialize_default_components(self) -> None:
@@ -110,8 +109,61 @@ class SystemPromptBuilder:
             "IDENTITY.md": self._get_default_identity(),
             "USER.md": self._get_default_user(),
             "AGENTS.md": self._get_default_agents(),
-            "MEMORY.md": self._get_default_memory(),
+            # MEMORY.md is excluded - created by long_term_updater for human reference
         }
+
+        for filename, content in defaults.items():
+            file_path = self.workspace_dir / filename
+            if not file_path.exists():
+                file_path.write_text(content, encoding="utf-8")
+
+    def _generate_cache_key(self, session_data: Optional[Dict]) -> str:
+        """
+        Generate cache key based on session data.
+
+        Args:
+            session_data: Session data dict
+
+        Returns:
+            Cache key string
+        """
+        import json
+
+        settings = get_settings()
+
+        # If caching is disabled, always return a unique key
+        if not settings.enable_prompt_cache:
+            return f"nocache_{os.urandom(8).hex()}"
+
+        if not session_data:
+            return "default"
+
+        # Generate hash from relevant session data fields
+        key_parts = []
+
+        # User context (can be dict or string)
+        user_context = session_data.get("user_context", "")
+        if user_context:
+            # Convert dict to JSON string for hashing
+            if isinstance(user_context, dict):
+                user_context_str = json.dumps(user_context, sort_keys=True)
+            else:
+                user_context_str = str(user_context)
+            key_parts.append(f"user:{hashlib.md5(user_context_str.encode()).hexdigest()}")
+
+        # Conversation context (hash by content, not full content)
+        conv_context = session_data.get("conversation_context", "")
+        if conv_context:
+            conv_hash = hashlib.md5(str(conv_context).encode()).hexdigest()[:16]
+            key_parts.append(f"conv:{conv_hash}")
+
+        # Semantic history (hash by content)
+        semantic_hist = session_data.get("semantic_history", "")
+        if semantic_hist:
+            sem_hash = hashlib.md5(str(semantic_hist).encode()).hexdigest()[:16]
+            key_parts.append(f"sem:{sem_hash}")
+
+        return "|".join(key_parts) if key_parts else "default"
 
         for filename, content in defaults.items():
             file_path = self.workspace_dir / filename
@@ -171,14 +223,46 @@ class SystemPromptBuilder:
             >>> prompt = builder.build_system_prompt()
             >>> print(prompt)
         """
-        # Load components in order
+        # Add current date to session_data for injection
+        from datetime import datetime
+        if session_data is None:
+            session_data = {}
+
+        # Inject current date/time
+        current_time = datetime.now()
+        session_data["current_date"] = current_time.strftime("%Y-%m-%d")
+        session_data["current_datetime"] = current_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+        session_data["current_year"] = current_time.year
+        session_data["current_month"] = current_time.strftime("%B")
+
+        logger.debug(f"Injected current date into system prompt: {session_data['current_date']}")
+
+        # Check cache first
+        cache_key = self._generate_cache_key(session_data)
+        settings = get_settings()
+
+        if settings.enable_prompt_cache and cache_key in self._prompt_cache:
+            cached_prompt = self._prompt_cache[cache_key]
+
+            # Check if truncation is needed
+            if max_length and len(cached_prompt) > max_length:
+                cached_prompt = self._truncate_prompt(
+                    cached_prompt,
+                    max_length,
+                    settings.truncation_marker
+                )
+
+            return cached_prompt
+
+        # Build prompt from components
         component_order = [
             "SKILLS_SNAPSHOT",
             "SOUL",
             "IDENTITY",
             "USER",
             "AGENTS",
-            "MEMORY",  # Used only for historical context from semantic search (not MEMORY.md file)
+            "CONVERSATION_CONTEXT",  # Current session context
+            "SEMANTIC_HISTORY",      # Semantic search results
         ]
 
         parts = []
@@ -193,14 +277,30 @@ class SystemPromptBuilder:
         # Join with separators
         full_prompt = "\n\n---\n\n".join(parts)
 
-        # Truncate if needed
+        # Smart truncation if needed
         if max_length:
-            settings = get_settings()
             full_prompt = self._truncate_prompt(
                 full_prompt,
                 max_length,
                 settings.truncation_marker
             )
+        elif settings.enable_smart_truncation:
+            # Use configured max prompt tokens
+            full_prompt = self._smart_truncate_with_budget(
+                full_prompt,
+                settings.max_prompt_tokens
+            )
+
+        # Cache the result if enabled
+        if settings.enable_prompt_cache:
+            self._prompt_cache[cache_key] = full_prompt
+
+            # Limit cache size to prevent memory issues
+            if len(self._prompt_cache) > 100:
+                # Remove oldest entries (first 20)
+                keys_to_remove = list(self._prompt_cache.keys())[:20]
+                for key in keys_to_remove:
+                    del self._prompt_cache[key]
 
         return full_prompt
 
@@ -223,22 +323,50 @@ class SystemPromptBuilder:
             return component.content
 
         content = component.content
+        component_name = component.name
+
+        # Add current date/time to AGENTS component (most visible place)
+        if component_name == "AGENTS":
+            current_date = session_data.get("current_date", "")
+            current_datetime = session_data.get("current_datetime", "")
+            current_year = session_data.get("current_year", "")
+
+            if current_date:
+                content += f"\n\n## Current Date/Time\n"
+                content += f"- **Today's Date**: {current_date}\n"
+                content += f"- **Current Time**: {current_datetime}\n"
+                content += f"- **Year**: {current_year}\n"
+                content += f"\n⚠️ **IMPORTANT**: Always consider the current date when answering questions about 'latest', 'recent', or 'up-to-date' information."
 
         # Customize USER component with session data
-        if component.name == "USER":
+        elif component_name == "USER":
             user_context = session_data.get("user_context", "")
             if user_context:
                 content += f"\n\n# Current User Context\n{user_context}"
+            # Add note that USER.md is human-readable reference
+            content += "\n\n⚠️ *Note: This is a user profile for reference. The USER.md file in workspace is maintained for human readability.*"
 
-        # Customize MEMORY component with recent history
-        if component.name == "MEMORY":
-            recent_history = session_data.get("recent_history", "")
-            if recent_history:
-                # Add multi-layer warning to prevent agent from confusing history with current instructions
-                content += HISTORICAL_CONTEXT_WARNING
-                content += "\n"
-                content += recent_history
-                content += HISTORICAL_CONTEXT_FOOTER
+        # Handle CONVERSATION_CONTEXT component (new)
+        elif component_name == "CONVERSATION_CONTEXT":
+            conversation_context = session_data.get("conversation_context", "")
+            if conversation_context:
+                content = conversation_context
+            else:
+                content = "# Current Session Context\n\n*(No current session context available)*"
+
+        # Handle SEMANTIC_HISTORY component (new)
+        elif component_name == "SEMANTIC_HISTORY":
+            semantic_history = session_data.get("semantic_history", "")
+            if semantic_history:
+                content = "# 📜 Relevant Historical Conversation Segments\n\n"
+                content += semantic_history
+                content += "\n\n---\n\n"
+                content += "⚠️ **Important**: These are historical conversation segments for reference only:\n"
+                content += "- Use them to understand how the user expressed similar needs\n"
+                content += "- Do NOT assume you need to 'continue' or 'supplement' historical conversations\n"
+                content += "- The current user message is your ONLY instruction\n"
+            else:
+                content = "# Semantic Search History\n\n*(No relevant historical conversations found)*"
 
         return content
 
@@ -279,6 +407,74 @@ class SystemPromptBuilder:
             current_length += part_length
 
         return "\n\n---\n\n".join(truncated_parts)
+
+    def _smart_truncate_with_budget(
+        self,
+        prompt: str,
+        max_tokens: int,
+    ) -> str:
+        """
+        Smart truncation with token budget allocation.
+
+        Prioritizes:
+        1. SKILLS_SNAPSHOT (keep完整 - critical for tool usage)
+        2. AGENTS (core behavioral guidelines)
+        3. CONVERSATION_CONTEXT (recent conversation)
+        4. SEMANTIC_HISTORY (historical relevance)
+        5. USER, SOUL, IDENTITY (can be heavily truncated)
+
+        Args:
+            prompt: Full prompt
+            max_tokens: Maximum tokens (approximately 1 token = 3-4 chars)
+
+        Returns:
+            Truncated prompt
+        """
+        # Convert tokens to approximate character limit
+        max_chars = max_tokens * 4
+
+        if len(prompt) <= max_chars:
+            return prompt
+
+        # Split into components
+        parts = prompt.split("\n\n---\n\n")
+        component_names = [
+            "SKILLS_SNAPSHOT",
+            "SOUL",
+            "IDENTITY",
+            "USER",
+            "AGENTS",
+            "CONVERSATION_CONTEXT",
+            "SEMANTIC_HISTORY",
+        ]
+
+        # Get token budget from config
+        settings = get_settings()
+        budget = settings.prompt_token_budget
+
+        # Build result with budget-aware truncation
+        result_parts = []
+        current_length = 0
+
+        for idx, (part, name) in enumerate(zip(parts, component_names)):
+            # Get budget for this component
+            component_budget = budget.get(name, 1000) * 4  # Convert to chars
+
+            # Truncate if needed
+            if len(part) > component_budget:
+                # Keep first part of component
+                truncated = part[:component_budget - 30] + "\n\n...[truncated]"
+                result_parts.append(truncated)
+                current_length += len(truncated)
+            else:
+                result_parts.append(part)
+                current_length += len(part)
+
+            # Add separator (except for last part)
+            if idx < len(parts) - 1:
+                current_length += 5
+
+        return "\n\n---\n\n".join(result_parts)
 
     def _generate_skills_snapshot(self) -> str:
         """Generate SKILLS_SNAPSHOT.md content in enhanced Markdown format."""
@@ -439,39 +635,43 @@ You help users with:
         """Get default AGENTS component content (concise version)."""
         return """# 核心行为准则
 
-## 当前消息优先
-- 最新用户消息是唯一指令来源
-- 话题切换 = 立即开始新任务
-- 不受历史对话影响
+## 对话连续性
+- **优先使用 CONVERSATION_CONTEXT** - 查看下方的"Recent Conversation"了解对话历史
+- **理解对话流程** - 如果用户延续之前的话题，基于上下文回应
+- **话题切换检测** - 当用户明显切换话题时，开始新任务（忽略不相关的历史）
+
+## 短期记忆使用规则
+1. **CONVERSATION_CONTEXT** 显示了最近的对话轮次
+2. **连续对话** - 如果用户问"那...呢？"或继续讨论，使用上下文理解
+3. **新话题** - 如果用户问完全不同的问题，视为新任务
+4. **参数提取** - 始终从**当前消息**提取具体参数（如城市名、文件名）
+
+## 示例场景
+
+### 场景1：对话延续
+```
+CONVERSATION_CONTEXT:
+  Turn 1: User: "北京天气怎么样？" → Assistant: "北京今天晴天..."
+
+当前消息: "那上海呢？"
+✅ 正确: 查询上海天气（理解用户继续问天气）
+❌ 错误: 询问"上海什么？"
+```
+
+### 场景2：话题切换
+```
+CONVERSATION_CONTEXT:
+  Turn 1: User: "北京天气" → Assistant: "..."
+
+当前消息: "帮我搜索arxiv关于transformer的论文"
+✅ 正确: 视为新任务，搜索论文（话题已切换）
+❌ 错误: 继续讨论天气
+```
 
 ## 技能使用协议
 1. 使用技能前必须 `read_file` 读取 SKILL.md
 2. 理解后执行实际命令
-3. 从当前消息提取参数，不使用历史值
-
-## 示例：天气查询
-```
-用户："上海天气"
-1. read_file("data/skills/get_weather/SKILL.md")
-2. terminal("curl -s 'wttr.in/Shanghai?format=j1'")
-3. 解析并展示结果
-```
-
-## 关键原则
-- 从当前消息提取城市名（如"上海"）
-- 不使用历史对话中的城市（如"北京"）
-- 每次查询都是独立的
-"""
-
-    
-    def _get_default_memory(self) -> str:
-        """Get default MEMORY component content."""
-        return """
-# Historical Context
-
-*(This section will be populated with relevant patterns from semantic search when available)*
-
-*Note: The database maintains complete long-term memory. This section only shows highly relevant historical patterns for reference.*
+3. **参数从当前消息提取**（不使用历史值）
 """
 
 

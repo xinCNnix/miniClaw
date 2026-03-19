@@ -1,56 +1,187 @@
 # miniClaw Deployment Guide
 
-## Overview
+## 🚀 Quick Start (Recommended)
 
-miniClaw supports two deployment modes:
-1. **Docker Deployment** - Containerized deployment for easy setup and production use
-2. **Local Development** - Direct installation for development and debugging
+### One-Click Installation
+
+**The easiest way to deploy miniClaw is using the provided startup scripts:**
+
+**Windows:**
+```bash
+git clone <repository-url>
+cd miniclaw
+start.bat
+```
+
+**Linux/macOS:**
+```bash
+git clone <repository-url>
+cd miniclaw
+chmod +x start.sh
+./start.sh
+```
+
+**That's all!** The scripts handle everything automatically.
 
 ---
 
-## Prerequisites
+## What the Scripts Do
 
-### Docker Deployment
+The startup scripts (`start.bat` / `start.sh`) automatically:
+
+1. ✅ **Check for required tools** (Python, Node.js, conda, Git)
+2. ✅ **Install missing dependencies** automatically
+3. ✅ **Create and activate virtual environment**
+4. ✅ **Install all packages** (Python + Node.js)
+5. ✅ **Prompt for API key configuration** (first run only)
+6. ✅ **Start backend** (port 8002)
+7. ✅ **Start frontend** (port 3000)
+8. ✅ **Open browser** automatically
+
+**No manual steps required!**
+
+---
+
+## Deployment Options
+
+### Option 1: Automated Setup (Recommended)
+
+**Best for:** Most users, quick start, development
+
+```bash
+# Windows
+start.bat
+
+# Linux/macOS
+./start.sh
+```
+
+**Advantages:**
+- ✅ Zero manual configuration
+- ✅ Automatic dependency installation
+- ✅ Works with existing Python/Node.js or installs them
+- ✅ Interactive API key configuration
+- ✅ Cross-platform compatibility
+
+---
+
+### Option 2: Docker Deployment
+
+**Best for:** Production, containerized environments, consistent behavior
+
+```bash
+git clone <repository-url>
+cd miniclaw
+cp backend/.env.example backend/.env
+# Edit backend/.env with your API keys
+
+docker-compose up -d
+```
+
+**Access:**
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8002
+- API Docs: http://localhost:8002/docs
+
+**Advantages:**
+- ✅ Isolated environment
+- ✅ Easy deployment
+- ✅ Reproducible builds
+- ✅ Simple scaling
+
+**Prerequisites:**
 - Docker 20.10+
 - Docker Compose 2.0+
 
-### Local Development
-- Python 3.10+
-- Node.js 18+
-- npm or yarn
+---
+
+## Advanced Setup (Optional)
+
+**Only needed if:** You want manual control, debugging, or custom configuration.
+
+### Manual Backend Setup
+
+**Using Python venv:**
+```bash
+cd backend
+
+# Create virtual environment
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/macOS
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# Start server
+uvicorn app.main:app --port 8002 --reload
+```
+
+**Using Conda (Windows - Recommended for Data Science):**
+
+See **[Anaconda Setup](#anaconda-environment-setup)** section below.
+
+### Manual Frontend Setup
+
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Configure environment
+echo "NEXT_PUBLIC_API_URL=http://localhost:8002" > .env.local
+
+# Start server
+npm run dev
+```
 
 ---
 
 ## Environment Variables
 
-Create a `.env` file in the project root:
+Create a `.env` file in the backend directory:
 
 ```bash
 # LLM Configuration
-LLM_PROVIDER=qwen  # Options: openai, deepseek, qwen, ollama
+LLM_PROVIDER=  # Options: openai, deepseek, qwen, ollama, claude, gemini
 
 # OpenAI (if using OpenAI)
 OPENAI_API_KEY=sk-xxx
-OPENAI_MODEL=gpt-4o-mini
+OPENAI_MODEL=
 
 # DeepSeek (if using DeepSeek)
 DEEPSEEK_API_KEY=sk-xxx
-DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_MODEL=
 
-# Qwen (通义千问) - Default for testing
+# Qwen (Alibaba Qwen) - Default for testing
 QWEN_API_KEY=sk-xxx
-QWEN_MODEL=qwen-plus
+QWEN_MODEL=
 
 # Ollama (if using local Ollama)
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen:7b
+OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_MODEL=
+
+# Claude (if using Claude)
+CLAUDE_API_KEY=sk-ant-xxx
+CLAUDE_MODEL=
+
+# Gemini (if using Gemini)
+GEMINI_API_KEY=xxx
+GEMINI_MODEL=
 
 # Backend Configuration
 BACKEND_PORT=8002
 BACKEND_HOST=0.0.0.0
-WORKSPACE_PATH=./data/workspace
+WORKSPACE_PATH=./workspace
 KNOWLEDGE_BASE_PATH=./data/knowledge_base
 SESSIONS_PATH=./data/sessions
+SKILLS_DIR=./data/skills
+VECTOR_STORE_DIR=./data/vector_store
 
 # Frontend Configuration
 NEXT_PUBLIC_API_URL=http://localhost:8002
@@ -58,9 +189,309 @@ NEXT_PUBLIC_API_URL=http://localhost:8002
 
 ---
 
-## Docker Deployment (Recommended)
+## Production Deployment
 
-### Quick Start
+### Docker Production
+
+```bash
+# Build and start
+docker-compose -f docker-compose.prod.yml up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+### Traditional Deployment
+
+**Backend with Gunicorn:**
+```bash
+cd backend
+pip install gunicorn
+gunicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8002
+```
+
+**Frontend Production Build:**
+```bash
+cd frontend
+npm run build
+npm start
+```
+
+---
+
+## Environment Configuration
+
+### Backend Environment Variables
+
+Create `backend/.env`:
+
+```bash
+# LLM Provider (qwen recommended for testing)
+LLM_PROVIDER=qwen
+QWEN_API_KEY=sk-your-api-key
+QWEN_MODEL=qwen-plus
+
+# Alternative: OpenAI
+# LLM_PROVIDER=openai
+# OPENAI_API_KEY=sk-your-api-key
+# OPENAI_MODEL=gpt-4o-mini
+
+# Alternative: Ollama (local)
+# LLM_PROVIDER=ollama
+# OLLAMA_BASE_URL=http://localhost:11434/v1
+# OLLAMA_MODEL=qwen2.5
+
+# Server Configuration
+BACKEND_PORT=8002
+BACKEND_HOST=0.0.0.0
+
+# Paths
+WORKSPACE_PATH=./workspace
+KNOWLEDGE_BASE_PATH=./data/knowledge_base
+SESSIONS_PATH=./data/sessions
+SKILLS_DIR=./data/skills
+VECTOR_STORE_DIR=./data/vector_store
+```
+
+### Frontend Environment
+
+Create `frontend/.env.local`:
+
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8002
+```
+
+---
+
+## Anaconda Environment Setup
+
+**Recommended for:** Windows users, data science development, easy environment management
+
+### Quick Setup with Conda
+
+```bash
+# Install Miniconda (if not installed)
+# Download: https://docs.conda.io/en/latest/miniconda.html
+
+# Create environment
+conda create -n mini_openclaw python=3.10 -y
+
+# Activate environment
+conda activate mini_openclaw
+
+# Navigate to backend
+cd backend
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure and start
+cp .env.example .env
+# Edit .env with API keys
+uvicorn app.main:app --port 8002 --reload
+```
+
+### Export/Import Environment
+
+```bash
+# Export environment (for sharing)
+cd path/to/miniclaw
+conda env export > environment.yml
+
+# Team member imports environment
+conda env create -f environment.yml
+conda activate mini_openclaw
+```
+
+### Useful Conda Commands
+
+```bash
+# Activate environment
+conda activate mini_openclaw
+
+# Deactivate
+conda deactivate
+
+# List environments
+conda env list
+
+# Update conda
+conda update conda
+
+# Install package
+conda install package-name
+```
+
+For more conda details, see the main **[README.md](../README.md)** or **[QUICKSTART.md](../QUICKSTART.md)**.
+
+---
+
+## Troubleshooting
+
+### Startup Script Issues
+
+**Problem:** Script fails with "command not found"
+
+**Solution:** Install Git first
+- Windows: https://git-scm.com/download/win
+- Linux: `sudo apt install git`
+- macOS: `xcode-select --install`
+
+**Problem:** Port already in use
+
+**Solution:** Change ports in `backend/.env`
+```bash
+BACKEND_PORT=8003  # Use different port
+```
+
+**Problem:** Python/Node.js not found
+
+**Solution:** Scripts automatically install them. If fails:
+- Python: https://www.python.org/downloads/
+- Node.js: https://nodejs.org/
+
+### Backend Issues
+
+**Problem:** Backend fails to start
+
+**Solution:**
+```bash
+cd backend
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**Problem:** LLM API connection fails
+
+**Solution:**
+- Verify API key in `.env`
+- Check network connectivity
+- Try testing API key with curl
+
+### Frontend Issues
+
+**Problem:** Frontend can't connect to backend
+
+**Solution:**
+- Ensure backend is running: `curl http://localhost:8002/health`
+- Check `NEXT_PUBLIC_API_URL` in frontend
+- Verify CORS configuration
+
+**Problem:** Build fails
+
+**Solution:**
+```bash
+cd frontend
+rm -rf .next node_modules
+npm install
+npm run build
+```
+
+---
+
+## Monitoring and Maintenance
+
+### Health Checks
+
+```bash
+# Backend health
+curl http://localhost:8002/health
+
+# Frontend
+curl http://localhost:3000
+```
+
+### Logs
+
+```bash
+# View all logs (if using scripts)
+# Check terminal windows for output
+
+# Docker logs
+docker-compose logs -f
+```
+
+### Backup Data
+
+```bash
+# Backup data directory
+tar -czf miniclaw-backup-$(date +%Y%m%d).tar.gz ./data ./backend/.env
+
+# Restore
+tar -xzf miniclaw-backup-20240314.tar.gz
+```
+
+---
+
+## Advanced Configuration
+
+### Using PM2 (Process Manager)
+
+**For production deployment:**
+
+```bash
+# Install PM2
+npm install -g pm2
+
+# Start backend
+cd backend
+pm2 start "uvicorn app.main:app --port 8002" --name miniclaw-backend
+
+# Start frontend
+cd frontend
+pm2 start "npm start" --name miniclaw-frontend
+
+# Save PM2 configuration
+pm2 save
+pm2 startup
+```
+
+### Nginx Reverse Proxy
+
+**For production deployment:**
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+    }
+
+    location /api/ {
+        proxy_pass http://localhost:8002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+
+        # SSE support
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+}
+```
+
+---
+
+## Support
+
+**For issues or questions:**
+- Check logs: Look at terminal/script output
+- Verify environment variables in `backend/.env`
+- Check network connectivity
+- Review documentation in `docs/` directory
+
+---
+
+*Last Updated: 2024-03-14*
 
 1. **Clone the repository:**
 
@@ -72,8 +503,8 @@ cd miniclaw
 2. **Configure environment:**
 
 ```bash
-cp .env.example .env
-# Edit .env with your API keys
+cp backend/.env.example backend/.env
+# Edit backend/.env with your API keys
 ```
 
 3. **Start the system:**
@@ -94,11 +525,13 @@ The `docker-compose.yml` includes:
 
 - **backend**: Python FastAPI service
   - Port: 8002
-  - Volume mounts: ./data, ./backend/app
+  - Volume mounts: ./backend, ./data
+  - Environment: Loads from backend/.env
 
 - **frontend**: Next.js frontend service
   - Port: 3000
-  - Volume mounts: ./frontend
+  - Depends on: backend
+  - Environment: NEXT_PUBLIC_API_URL
 
 ### Docker Commands
 
@@ -106,16 +539,17 @@ The `docker-compose.yml` includes:
 # Start all services
 docker-compose up -d
 
-# Start specific service
-docker-compose up backend
+# Start in background with logs
+docker-compose up -d --build
 
 # View logs
 docker-compose logs -f
 
 # View logs for specific service
 docker-compose logs -f backend
+docker-compose logs -f frontend
 
-# Stop all services
+# Stop services
 docker-compose down
 
 # Stop and remove volumes
@@ -124,35 +558,55 @@ docker-compose down -v
 # Rebuild services
 docker-compose up -d --build
 
-# Scale services
-docker-compose up -d --scale backend=2
+# Execute command in backend container
+docker-compose exec backend bash
+
+# Execute command in frontend container
+docker-compose exec frontend sh
 ```
 
-### Production Deployment
+### Production Docker Deployment
 
-For production, update `docker-compose.prod.yml`:
+For production deployment, consider:
 
-```yaml
-version: '3.8'
-
-services:
-  backend:
-    image: mini-openclaw-backend:latest
-    restart: always
-    environment:
-      - ENVIRONMENT=production
-    ports:
-      - "8002:8002"
-
-  frontend:
-    image: mini-openclaw-frontend:latest
-    restart: always
-    ports:
-      - "80:3000"
-```
+1. **Use environment-specific `.env` files**
 
 ```bash
-docker-compose -f docker-compose.prod.yml up -d
+# Production .env
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-prod-xxx
+OPENAI_MODEL=gpt-4o-mini
+```
+
+2. **Configure proper CORS**
+
+Edit `backend/app/main.py`:
+
+```python
+CORS_ORIGINS = [
+    "https://your-domain.com",
+    "https://www.your-domain.com"
+]
+```
+
+3. **Enable HTTPS**
+
+Use a reverse proxy (nginx/traefik) with SSL certificates.
+
+4. **Set resource limits**
+
+```yaml
+# docker-compose.prod.yml
+services:
+  backend:
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
 ```
 
 ---
@@ -161,253 +615,330 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ### Backend Setup
 
-1. **Install Python dependencies:**
-
 ```bash
 cd backend
+
+# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
-```
 
-2. **Configure environment:**
-
-```bash
+# Configure environment
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with your API keys
+
+# Start development server
+uvicorn app.main:app --port 8002 --reload
 ```
 
-3. **Run the backend:**
+Backend will be available at http://localhost:8002
+
+### Frontend Setup
 
 ```bash
-# Development mode with auto-reload
-uvicorn app.main:app --port 8002 --reload
+cd frontend
 
-# Production mode
-uvicorn app.main:app --port 8002 --host 0.0.0.0 --workers 4
+# Install dependencies
+npm install
+
+# Configure environment
+echo "NEXT_PUBLIC_API_URL=http://localhost:8002" > .env.local
+
+# Start development server
+npm run dev
+```
+
+Frontend will be available at http://localhost:3000
+
+---
+
+## Anaconda Environment Setup (Recommended for Windows)
+
+Anaconda provides an easy way to manage Python environments and dependencies. This is the recommended setup method for Windows users.
+
+### Install Anaconda or Miniconda
+
+**Choose one:**
+
+1. **Anaconda** (Full distribution, ~3GB)
+   - Download: https://www.anaconda.com/download
+   - Includes Python, conda, and 720+ scientific packages
+   - Recommended for data science users
+
+2. **Miniconda** (Minimal installer, ~400MB)
+   - Download: https://docs.conda.io/en/latest/miniconda.html
+   - Includes only conda and Python
+   - Recommended for users who want minimal installation
+
+### Create Conda Environment
+
+```bash
+# Navigate to project directory
+cd path/to/miniclaw
+
+# Create a new conda environment named 'mini_openclaw'
+# Python 3.10 or higher is required
+conda create -n mini_openclaw python=3.10 -y
+
+# Activate the environment
+conda activate mini_openclaw  # Windows/Linux/macOS (zsh/bash)
+# or on Windows with cmd.exe:
+# conda activate mini_openclaw
+```
+
+### Backend Setup with Conda
+
+```bash
+# Activate environment
+conda activate mini_openclaw
+
+# Navigate to backend directory
+cd backend
+
+# Install dependencies
+# Use pip within conda environment for best compatibility
+pip install -r requirements.txt
+
+# Install additional conda packages (if needed)
+conda install -y -c conda-forge uvicorn fastapi
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+notepad .env  # Windows
+# nano .env     # Linux/macOS
+
+# Start development server
+uvicorn app.main:app --port 8002 --reload
 ```
 
 ### Frontend Setup
 
-1. **Install Node dependencies:**
+```bash
+# Frontend doesn't require conda environment
+# Just use npm/yarn directly
+
+cd frontend
+
+# Install dependencies
+npm install
+
+# Configure environment
+echo "NEXT_PUBLIC_API_URL=http://localhost:8002" > .env.local
+
+# Start development server
+npm run dev
+```
+
+### Managing Conda Environment
+
+```bash
+# Activate environment
+conda activate mini_openclaw
+
+# Deactivate environment
+conda deactivate
+
+# Export environment to share
+# Creates a portable YAML file of the environment
+conda env export > environment.yml
+
+# Create environment from YAML file
+conda env create -f environment.yml
+
+# List all environments
+conda env list
+
+# Remove environment (if needed)
+conda env remove -n mini_openclaw -y
+```
+
+### Create environment.yml for Reproducibility
+
+Create `environment.yml` in the project root:
+
+```yaml
+name: mini_openclaw
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - - fastapi>=0.68.0
+    - - uvicorn[standard]>=0.15.0
+    - - langchain>=0.1.0
+    - - llama-index>=0.9.0
+    - - pydantic>=2.0.0
+    - - python-multipart>=0.0.5
+    # Add all other pip packages from requirements.txt
+```
+
+Recreate environment from file:
+```bash
+conda env create -f environment.yml
+conda activate mini_openclaw
+```
+
+### Common Conda Commands
+
+```bash
+# Update conda
+conda update conda
+
+# Update all packages in environment
+conda update --all
+
+# Install specific package
+conda install package-name
+
+# Install package from conda-forge
+conda install -c conda-forge package-name
+
+# Search for packages
+conda search package-name
+
+# View installed packages
+conda list
+```
+
+### Troubleshooting Conda Issues
+
+**Issue:** `conda: command not found`
+
+**Solution:**
+- Ensure Anaconda/Miniconda is installed
+- Add conda to PATH (installer usually does this automatically)
+- Restart terminal after installation
+
+**Issue:** Environment activation fails
+
+**Solution:**
+```bash
+# Initialize conda for your shell
+conda init bash        # Linux/macOS bash
+conda init zsh         # Linux/macOS zsh
+conda init cmd.exe     # Windows cmd
+conda init powershell  # Windows PowerShell
+
+# Restart terminal and try again
+```
+
+**Issue:** Package conflicts
+
+**Solution:**
+```bash
+# Create new environment with specific versions
+conda create -n mini_openclaw python=3.10 -y
+
+# Or update conda first
+conda update --all
+```
+
+---
+
+## Using Startup Scripts
+
+**Windows:**
+```bash
+# Double-click start.bat
+# Or run from command line
+start.bat
+```
+
+**Linux/macOS:**
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+These scripts will:
+1. Check and install dependencies
+2. Start backend (port 8002)
+3. Wait for backend to be ready
+4. Start frontend (port 3000)
+5. Open browser automatically
+
+---
+
+## Production Deployment
+
+### Backend Production Server
+
+Using **Gunicorn** with Uvicorn workers:
+
+```bash
+cd backend
+
+# Install gunicorn
+pip install gunicorn
+
+# Start production server
+gunicorn app.main:app \
+  --workers 4 \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:8002 \
+  --access-logfile - \
+  --error-logfile - \
+  --log-level info
+```
+
+### Frontend Production Build
 
 ```bash
 cd frontend
-npm install
-```
 
-2. **Configure environment:**
-
-```bash
-cp .env.example .env.local
-# Edit .env.local with your configuration
-```
-
-3. **Run the frontend:**
-
-```bash
-# Development mode
-npm run dev
-
-# Production build
+# Build for production
 npm run build
+
+# Start production server
 npm start
 ```
 
-### Development Workflow
-
-Run both backend and frontend in separate terminals:
+Or use a Node.js process manager like **PM2**:
 
 ```bash
-# Terminal 1: Backend
+# Install PM2
+npm install -g pm2
+
+# Start backend
 cd backend
-uvicorn app.main:app --port 8002 --reload
+pm2 start "uvicorn app.main:app --port 8002" --name miniclaw-backend
 
-# Terminal 2: Frontend
+# Start frontend
 cd frontend
-npm run dev
+pm2 start "npm start" --name miniclaw-frontend
+
+# Save PM2 configuration
+pm2 save
+
+# Setup PM2 to start on system boot
+pm2 startup
 ```
 
----
-
-## Verification
-
-### Check Backend Health
-
-```bash
-curl http://localhost:8002/health
-```
-
-Expected response:
-
-```json
-{
-  "status": "healthy",
-  "version": "0.1.0"
-}
-```
-
-### Test Chat Endpoint
-
-```bash
-curl -N http://localhost:8002/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [
-      {"role": "user", "content": "Hello!"}
-    ]
-  }'
-```
-
-### Check Frontend
-
-Visit http://localhost:3000 in your browser.
-
----
-
-## Troubleshooting
-
-### Backend Issues
-
-**Port already in use:**
-
-```bash
-# Find process using port 8002
-lsof -i :8002  # Linux/Mac
-netstat -ano | findstr :8002  # Windows
-
-# Kill process
-kill -9 <PID>  # Linux/Mac
-taskkill /PID <PID> /F  # Windows
-```
-
-**Import errors:**
-
-```bash
-# Reinstall dependencies
-pip install -r requirements.txt --force-reinstall
-```
-
-### Frontend Issues
-
-**Build errors:**
-
-```bash
-# Clear cache and rebuild
-rm -rf .next node_modules
-npm install
-npm run dev
-```
-
-**API connection issues:**
-
-- Verify `NEXT_PUBLIC_API_URL` in `.env.local`
-- Check if backend is running: `curl http://localhost:8002/health`
-- Check browser console for CORS errors
-
-### Docker Issues
-
-**Container won't start:**
-
-```bash
-# View logs
-docker-compose logs backend
-
-# Rebuild container
-docker-compose up -d --build
-
-# Remove all containers and volumes
-docker-compose down -v
-docker-compose up -d --build
-```
-
-**Volume permission issues:**
-
-```bash
-# Fix permissions on Linux
-sudo chown -R $USER:$USER ./data
-```
-
----
-
-## Performance Tuning
-
-### Backend Optimization
-
-1. **Increase worker count:**
-
-```bash
-uvicorn app.main:app --workers 4 --port 8002
-```
-
-2. **Enable caching:**
-
-Edit `backend/app/config.py`:
-
-```python
-ENABLE_CACHE = True
-CACHE_TTL = 3600  # 1 hour
-```
-
-3. **Database optimization:** (if using a database)
-
-```bash
-# Run migrations
-python -m alembic upgrade head
-```
-
-### Frontend Optimization
-
-1. **Enable production build:**
-
-```bash
-npm run build
-```
-
-2. **Configure CDN:** Update `next.config.js`
-
-```javascript
-module.exports = {
-  assetPrefix: 'https://cdn.example.com',
-}
-```
-
----
-
-## Security Considerations
-
-### Production Checklist
-
-- [ ] Enable HTTPS/TLS
-- [ ] Implement API authentication
-- [ ] Set up CORS properly
-- [ ] Configure rate limiting
-- [ ] Enable request logging
-- [ ] Set up monitoring and alerts
-- [ ] Regular security updates
-- [ ] Backup strategy for data
-
-### SSL/TLS Setup
-
-Using nginx as reverse proxy:
+### Nginx Reverse Proxy Configuration
 
 ```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    # Redirect HTTP to HTTPS
+    return 301 https://$server_name$request_uri;
+}
+
 server {
     listen 443 ssl http2;
     server_name your-domain.com;
 
+    # SSL certificates
     ssl_certificate /path/to/cert.pem;
     ssl_certificate_key /path/to/key.pem;
 
-    location /api/ {
-        proxy_pass http://localhost:8002;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-    }
-
+    # Frontend
     location / {
         proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
@@ -416,129 +947,295 @@ server {
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
     }
-}
-```
 
----
-
-## Monitoring
-
-### Backend Logs
-
-```bash
-# Docker
-docker-compose logs -f backend
-
-# Local
-tail -f backend/logs/app.log
-```
-
-### Frontend Logs
-
-Check browser console for client-side errors.
-
-### Health Monitoring
-
-Set up automated health checks:
-
-```bash
-# Add to crontab
-*/5 * * * * curl -f http://localhost:8002/health || alert-admin
-```
-
----
-
-## Backup and Restore
-
-### Data Backup
-
-```bash
-# Backup data directory
-tar -czf backup-$(date +%Y%m%d).tar.gz ./data
-
-# Restore
-tar -xzf backup-20240101.tar.gz
-```
-
-### Database Backup (if using)
-
-```bash
-# PostgreSQL
-pg_dump miniclaw > backup.sql
-
-# Restore
-psql miniclaw < backup.sql
-```
-
----
-
-## Scaling
-
-### Horizontal Scaling
-
-```yaml
-# docker-compose.scale.yml
-version: '3.8'
-
-services:
-  backend:
-    deploy:
-      replicas: 3
-
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-```
-
-### Load Balancing
-
-Use nginx or HAProxy to distribute load:
-
-```nginx
-upstream backend {
-    server backend1:8002;
-    server backend2:8002;
-    server backend3:8002;
-}
-
-server {
+    # Backend API
     location /api/ {
-        proxy_pass http://backend;
+        proxy_pass http://localhost:8002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+
+        # SSE support
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # API docs
+    location /docs {
+        proxy_pass http://localhost:8002;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
     }
 }
 ```
 
 ---
 
-## Updates and Maintenance
+## Cloud Deployment
 
-### Updating the Application
+### Deploy to VPS (DigitalOcean, AWS, GCP)
+
+1. **Provision server** (Ubuntu 20.04+ recommended)
+
+2. **Install Docker and Docker Compose**
 
 ```bash
-# Pull latest code
-git pull origin main
-
-# Rebuild and restart
-docker-compose down
-docker-compose up -d --build
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+sudo usermod -aG docker $USER
 ```
 
-### Database Migrations
+3. **Clone repository**
+
+```bash
+git clone <repository-url>
+cd miniclaw
+```
+
+4. **Configure environment**
+
+```bash
+cp backend/.env.example backend/.env
+nano backend/.env  # Edit with your API keys
+```
+
+5. **Start services**
+
+```bash
+docker-compose up -d
+```
+
+6. **Configure reverse proxy** (nginx + Let's Encrypt)
+
+```bash
+# Install nginx and certbot
+sudo apt update
+sudo apt install nginx certbot python3-certbot-nginx
+
+# Configure nginx
+sudo nano /etc/nginx/sites-available/miniclaw
+# Add nginx configuration from above
+
+# Enable site
+sudo ln -s /etc/nginx/sites-available/miniclaw /etc/nginx/sites-enabled/
+
+# Obtain SSL certificate
+sudo certbot --nginx -d your-domain.com
+```
+
+### Deploy to AWS ECS
+
+1. **Create ECR repositories**
+
+```bash
+aws ecr create-repository --repository-name miniclaw-backend
+aws ecr create-repository --repository-name miniclaw-frontend
+```
+
+2. **Build and push Docker images**
 
 ```bash
 # Backend
-cd backend
-python -m alembic upgrade head
+docker build -t miniclaw-backend backend
+docker tag miniclaw-backend:latest <account-id>.dkr.ecr.<region>.amazonaws.com/miniclaw-backend:latest
+docker push <account-id>.dkr.ecr.<region>.amazonaws.com/miniclaw-backend:latest
+
+# Frontend
+docker build -t miniclaw-frontend frontend
+docker tag miniclaw-frontend:latest <account-id>.dkr.ecr.<region>.amazonaws.com/miniclaw-frontend:latest
+docker push <account-id>.dkr.ecr.<region>.amazonaws.com/miniclaw-frontend:latest
 ```
+
+3. **Create ECS task definition and service**
+
+Use AWS Console or AWS CLI to configure ECS.
+
+---
+
+## Troubleshooting
+
+### Backend Issues
+
+**Problem**: Backend fails to start
+
+**Solution**:
+```bash
+# Check if port 8002 is already in use
+lsof -i :8002  # Linux/macOS
+netstat -ano | findstr :8002  # Windows
+
+# Check backend logs
+docker-compose logs backend
+```
+
+**Problem**: LLM API connection fails
+
+**Solution**:
+- Verify API key in `.env` file
+- Check network connectivity
+- Try testing API key with curl
+
+### Frontend Issues
+
+**Problem**: Frontend cannot connect to backend
+
+**Solution**:
+- Ensure backend is running: `curl http://localhost:8002/health`
+- Check `NEXT_PUBLIC_API_URL` in frontend `.env.local`
+- Verify CORS configuration
+
+**Problem**: Build fails
+
+**Solution**:
+```bash
+cd frontend
+rm -rf .next node_modules
+npm install
+npm run build
+```
+
+### Docker Issues
+
+**Problem**: Containers cannot communicate
+
+**Solution**:
+- Ensure both services are in the same Docker network
+- Check service names in docker-compose.yml
+- Verify no port conflicts
+
+**Problem**: Volume permissions
+
+**Solution**:
+```bash
+# Fix volume permissions on Linux
+sudo chown -R $USER:$USER ./data
+```
+
+---
+
+## Health Checks
+
+### Backend Health Check
+
+```bash
+# Check if backend is running
+curl http://localhost:8002/health
+
+# Expected response
+{
+  "status": "healthy",
+  "version": "0.1.0"
+}
+```
+
+### Frontend Health Check
+
+```bash
+# Check if frontend is running
+curl http://localhost:3000
+
+# Or in browser
+# Navigate to http://localhost:3000
+```
+
+---
+
+## Backup and Restore
+
+### Backup Data
+
+```bash
+# Backup all data
+tar -czf miniclaw-backup-$(date +%Y%m%d).tar.gz ./data ./backend/.env
+
+# Backup to cloud storage (optional)
+aws s3 cp miniclaw-backup-$(date +%Y%m%d).tar.gz s3://your-bucket/
+```
+
+### Restore Data
+
+```bash
+# Stop services
+docker-compose down
+
+# Restore data
+tar -xzf miniclaw-backup-20240304.tar.gz
+
+# Start services
+docker-compose up -d
+```
+
+---
+
+## Monitoring
+
+### Logs
+
+```bash
+# View all logs
+docker-compose logs -f
+
+# View backend logs
+docker-compose logs -f backend
+
+# View logs from last 100 lines
+docker-compose logs --tail=100 backend
+```
+
+### Metrics (Optional)
+
+Consider setting up monitoring tools:
+- **Prometheus + Grafana** for metrics visualization
+- **Sentry** for error tracking
+- **LangSmith** for LLM tracing (requires LANGCHAIN_API_KEY)
+
+---
+
+## Security Best Practices
+
+1. **Never commit `.env` files** to version control
+2. **Use strong API keys** and rotate them regularly
+3. **Enable HTTPS** in production
+4. **Configure CORS** whitelist properly
+5. **Use firewall** to restrict access
+6. **Keep dependencies updated**:
+   ```bash
+   cd backend && pip install --upgrade -r requirements.txt
+   cd frontend && npm update
+   ```
+7. **Regular backups** of data directory
+8. **Monitor logs** for suspicious activity
+
+---
+
+## Scaling Considerations
+
+### Backend Scaling
+
+- Use **Gunicorn with multiple workers**
+- Deploy behind **load balancer** (nginx/HAProxy)
+- Consider **serverless** deployment (AWS Lambda, Google Cloud Run)
+
+### Frontend Scaling
+
+- Use **CDN** for static assets
+- Enable **gzip/brotli** compression
+- Implement **caching** strategies
+- Consider **static export** (`npm run build && npm run export`)
 
 ---
 
 ## Support
 
-For issues and questions:
-- GitHub Issues: [repository-url]/issues
-- Documentation: [repository-url]/wiki
-- Email: support@example.com
+For deployment issues:
+- Check logs: `docker-compose logs -f`
+- Verify environment variables
+- Check network connectivity
+- Review documentation in `docs/` directory
+
+---
+
+*Last Updated: 2024-03-14*

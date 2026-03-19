@@ -7,7 +7,7 @@ removal, and listing with refined descriptions.
 
 from fastapi import APIRouter, HTTPException, status, BackgroundTasks
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 import sys
 
@@ -30,12 +30,36 @@ class SkillMetadata(BaseModel):
     """Skill metadata model."""
     name: str = Field(..., description="Skill name")
     description: str = Field(..., description="Refined Chinese description")
-    description_en: str = Field(..., description="Refined English description")
+    description_en: Optional[str] = Field(None, description="Refined English description (auto-fallback to description if missing)")
     enabled: bool = Field(True, description="Whether skill is enabled")
     version: str = Field("1.0.0", description="Skill version")
     author: str = Field("", description="Skill author")
     tags: List[str] = Field(default_factory=list, description="Skill tags")
     installed_at: Optional[str] = Field(None, description="Installation timestamp")
+
+    @classmethod
+    def from_registry_data(cls, data: Dict[str, Any]) -> "SkillMetadata":
+        """
+        Create SkillMetadata from registry data with fallback for missing description_en.
+
+        Args:
+            data: Raw skill data from registry
+
+        Returns:
+            SkillMetadata instance
+        """
+        # Fallback: if description_en is missing, use description
+        description_en = data.get("description_en") or data.get("description", "")
+        return cls(
+            name=data.get("name", ""),
+            description=data.get("description", ""),
+            description_en=description_en,
+            enabled=data.get("enabled", True),
+            version=data.get("version", "1.0.0"),
+            author=data.get("author", ""),
+            tags=data.get("tags", []),
+            installed_at=data.get("installed_at"),
+        )
 
 
 class ListSkillsResponse(BaseModel):
@@ -99,7 +123,7 @@ async def list_skills():
         # List all skills
         skills_dict = registry.list_skills()
         skills = [
-            SkillMetadata(**skill_data)
+            SkillMetadata.from_registry_data(skill_data)
             for skill_data in skills_dict.values()
         ]
 
@@ -196,7 +220,7 @@ async def install_skill(request: InstallSkillRequest):
         return {
             "success": True,
             "message": f"Skill '{request.name}' installed successfully",
-            "skill": SkillMetadata(**skill_data),
+            "skill": SkillMetadata.from_registry_data(skill_data),
         }
 
     except HTTPException:
@@ -346,7 +370,7 @@ tags: {yaml.dump(request.tags, default_flow_style=False, allow_unicode=True)}
         return {
             "success": True,
             "message": f"Skill '{request.name}' created successfully",
-            "skill": SkillMetadata(**skill_data),
+            "skill": SkillMetadata.from_registry_data(skill_data),
         }
 
     except HTTPException:
@@ -433,7 +457,7 @@ async def toggle_skill(skill_name: str, request: ToggleSkillRequest):
 
         # Return updated skill data
         skill_data = registry.get_skill(skill_name)
-        return SkillMetadata(**skill_data)
+        return SkillMetadata.from_registry_data(skill_data)
 
     except HTTPException:
         raise

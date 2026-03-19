@@ -20,6 +20,9 @@ class SmartToolStopping:
     3. 强制停止不必要的工具调用
     """
 
+    # 类变量：在所有实例间共享工具调用历史
+    _shared_tool_history: List[str] = []
+
     def __init__(
         self,
         redundancy_window: int = 3,
@@ -38,8 +41,15 @@ class SmartToolStopping:
         self.sufficiency_interval = sufficiency_interval
         self.enable = enable
 
-        # 追踪工具调用历史
-        self.tool_history: List[str] = []
+    @property
+    def tool_history(self) -> List[str]:
+        """获取工具调用历史（使用类变量）"""
+        return SmartToolStopping._shared_tool_history
+
+    def reset_history(self):
+        """重置工具调用历史（在开始新对话时调用）"""
+        SmartToolStopping._shared_tool_history.clear()
+        logger.debug("[SMART_STOP] 工具调用历史已重置")
 
     def should_stop_tool_calling(
         self,
@@ -69,11 +79,12 @@ class SmartToolStopping:
 
         # 检查 3: 评估信息充分性
         if round_count >= self.sufficiency_interval:
+            logger.debug(f"[SMART_STOP] 检查信息充分性：round_count={round_count}, interval={self.sufficiency_interval}, tool={tool_name}")
             if self._has_sufficient_info(round_count, tool_name):
                 return True, f"已执行 {round_count} 轮，信息已充分，应该生成回答"
 
         # 检查 4: 避免无限探索
-        if round_count >= 5:
+        if round_count >= 15:
             return True, f"已达到 {round_count} 轮工具调用，避免过度探索"
 
         return False, ""
@@ -88,15 +99,40 @@ class SmartToolStopping:
             "在吗", "在不在", "你是谁", "what's up", "sup"
         ]
 
-        # 去除空格和标点
+        # 检查是否包含问候语
+        has_greeting = any(greeting in message_lower for greeting in greetings)
+
+        # 如果没有问候语，肯定不是简单问候
+        if not has_greeting:
+            return False
+
+        # ✅ 修复：检查是否包含请求关键词（如果有，则不是简单问候）
+        request_keywords = [
+            "请", "帮我", "搜索", "检索", "查找", "分析", "写", "生成",
+            "please", "help", "search", "find", "analyze", "write", "generate",
+            "arxiv", "论文", "资料", "最新", "recent", "paper"
+        ]
+
+        has_request = any(keyword in message_lower for keyword in request_keywords)
+
+        # 如果有请求关键词，不是简单问候
+        if has_request:
+            logger.debug(f"[SMART_STOP] 消息包含请求关键词，不是简单问候: {message_lower[:50]}")
+            return False
+
+        # ✅ 修复：检查消息长度（简单问候应该很短）
+        # 去除空格和标点后的纯文本
         import re
         clean_message = re.sub(r'[^\w\u4e00-\u9fff]', '', message_lower)
 
-        for greeting in greetings:
-            if greeting in clean_message:
-                return True
+        # 如果消息很长（>20个字符），不是简单问候
+        if len(clean_message) > 20:
+            logger.debug(f"[SMART_STOP] 消息过长({len(clean_message)}字符)，不是简单问候")
+            return False
 
-        return False
+        # 通过所有检查，确认为简单问候
+        logger.debug(f"[SMART_STOP] 检测到简单问候: {message_lower[:30]}")
+        return True
 
     def _is_redundant_tool_call(self, tool_name: str, tool_args: Dict) -> bool:
         """检测冗余工具调用"""
@@ -115,12 +151,20 @@ class SmartToolStopping:
 
     def _has_sufficient_info(self, round_count: int, current_tool: str) -> bool:
         """评估是否已有足够信息"""
-        # 如果已经执行了 3 轮以上的工具调用
-        if round_count >= 3:
+        # 如果已经执行了 10 轮以上的工具调用
+        if round_count >= 10:
             # 如果当前还在"探索类"工具（terminal, read_file）
             exploring_tools = ["terminal", "read_file", "search_kb"]
             if current_tool in exploring_tools:
                 logger.warning(f"[SMART_STOP] 过度探索：第 {round_count} 轮仍在使用探索类工具")
+                return True
+
+        # ✅ 新增：如果已经执行了超过配置的间隔轮数，且仍在探索
+        # 避免无限探索，但允许合理的多轮工具调用
+        if round_count >= self.sufficiency_interval * 2:  # 至少是配置间隔的 2 倍
+            exploring_tools = ["terminal", "read_file", "search_kb"]
+            if current_tool in exploring_tools:
+                logger.warning(f"[SMART_STOP] 已探索 {round_count} 轮，仍在使用探索类工具 {current_tool}")
                 return True
 
         return False

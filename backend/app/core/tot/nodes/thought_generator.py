@@ -58,12 +58,32 @@ async def thought_generator_node(state: ToTState) -> ToTState:
             HumanMessage(content=prompt)
         ]
 
+        logger.info(f"[TOT_GENERATOR] Sending prompt to LLM with tools")
+        logger.info(f"[TOT_GENERATOR] System prompt length: {len(_get_generator_system_prompt(0))}")
+        logger.info(f"[TOT_GENERATOR] User prompt: {prompt[:200]}...")
+
         response = await llm_with_tools.ainvoke(messages)
+
+        # DEBUG: Log response details
+        logger.info(f"[TOT_GENERATOR] Response received")
+        logger.info(f"[TOT_GENERATOR] Response type: {type(response)}")
+        logger.info(f"[TOT_GENERATOR] Has tool_calls attr: {hasattr(response, 'tool_calls')}")
+
+        if hasattr(response, 'tool_calls'):
+            logger.info(f"[TOT_GENERATOR] Tool calls count: {len(response.tool_calls) if response.tool_calls else 0}")
+            if response.tool_calls:
+                for tc in response.tool_calls:
+                    logger.info(f"[TOT_GENERATOR]   - Tool: {tc.get('name', 'unknown')}, Args: {tc.get('args', {})}")
+
+        if hasattr(response, 'content'):
+            logger.info(f"[TOT_GENERATOR] Response content length: {len(response.content) if response.content else 0}")
+            logger.info(f"[TOT_GENERATOR] Response content preview: {str(response.content)[:300] if response.content else 'EMPTY'}...")
 
         # Parse response into Thought objects
         # If LLM made tool calls, extract them properly
         if hasattr(response, 'tool_calls') and response.tool_calls:
             # LLM generated tool calls - create thoughts from them
+            logger.info(f"[TOT_GENERATOR] Creating thoughts from {len(response.tool_calls)} tool calls")
             all_new_thoughts = _create_thoughts_from_tool_calls(
                 response.tool_calls,
                 response.content,
@@ -72,6 +92,7 @@ async def thought_generator_node(state: ToTState) -> ToTState:
             )
         else:
             # No tool calls, parse text response
+            logger.warning(f"[TOT_GENERATOR] No tool calls in response! Parsing as text response.")
             all_new_thoughts = _parse_thoughts(
                 response.content,
                 parent_id=state["best_path"][-1] if state["best_path"] else None,
@@ -128,17 +149,23 @@ def _get_generator_system_prompt(variant: int = 0) -> str:
     """
     base_prompt = """You are an expert reasoning strategist. Your job is to solve problems by using available tools and reasoning.
 
-When responding:
-1. Use tools directly by calling them with proper arguments
-2. Explain your reasoning clearly
-3. Be concise but thorough
+CRITICAL INSTRUCTION:
+You MUST use tools when they can help gather information or complete tasks.
+When you need information, you MUST call the appropriate tool with the correct arguments.
 
 Available tools:
-- search_kb(query): Search knowledge base for information
-- fetch_url(url): Fetch content from a URL
-- read_file(path): Read a local file
-- python_repl(code): Execute Python code
-- terminal(command): Execute shell commands
+- search_kb: Search the knowledge base for information (requires "query" parameter)
+- fetch_url: Fetch content from a URL (requires "url" parameter)
+- read_file: Read a local file (requires "path" parameter)
+- python_repl: Execute Python code (requires "code" parameter)
+- terminal: Execute shell commands (requires "command" parameter)
+
+HOW TO USE TOOLS:
+When you need to use a tool, respond with a tool call in this format:
+<tool_call>
+<tool_name>search_kb</tool_name>
+<tool_arguments>{"query": "your search query here"}</tool_arguments>
+</tool_call>
 
 IMPORTANT: Always provide required arguments when calling tools."""
 
@@ -175,27 +202,38 @@ def _generate_combined_root_prompt(query: str, count: int) -> str:
     """
     return f"""User query: "{query}"
 
-Generate {count} diverse initial approaches to answer this query.
-
-For each approach, you should:
-1. Think about what information or actions are needed
-2. Use available tools to gather information or perform actions
-3. Explain your reasoning
+CRITICAL INSTRUCTION: You MUST generate exactly {count} SEPARATE tool calls, one for each approach.
 
 Available tools:
 - search_kb: Search the knowledge base for relevant information
-- fetch_url: Fetch content from a URL (requires a url parameter)
-- read_file: Read a local file (requires a path parameter)
+  Example: search_kb(query="quantum computing", top_k=5)
+
+- fetch_url: Fetch content from a URL
+  Example: fetch_url(url="https://arxiv.org/search/?query=AI")
+
+- read_file: Read a local file
+  Example: read_file(path="document.txt")
+
 - python_repl: Execute Python code for analysis
+  Example: python_repl(code="print('analysis')")
+
 - terminal: Execute shell commands
+  Example: terminal(command="ls -la")
 
-IMPORTANT: If you need to use tools, call them directly with the required arguments.
-For example:
-- To search the knowledge base: search_kb(query="quantum computing")
-- To fetch a URL: fetch_url(url="https://example.com")
-- To read a file: read_file(path="document.txt")
+YOUR TASK - Generate {count} different tool calls for this query:
 
-Provide your reasoning and use tools as needed."""
+Approach 1: First tool call
+Approach 2: Second tool call
+Approach 3: Third tool call
+{f'Approach 4: Fourth tool call' if count > 3 else ''}
+{f'Approach 5: Fifth tool call' if count > 4 else ''}
+
+Each approach should use a DIFFERENT tool or different parameters to ensure diversity.
+
+IMPORTANT:
+- DO NOT just describe what you would do - ACTUALLY CALL THE TOOLS
+- Each tool call must be complete with all required arguments
+- Make sure each approach is meaningfully different from the others"""
 
 
 def _generate_combined_extension_prompt(query: str, parent_thoughts: List[Thought], count: int) -> str:
@@ -559,25 +597,49 @@ def _generate_fallback_thoughts(
     """
     Generate fallback thoughts when parsing fails.
 
-    NOTE: Fallback thoughts don't include tool calls - they just describe
-    strategies. The LLM will need to generate actual tool calls.
+    Each fallback thought includes a tool call to ensure research mode
+    actually uses tools for information gathering.
     """
+    # Define fallback strategies with their corresponding tools
     fallback_strategies = [
-        f"Analyze the query systematically: {query}",
-        f"Break down into key components: {query}",
-        f"Consider multiple perspectives: {query}",
-        f"Research relevant information: {query}",
-        f"Synthesize available knowledge: {query}"
+        {
+            "content": f"Analyze the query systematically: {query}",
+            "tool": "search_kb",
+            "args": {"query": query, "top_k": 5}
+        },
+        {
+            "content": f"Break down into key components: {query}",
+            "tool": "search_kb",
+            "args": {"query": query[:100] if len(query) > 100 else query, "top_k": 3}
+        },
+        {
+            "content": f"Consider multiple perspectives: {query}",
+            "tool": "fetch_url",
+            "args": {"url": f"https://arxiv.org/search/?query={query[:50]}&searchtype=all"}
+        },
+        {
+            "content": f"Research relevant information: {query}",
+            "tool": "search_kb",
+            "args": {"query": f"{query} research latest", "top_k": 10}
+        },
+        {
+            "content": f"Synthesize available knowledge: {query}",
+            "tool": "search_kb",
+            "args": {"query": query, "top_k": 7}
+        }
     ]
 
     thoughts = []
     for i in range(min(count, len(fallback_strategies))):
-        strategy = fallback_strategies[i]
+        strategy_config = fallback_strategies[i]
         thoughts.append(Thought(
             id=f"thought_{uuid.uuid4().hex[:8]}",
             parent_id=parent_id,
-            content=strategy,
-            tool_calls=[],  # No tool calls - let LLM generate them
+            content=strategy_config["content"],
+            tool_calls=[{
+                "name": strategy_config["tool"],
+                "args": strategy_config["args"]
+            }],
             status="pending"
         ))
 

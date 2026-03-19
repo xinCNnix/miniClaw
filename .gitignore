@@ -49,6 +49,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+test-results/
 
 # Translations
 *.mo
@@ -140,8 +141,42 @@ Thumbs.db
 chroma/
 *.log
 storage/
+
+# Session data (conversations)
 sessions/*.json
+backend/data/sessions/*.json
+test_*.json
+
+# Generated workspace files
 workspace/SKILLS_SNAPSHOT.md
+workspace/MEMORY.md
+workspace/USER.md
+
+# Vector store
+backend/data/vector_store/
+
+# Memory metadata
+backend/data/memory_metadata.json
+
+# Test files
+*_test.spec.ts
+*_test.spec.js
+test_*.json
+*_test_*.json
+e2e_*.json
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+nul
+show_prompt.py
+test_*.json
+
+# Screenshots
+*.png
+*.jpg
+*.jpeg
 
 # Frontend dependencies and build artifacts
 frontend/node_modules/
@@ -156,6 +191,85 @@ frontend/npm-debug.log*
 frontend/yarn-debug.log*
 frontend/yarn-error.log*
 frontend/.tsbuildinfo
+frontend/test-results/
 
 # Knowledge base large files (PDFs)
 backend/data/knowledge_base/*.pdf
+
+# Local launch scripts (not tracked in git)
+启动.bat
+启动-智能版.bat
+stop.bat
+start.ps1
+start-clean.bat
+
+# Backup directories
+backend/backup/
+backup/
+
+# E2E test screenshots and results
+frontend/e2e/
+
+# Temporary sync files
+=0.*
+
+# Project documentation (not tracked in git)
+CLAUDE.md
+
+# Bash crash dumps
+*.stackdump
+
+# Test scripts (development/testing)
+backend/test_*.py
+
+# Temporary and work-in-progress documentation
+docs/*TEST*.md
+docs/*WORK*.md
+docs/*REPORT*.md
+docs/*LOG*.md
+docs/DELIVERY_ASSESSMENT_REPORT.md
+docs/FRONTEND_TEST_*.md
+docs/KNOWLEDGE_BASE_TEST_PLAN.md
+docs/memory-improvement-plan.md
+docs/PROJECT_SUMMARY.md
+docs/TOOLS_UPDATE.md
+
+# Architecture and database documentation (internal use)
+docs/ARCHITECTURE.md
+docs/DATABASE_*.md
+
+# Temporary reports and analysis (generated during development)
+*_REPORT.md
+*_ANALYSIS.md
+*_SUMMARY_*.md
+*_FIX_*.md
+*_TEST_*.md
+*_DEBUG*.md
+*_LOG*.md
+*STATUS*.md
+*QUICK*.md
+
+# Test scripts and temporary files (keep only organized tests in tests/)
+test_*.py
+*_test_*.py
+manual_test_*.py
+debug_*.py
+verify_*.py
+restart_*.bat
+restart_*.sh
+
+# Response dumps and temporary outputs
+*_response.txt
+test_results.txt
+*.txt.bak
+
+# Backup files
+*.backup
+*_backup.*
+
+# Temporary documentation
+COMMIT_MESSAGE.txt
+TOT_TEST_PLAN.md
+
+# Skills directory (user-specific, not tracked in git)
+backend/data/skills/

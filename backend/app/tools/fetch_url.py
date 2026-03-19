@@ -7,11 +7,13 @@ Features:
 - Timeout control
 - Error handling
 - Request header customization
+- Date extraction from web pages
 """
 
 import re
 from typing import Optional
 from urllib.parse import urlparse
+from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 import html2text
@@ -62,22 +64,26 @@ class FetchURLTool(BaseTool):
     - Removes scripts, styles, and navigation elements
     - Preserves main content structure
     - Reduces token usage significantly
+    - Extracts publication dates when available
+    - Includes fetch timestamp to assess freshness
 
     Common uses:
     - Get article content from web pages
     - Fetch JSON data from APIs
     - Retrieve documentation
     - Access weather APIs and other data sources
+    - Check if content is up-to-date
 
     Examples:
-    - fetch_url: https://example.com
-    - fetch_url: https://wttr.in/Beijing?format=j1 (JSON weather data)
-    - fetch_url: https://api.github.com/repos/owner/repo (GitHub API)
+    - fetch_url(url="https://example.com")
+    - fetch_url(url="https://wttr.in/Beijing?format=j1")  # JSON weather
+    - fetch_url(url="https://api.github.com/repos/owner/repo")  # GitHub API
 
     Note:
+    - The tool returns the fetched date and tries to extract publication date
+    - Always check the publication/fetched date to determine if content is current
     - HTML pages are cleaned and converted to Markdown
     - JSON responses are returned as-is for parsing
-    - Use output_format='text' for plain text instead of Markdown
     """
     args_schema: type[FetchURLInput] = FetchURLInput
 
@@ -110,6 +116,59 @@ class FetchURLTool(BaseTool):
         except Exception as e:
             raise ValueError(f"Invalid URL: {str(e)}")
 
+    def _extract_date_from_html(self, soup: BeautifulSoup, url: str) -> Optional[str]:
+        """
+        Extract publication date from HTML metadata.
+
+        Args:
+            soup: BeautifulSoup object
+            url: Source URL
+
+        Returns:
+            Date string if found, None otherwise
+        """
+        # Try common date meta tags
+        date_selectors = [
+            'meta[property="article:published_time"]',
+            'meta[property="article:modified_time"]',
+            'meta[name="date"]',
+            'meta[name="pubdate"]',
+            'meta[name="publish-date"]',
+            'time[datetime]',
+            'span[class*="date"]',
+            'div[class*="date"]',
+        ]
+
+        for selector in date_selectors:
+            element = soup.select_one(selector)
+            if element:
+                # Try to get content or datetime attribute
+                date_str = (
+                    element.get('content') or
+                    element.get('datetime') or
+                    element.get_text(strip=True)
+                )
+                if date_str:
+                    # Clean up the date string
+                    date_str = date_str.strip()
+                    # Remove common prefixes
+                    for prefix in ['Published:', 'Updated:', 'Date:', 'Posted:']:
+                        date_str = date_str.replace(prefix, '').strip()
+                    return date_str
+
+        # Try to find date in URL path (e.g., /2024/03/17/article)
+        import re
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        path = parsed.path
+
+        # Look for date patterns in URL
+        date_match = re.search(r'/(\d{4})/\d{1,2}/\d{1,2}/', path)
+        if date_match:
+            return date_match.group(0).strip('/')
+
+        return None
+
     def _clean_html(
         self,
         html: str,
@@ -128,6 +187,9 @@ class FetchURLTool(BaseTool):
             Cleaned content
         """
         soup = BeautifulSoup(html, "html.parser")
+
+        # Extract publication date BEFORE cleaning
+        pub_date = self._extract_date_from_html(soup, url)
 
         # Remove script and style elements
         for script in soup(["script", "style", "nav", "footer", "header", "aside"]):
@@ -161,6 +223,10 @@ class FetchURLTool(BaseTool):
         lines = content.split("\n")
         lines = [line.strip() for line in lines if line.strip()]
         cleaned = "\n".join(lines)
+
+        # Add date information if found
+        if pub_date:
+            cleaned = f"**Publication Date**: {pub_date}\n\n{cleaned}"
 
         return cleaned
 
@@ -272,9 +338,11 @@ class FetchURLTool(BaseTool):
             try:
                 cleaned_content = self._clean_html(content, url, output_format)
 
-                # Add metadata
+                # Add metadata header with date information
+                fetch_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
                 result_parts = [
                     f"# Content from {url}",
+                    f"**Fetched**: {fetch_date}",
                     "",
                     cleaned_content,
                 ]
@@ -294,7 +362,8 @@ class FetchURLTool(BaseTool):
                 return f"Error cleaning HTML: {str(e)}"
 
         # Handle plain text or other formats
-        return f"# Content from {url}\n\n{content}"
+        fetch_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+        return f"# Content from {url}\n\n**Fetched**: {fetch_date}\n\n{content}"
 
     async def _arun(
         self,

@@ -9,7 +9,22 @@ import { useApp } from "@/contexts/AppContext"
 import { apiClient } from "@/lib/api"
 
 export default function ChatPage() {
-  const { chat, editor, sessions, refreshSessions } = useApp()
+  const { chat, editor, sessions, refreshSessions, loadFile, saveFile, closeFile } = useApp()
+
+  // Restore most recent session on mount
+  useEffect(() => {
+    const restoreSession = async () => {
+      await refreshSessions()
+
+      // Auto-load the most recent session if available
+      if (sessions && sessions.length > 0) {
+        const mostRecentSession = sessions[0]
+        await chat.loadSessionMessages(mostRecentSession.session_id)
+      }
+    }
+
+    restoreSession()
+  }, [])
 
   const handleNewChat = async () => {
     await chat.newSession()
@@ -19,21 +34,7 @@ export default function ChatPage() {
 
   const handleSelectSession = async (sessionId: string) => {
     try {
-      const session = await apiClient.getSession(sessionId)
-
-      // Load messages from session
-      if (session.messages && Array.isArray(session.messages)) {
-        const messages = session.messages.map((msg: any) => ({
-          role: msg.role,
-          content: msg.content,
-          timestamp: msg.timestamp || new Date().toISOString(),
-        }))
-        chat.loadMessages(messages)
-      } else {
-        chat.clearMessages()
-      }
-
-      chat.setSession(sessionId)
+      await chat.loadSessionMessages(sessionId)
     } catch (error) {
       console.error("Failed to load session:", error)
     }
@@ -80,9 +81,9 @@ export default function ChatPage() {
         directories={editor.directories}
         currentDirectory={editor.currentDirectory}
         currentFile={editor.currentFile}
-        onLoadFile={editor.loadFile}
-        onSaveFile={editor.saveFile}
-        onCloseFile={editor.closeFile}
+        onLoadFile={loadFile}
+        onSaveFile={saveFile}
+        onCloseFile={closeFile}
         onChangeDirectory={editor.changeDirectory}
         onGoUpDirectory={editor.goUpDirectory}
       />

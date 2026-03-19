@@ -1,6 +1,7 @@
 # CLAUDE.md — miniClaw 开发规范
 
 ## 项目信息
+- Git 本地仓库路径: `I:\miniclaw-git` (重要：git 操作必须在此目录执行)
 - 项目名称: miniClaw
 - 项目类型: AI Agent 系统 (前后端分离)
 - 后端语言: Python 3.10+
@@ -217,7 +218,6 @@ IMPORTANT: 根本解决问题
 
 ### LLM 配置
 - 支持多个 LLM 提供商 (OpenAI/DeepSeek/Qwen/Ollama)
-- 默认使用 Qwen (测试环境)
 - 通过 `LLM_PROVIDER` 环境变量切换
 
 ### 优先级
@@ -416,6 +416,33 @@ IMPORTANT: 根本解决问题
 - 后端: `test_*.py` 或 `*_test.py`
 - 前端: `*.test.ts` 或 `*.spec.ts`
 
+### 测试文件位置管理
+**IMPORTANT: 测试文件统一管理规则**
+
+1. **所有测试文件必须保存在 `tests/` 文件夹中**
+   - 后端测试: `backend/tests/`
+   - 前端测试: `frontend/tests/` 或 `frontend/e2e/`
+   - 性能测试: `backend/tests/performance/`
+   - 示例: `backend/tests/test_performance.py` ✓
+   - 错误示例: `backend/test_performance.py` ✗
+
+2. **禁止将测试文件混入源代码目录**
+   - 不要在 `app/` 目录下放置测试文件
+   - 不要在 `components/` 目录下放置测试文件
+   - 保持源代码目录整洁
+
+3. **测试文件与源代码的对应关系**
+   - 单元测试应与源代码目录结构对应
+   - 示例: `app/tools/terminal.py` → `tests/tools/test_terminal.py`
+   - 集成测试可放在 `tests/integration/`
+   - E2E 测试可放在 `tests/e2e/`
+
+### 测试文件命名约定
+- 单元测试: `test_<module>.py` (如 `test_agent.py`)
+- 集成测试: `test_integration_<feature>.py` (如 `test_integration_chat.py`)
+- 性能测试: `test_performance_<scenario>.py` (如 `test_performance_cache.py`)
+- 临时测试脚本: `manual_test_<name>.py` (仍放在 `tests/` 目录)
+
 ## Agent Skills 特定规范
 
 ### Skills 定义
@@ -429,6 +456,19 @@ IMPORTANT: 根本解决问题
 ---
 name: skill_name
 description: 简短描述
+dependencies:
+  python:
+    - "package>=1.0.0"
+  system:
+    - name: cli-tool
+      bins: [cli-tool]
+      install:
+        - kind: brew
+          formula: cli-tool
+          label: "brew install cli-tool"
+        - kind: apt
+          package: cli-tool
+          label: "sudo apt install cli-tool"
 ---
 
 # 技能名称
@@ -443,6 +483,46 @@ description: 简短描述
 ## 示例
 提供使用示例
 ```
+
+### 依赖声明规范
+
+Skills 可以声明两类依赖：
+
+#### Python 依赖 (自动安装)
+- 在 `dependencies.python` 中声明
+- 系统会在启动时自动检查并安装缺失的包
+- 支持版本约束：`"package>=1.0.0"` 或 `"package==2.0.0"`
+- 示例：
+  ```yaml
+  dependencies:
+    python:
+      - "arxiv>=2.0.0"
+      - "requests>=2.31.0"
+  ```
+
+#### 系统依赖 (提示安装)
+- 在 `dependencies.system` 中声明
+- 系统会检查 CLI 工具是否存在，缺失时给出安装提示
+- 支持多种包管理器 (brew, apt, npm, winget 等)
+- 示例：
+  ```yaml
+  dependencies:
+    system:
+      - name: gh
+        bins: [gh]
+        install:
+          - kind: brew
+            formula: gh
+            label: "brew install gh"
+          - kind: apt
+            package: gh
+            label: "sudo apt install gh"
+  ```
+
+#### 依赖安装行为
+- Python 依赖：自动安装，失败时给出详细错误提示
+- 系统依赖：检测缺失后提示用户手动安装，不自动执行
+- 如果产生依赖冲突，会在错误信息中给出解决方案
 
 ### Skills 调用协议
 - Agent 必须先 `read_file` 读取 SKILL.md
@@ -479,6 +559,105 @@ description: 简短描述
 - 后端: uvicorn 直接运行
 - 前端: npm run dev
 - 支持热更新
+
+## Git 同步规则
+
+**IMPORTANT: 文件同步到 Git 本地仓库的规则**
+
+### 工作目录与 Git 仓库分离
+- **工作目录**: `I:\code\miniclaw` (日常开发位置)
+- **Git 本地仓库**: `I:\miniclaw-git` (git 操作必须在此目录执行)
+- **其他环境**: `F:\vllm\.conda\envs\mini_openclaw\miniclaw` (Conda 环境)
+
+### 同步到 Git 本地仓库的文件类型
+
+**应该同步的文件**:
+- ✓ 源代码文件 (`backend/app/`, `frontend/app/`, `frontend/components/`)
+- ✓ 配置文件 (`config.py`, `pyproject.toml`, `package.json`)
+- ✓ 文档文件 (`README.md`, `CHANGELOG.md`, `CLAUDE.md`)
+- ✓ 技能定义 (`backend/data/skills/*/SKILL.md`)
+- ✓ 工作区文件 (`backend/workspace/`)
+- ✓ 部署文件 (`Dockerfile`, `docker-compose.yml`, `.env.example`)
+
+**不应该同步的文件**:
+- ✗ **测试文件**: 所有 `tests/` 目录下的文件
+- ✗ **未跟踪文档**: 性能报告、临时分析文档等
+- ✗ **临时文件**: `*.tmp`, `*.bak`, `*.log`
+- ✗ **敏感数据**: `credentials.encrypted`, `.env`
+- ✗ **生成文件**: `__pycache__/`, `node_modules/`, `.next/`
+- ✗ **数据库文件**: `*.sqlite3`, `*.db`
+
+### 文档分类规则
+
+**生产文档** (同步到 Git):
+- `README.md` - 项目说明
+- `CHANGELOG.md` - 变更日志
+- `CLAUDE.md` - 开发规范
+- `DEPLOYMENT.md` - 部署文档
+- `QUICKSTART.md` - 快速开始
+
+**临时/分析文档** (不同步):
+- `PERFORMANCE_TEST_REPORT.md` - 性能测试报告
+- `*_REPORT.md` - 各类临时报告
+- `*_ANALYSIS.md` - 分析文档
+- `*_SUMMARY.md` - 总结文档(非核心)
+- `test_*.py` - 测试脚本(应放在 `tests/`)
+
+### 测试文件管理规则
+
+**规则 1: 测试文件位置**
+- 所有测试文件必须放在 `tests/` 文件夹
+- 后端测试: `backend/tests/`
+- 前端测试: `frontend/tests/`
+- **禁止**: 在源代码目录混入测试文件
+
+**规则 2: 测试文件同步**
+- 单元测试、集成测试 (`test_*.py`): **同步到 Git**
+- 临时测试脚本、性能测试脚本: **不同步到 Git**
+- 手动测试脚本: **不同步到 Git**
+
+**规则 3: .gitignore 配置**
+```
+# 测试相关
+tests/manual_*.py
+tests/performance/*.py
+backend/test_*.py
+frontend/test_*.spec.ts
+
+# 临时文档
+*_REPORT.md
+*_ANALYSIS.md
+*_SUMMARY_*.md
+```
+
+### 同步流程
+
+**从工作目录同步到 Git 仓库**:
+1. 识别需要同步的文件列表
+2. 过滤掉测试文件和临时文档
+3. 复制核心文件到 `I:\miniclaw-git`
+4. 在 Git 仓库执行 `git add` 和 `git commit`
+
+**示例**:
+```bash
+# 应该同步
+backend/app/config.py
+CHANGELOG.md
+README.md
+
+# 不应该同步
+backend/test_performance.py
+PERFORMANCE_TEST_REPORT.md
+tests/manual_test_example.py
+```
+
+### 验证清单
+- [ ] 测试文件都在 `tests/` 目录
+- [ ] 源代码目录无测试文件混入
+- [ ] Git 仓库无测试脚本
+- [ ] Git 仓库无临时文档
+- [ ] .gitignore 已正确配置
+- [ ] 文档分类清晰(生产 vs 临时)
 
 ## 格式要求
 

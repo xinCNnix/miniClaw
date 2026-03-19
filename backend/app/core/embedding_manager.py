@@ -82,7 +82,7 @@ class EmbeddingModelManager:
             self._model = model
             self._status = EmbeddingLoadStatus.READY
             self._load_duration = (datetime.now() - self._load_start_time).total_seconds()
-            logger.info(f"✓ Embedding model loaded successfully in {self._load_duration:.2f}s")
+            logger.info(f"[OK] Embedding model loaded successfully in {self._load_duration:.2f}s")
             return True
 
         except asyncio.TimeoutError:
@@ -165,7 +165,7 @@ class EmbeddingModelManager:
                 timeout=timeout
             )
 
-            logger.info("✓ Embedding model loaded successfully from local path")
+            logger.info("[OK] Embedding model loaded successfully from local path")
             return model
 
         except asyncio.TimeoutError:
@@ -198,7 +198,7 @@ class EmbeddingModelManager:
                     timeout=timeout
                 )
 
-                logger.info(f"✓ Successfully loaded model from {endpoint_name}")
+                logger.info(f"[OK] Successfully loaded model from {endpoint_name}")
                 return model
 
             except (asyncio.TimeoutError, Exception) as e:

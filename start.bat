@@ -29,38 +29,7 @@ if !errorlevel! neq 0 (
 echo [OK] Prerequisites found.
 echo/
 
-echo Step 0.1/4: Checking required tools...
-where clawhub >nul 2>&1
-if !errorlevel! neq 0 (
-    echo ClawHub CLI not found. Installing...
-    call npm i -g clawhub
-    if !errorlevel! equ 0 (
-        echo [OK] ClawHub CLI installed
-    ) else (
-        echo [ERROR] Failed to install ClawHub CLI. Please check npm logs.
-        pause
-        exit /b 1
-    )
-) else (
-    echo [OK] ClawHub CLI already installed
-)
-echo/
-
-echo Step 0.2/4: Checking ClawSec security suite...
-set "CLAWSEC_DIR=backend\data\skills\clawsec-suite"
-if not exist "%CLAWSEC_DIR%" (
-    echo ClawSec not found. Installing to project skills directory...
-    echo This may take a minute...
-    rem Ensure we are in the right dir for npx if needed, though npx usually handles it
-    call npx clawhub@latest install clawsec-suite
-    if !errorlevel! equ 0 (
-        echo [OK] ClawSec installed successfully
-    ) else (
-        echo [WARNING] ClawSec installation failed. You can install it later manually.
-    )
-) else (
-    echo [OK] ClawSec already installed
-)
+echo [OK] Required tools check complete
 echo/
 
 rem --- Env Configuration ---

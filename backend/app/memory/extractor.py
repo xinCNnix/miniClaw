@@ -30,14 +30,16 @@ class MemoryExtractor:
     - Patterns (recurring requests, common workflows)
     """
 
-    def __init__(self, llm: BaseChatModel | None = None):
+    def __init__(self, llm: BaseChatModel | None = None, max_retries: int = 2):
         """
         Initialize the memory extractor.
 
         Args:
             llm: Optional LLM instance. If not provided, uses default LLM.
+            max_retries: Maximum number of retries when JSON parsing fails.
         """
         self.llm = llm or get_default_llm()
+        self.max_retries = max_retries
 
     async def extract(
         self,
@@ -78,27 +80,51 @@ class MemoryExtractor:
         # Build extraction prompt
         system_prompt = self._build_extraction_prompt()
 
-        # Call LLM
-        try:
-            result = await self._call_llm(system_prompt, conversation_text)
-        except Exception as e:
-            logger.error(f"LLM extraction failed for session {session_id}: {e}")
-            # Return empty result on failure
-            return MemoryExtractionResult(
-                memories=[],
-                summary="",
-                topics=[],
-            )
+        # Retry loop for LLM call and parsing
+        last_error = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                # Call LLM
+                result = await self._call_llm(system_prompt, conversation_text)
 
-        # Parse and validate result
-        extraction_result = self._parse_extraction_result(result, session_id)
+                # Parse and validate result
+                extraction_result = self._parse_extraction_result(result, session_id)
 
-        logger.info(
-            f"Extracted {len(extraction_result.memories)} memories "
-            f"from session {session_id}"
+                # If we got here, parsing succeeded
+                if attempt > 0:
+                    logger.info(f"Memory extraction succeeded on retry {attempt + 1}")
+
+                logger.info(
+                    f"Extracted {len(extraction_result.memories)} memories "
+                    f"from session {session_id}"
+                )
+
+                return extraction_result
+
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"Memory extraction attempt {attempt + 1}/{self.max_retries + 1} failed: {e}"
+                )
+
+                if attempt < self.max_retries:
+                    # Wait a bit before retrying (exponential backoff)
+                    import asyncio
+                    wait_time = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s...
+                    await asyncio.sleep(wait_time)
+                else:
+                    # All retries exhausted
+                    logger.error(
+                        f"Memory extraction failed after {self.max_retries + 1} attempts: {e}"
+                    )
+                    break
+
+        # Return empty result on failure after all retries
+        return MemoryExtractionResult(
+            memories=[],
+            summary="",
+            topics=[],
         )
-
-        return extraction_result
 
     def _format_conversation(self, messages: List[Dict]) -> str:
         """
@@ -243,12 +269,8 @@ Be conservative - only extract information you're confident about. If uncertain,
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM output as JSON: {e}")
             logger.debug(f"LLM output: {llm_output}")
-            # Return empty result
-            return MemoryExtractionResult(
-                memories=[],
-                summary="",
-                topics=[],
-            )
+            # Raise exception to trigger retry
+            raise ValueError(f"JSON parsing failed: {e}") from e
 
         # Parse memories
         memories = []
@@ -289,6 +311,20 @@ def get_memory_extractor() -> MemoryExtractor:
     global _extractor_instance
 
     if _extractor_instance is None:
-        _extractor_instance = MemoryExtractor()
+        from app.config import get_settings
+        settings = get_settings()
+        _extractor_instance = MemoryExtractor(
+            max_retries=settings.memory_extraction_max_retries
+        )
 
     return _extractor_instance
+
+
+def reset_memory_extractor() -> None:
+    """
+    Reset the global memory extractor to force recreation on next access.
+
+    This should be called when configuration is updated.
+    """
+    global _extractor_instance
+    _extractor_instance = None

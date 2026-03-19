@@ -2,17 +2,21 @@
 
 import { MessageBubble } from "@/components/chat/MessageBubble"
 import { ThinkingChainDisplay } from "@/components/chat/ThinkingChainDisplay"
-import type { Message } from "@/types/chat"
+import { ThoughtTree } from "@/components/chat/thought-tree"
+import type { Message, ThinkingEvent } from "@/types/chat"
 import { useTranslation } from "@/hooks/use-translation.hook"
 
 interface MessageListProps {
   messages: Message[]
-  thinkingEvents?: unknown[]
+  thinkingEvents?: ThinkingEvent[]
   isLoading?: boolean
 }
 
 export function MessageList({ messages, thinkingEvents = [], isLoading = false }: MessageListProps) {
   const { t } = useTranslation()
+
+  // Check if there are any ToT events
+  const hasToTEvents = thinkingEvents.some(event => event.type.startsWith('tot_'))
 
   if (messages.length === 0) {
     return (
@@ -39,10 +43,22 @@ export function MessageList({ messages, thinkingEvents = [], isLoading = false }
         <div key={index}>
           {/* Show thinking chain before assistant messages */}
           {message.role === "assistant" && thinkingEvents.length > 0 && (
-            <ThinkingChainDisplay
-              events={thinkingEvents as any[]}
-              isLoading={isLoading && index === messages.length - 1}
-            />
+            <>
+              {/* Show ToT thought tree if ToT mode */}
+              {hasToTEvents && (
+                <ThoughtTree
+                  events={thinkingEvents}
+                  maxHeight="300px"
+                  data-testid="tot-reasoning-step"
+                />
+              )}
+
+              {/* Show regular thinking chain */}
+              <ThinkingChainDisplay
+                events={thinkingEvents as any[]}
+                isLoading={isLoading && index === messages.length - 1}
+              />
+            </>
           )}
 
           <MessageBubble message={message} />

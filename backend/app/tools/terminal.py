@@ -48,6 +48,11 @@ class TerminalTool(BaseTool):
     description: str = """
     Execute shell commands in a safe, sandboxed environment.
 
+    IMPORTANT: You MUST provide the 'command' parameter with the shell command to execute.
+
+    Parameter format:
+    - command (required): The shell command string to execute
+
     Important restrictions:
     - Commands are restricted to the project directory
     - Dangerous commands are blocked for both Unix and Windows
@@ -66,10 +71,11 @@ class TerminalTool(BaseTool):
     - Process management: tasklist
     - System info: systeminfo, ver
 
-    Examples:
-    - terminal: ls -la
-    - terminal: cat README.md
-    - terminal: find . -name "*.py"
+    Usage examples:
+    - command="ls -la"
+    - command="cat README.md"
+    - command="find . -name '*.py'"
+    - command="curl -s 'https://api.example.com/data'"
     """
     args_schema: type[TerminalInput] = TerminalInput
 
@@ -215,12 +221,70 @@ class TerminalTool(BaseTool):
             if result.returncode != 0:
                 output.append(f"\n[Exit code: {result.returncode}]")
 
-            return "\n".join(output) if output else "Command completed with no output"
+            result_str = "\n".join(output) if output else "Command completed with no output"
+
+            # Check for Python import errors in command output
+            if "python" in command.lower():
+                result_str = self._enhance_python_error(result_str, command)
+
+            return result_str
 
         except subprocess.TimeoutExpired:
             return f"Command timed out after {timeout} seconds"
         except Exception as e:
             return f"Error executing command: {str(e)}"
+
+    def _enhance_python_error(self, output: str, command: str) -> str:
+        """
+        Enhance Python error messages with dependency installation hints.
+
+        Args:
+            output: Command output
+            command: The original command that was executed
+
+        Returns:
+            Enhanced output with helpful hints
+        """
+        output_lower = output.lower()
+
+        # Check for ModuleNotFoundError or ImportError
+        if "modulenotfounderror" in output_lower or "importerror" in output_lower:
+            enhanced = output.rstrip() + "\n\n"
+
+            # Try to extract the missing module name
+            import re
+            module_match = re.search(r"modulenotfounderror: no module named ['\"]([^'\"]+)['\"]", output, re.IGNORECASE)
+            if module_match:
+                missing_module = module_match.group(1)
+                enhanced += f"[ERROR] Missing Python package: '{missing_module}'\n\n"
+                enhanced += "[Auto-fix] Checking if this can be auto-installed...\n"
+
+                # Try to auto-install
+                try:
+                    from app.skills.dependencies import get_dependency_manager
+
+                    dep_manager = get_dependency_manager()
+                    success, msg = dep_manager.install_python_dependencies([missing_module])
+
+                    if success:
+                        enhanced += f"[SUCCESS] {msg}\n\n"
+                        enhanced += f"Please retry your command. The package has been installed."
+                    else:
+                        enhanced += f"[FAILED] Auto-install failed:\n{msg}\n\n"
+                        enhanced += f"Please install manually:\n"
+                        enhanced += f"  pip install {missing_module}\n"
+                except Exception as e:
+                    enhanced += f"[ERROR] Could not auto-install: {str(e)}\n\n"
+                    enhanced += f"Please install manually:\n"
+                    enhanced += f"  pip install {missing_module}\n"
+            else:
+                enhanced += "[ERROR] A Python module is missing but the name couldn't be extracted.\n\n"
+                enhanced += "[Solution] To fix this, check the error above and install the missing package:\n"
+                enhanced += "  pip install <package_name>\n"
+
+            return enhanced
+
+        return output
 
     async def _arun(
         self,

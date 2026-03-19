@@ -4,6 +4,9 @@ description: Search and retrieve academic papers from arXiv.org by query, author
 version: 1.0.0
 author: miniClaw
 tags: [arxiv, academic, research, papers, literature-search]
+dependencies:
+  python:
+    - "arxiv>=2.0.0"
 ---
 
 # arXiv Paper Search

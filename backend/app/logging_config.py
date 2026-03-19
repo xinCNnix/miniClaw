@@ -12,6 +12,34 @@ from logging.handlers import RotatingFileHandler
 from app.config import get_settings
 
 
+class SafeConsoleHandler(logging.StreamHandler):
+    """
+    Console handler that safely handles Unicode characters on Windows.
+
+    Windows console uses GBK encoding by default, which cannot handle
+    certain Unicode characters (e.g., zero-width characters like \\u200c).
+    This handler replaces unencodable characters instead of crashing.
+    """
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            stream = self.stream
+
+            # Safely encode and write message
+            # Use 'replace' to substitute unencodable chars with '?'
+            try:
+                stream.write(msg + self.terminator)
+            except UnicodeEncodeError:
+                # Fallback: encode with 'replace' error handler
+                safe_msg = msg.encode(stream.encoding or 'utf-8', errors='replace').decode(stream.encoding or 'utf-8')
+                stream.write(safe_msg + self.terminator)
+
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+
 def setup_logging(
     log_level: str = None,
     log_dir: str = None,
@@ -52,9 +80,9 @@ def setup_logging(
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # Console handler
+    # Console handler (with Unicode-safe handling for Windows)
     if log_to_console:
-        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler = SafeConsoleHandler(sys.stdout)
         console_handler.setLevel(getattr(logging, log_level.upper()))
         console_handler.setFormatter(formatter)
         root_logger.addHandler(console_handler)
@@ -123,9 +151,19 @@ def get_agent_logger(name: str = "agent") -> logging.Logger:
         name: Logger name (default: "agent")
 
     Returns:
-        Logger instance
+        Logger instance that outputs to agent.log and console
     """
-    return logging.getLogger(name)
+    logger = logging.getLogger(name)
+
+    # Ensure the logger has the same handlers as the "agent" logger
+    # This is important for child loggers like "agent.executor"
+    agent_root = logging.getLogger("agent")
+    if not logger.handlers:
+        for handler in agent_root.handlers:
+            logger.addHandler(handler)
+    logger.setLevel(agent_root.level)
+
+    return logger
 
 
 class AgentExecutionLogger:

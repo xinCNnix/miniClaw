@@ -63,7 +63,10 @@ class SearchKBTool(BaseTool):
     def _format_results(self, query: str, results: List[dict]) -> str:
         """Format search results for LLM consumption."""
         if not results:
+            logger.warning(f"[SEARCH_KB] No results found for query: {query}")
             return f"No relevant information found in knowledge base for query: {query}"
+
+        logger.info(f"[SEARCH_KB] Formatting {len(results)} results for query: {query}")
 
         formatted = [
             f"Knowledge Base Search Results for: {query}\n",
@@ -75,6 +78,10 @@ class SearchKBTool(BaseTool):
             metadata = result.get("metadata", {})
             score = result.get("score")
 
+            # DEBUG: Log each result
+            logger.info(f"[SEARCH_KB] Result {i}: score={score}, source={metadata.get('file_name', 'unknown')}")
+            logger.info(f"[SEARCH_KB] Content preview: {content[:200]}...")
+
             formatted.append(f"\n--- Result {i} ---")
             if score is not None:
                 formatted.append(f"Relevance: {score:.3f}")
@@ -82,7 +89,9 @@ class SearchKBTool(BaseTool):
                 formatted.append(f"Source: {metadata['file_name']}")
             formatted.append(f"\n{content}")
 
-        return "\n".join(formatted)
+        result_str = "\n".join(formatted)
+        logger.info(f"[SEARCH_KB] Total formatted output length: {len(result_str)} chars")
+        return result_str
 
 
 search_kb_tool = SearchKBTool()
