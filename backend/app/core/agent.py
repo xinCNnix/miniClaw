@@ -346,48 +346,64 @@ class AgentManager:
                         'id': tool_id
                     })
 
-                # Execute only valid tool calls
-                for idx, tc in enumerate(valid_tool_calls):
-                    tool_name = tc['name']
-                    tool_args = tc['args']
-                    tool_id = tc['id']
+                # === Phase 2: 并发工具执行 ===
+                # Check if we should use concurrent execution
+                use_concurrent = settings.enable_parallel_tool_execution
 
-                    logger.info(f"[Round {round_count + 1}] Executing tool {idx+1}/{len(valid_tool_calls)}: {tool_name}")
+                if use_concurrent and len(valid_tool_calls) > 1:
+                    # Concurrent execution for multiple tools
+                    logger.info(f"[Round {round_count + 1}] Using CONCURRENT execution for {len(valid_tool_calls)} tools")
 
-                    yield {
-                        "type": "tool_call",
-                        "tool_calls": [{
-                            "id": tool_id,
-                            "name": tool_name,
-                            "arguments": tool_args,
-                        }]
-                    }
+                    async for event in self._execute_tools_concurrent(valid_tool_calls, lc_messages):
+                        yield event
 
-                    try:
-                        tool_output = await self._aexecute_tool(tool_name, tool_args)
+                else:
+                    # Serial execution (original behavior)
+                    if len(valid_tool_calls) > 1:
+                        logger.info(f"[Round {round_count + 1}] Using SERIAL execution for {len(valid_tool_calls)} tools")
 
-                        logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed")
+                    for idx, tc in enumerate(valid_tool_calls):
+                        tool_name = tc['name']
+                        tool_args = tc['args']
+                        tool_id = tc['id']
+
+                        logger.info(f"[Round {round_count + 1}] Executing tool {idx+1}/{len(valid_tool_calls)}: {tool_name}")
 
                         yield {
-                            "type": "tool_output",
-                            "tool_name": tool_name,
-                            "output": str(tool_output),
-                            "status": "success",
-                        }
-                    except Exception as e:
-                        logger.error(f"[Round {round_count + 1}] Tool {tool_name} failed: {e}")
-                        yield {
-                            "type": "tool_output",
-                            "tool_name": tool_name,
-                            "output": str(e),
-                            "status": "error",
+                            "type": "tool_call",
+                            "tool_calls": [{
+                                "id": tool_id,
+                                "name": tool_name,
+                                "arguments": tool_args,
+                            }]
                         }
 
-                    # Add tool result to conversation
-                    lc_messages.append(ToolMessage(
-                        content=str(tool_output),
-                        tool_call_id=tool_id
-                    ))
+                        try:
+                            tool_output = await self._aexecute_tool(tool_name, tool_args)
+
+                            logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed")
+
+                            yield {
+                                "type": "tool_output",
+                                "tool_name": tool_name,
+                                "output": str(tool_output),
+                                "status": "success",
+                            }
+                        except Exception as e:
+                            logger.error(f"[Round {round_count + 1}] Tool {tool_name} failed: {e}")
+                            yield {
+                                "type": "tool_output",
+                                "tool_name": tool_name,
+                                "output": str(e),
+                                "status": "error",
+                            }
+
+                        # Add tool result to conversation
+                        lc_messages.append(ToolMessage(
+                            content=str(tool_output),
+                            tool_call_id=tool_id
+                        ))
+                # === Phase 2 并发执行结束 ===
 
                 # Increment round count and continue
                 round_count += 1
@@ -478,6 +494,146 @@ class AgentManager:
             logger.debug(f"Tool {name} result size: {len(str(result))} chars")
             return result
         raise ValueError(f"Tool not found: {name}")
+
+    async def _execute_tool_with_tracking(
+        self,
+        tool_call: dict,
+    ) -> dict:
+        """
+        Execute a single tool with performance tracking.
+
+        Args:
+            tool_call: Tool call dict with 'name', 'args', 'id'
+
+        Returns:
+            Dict with 'output', 'duration', 'tool_name', 'tool_id', 'status'
+        """
+        import time
+        tool_name = tool_call["name"]
+        tool_args = tool_call["args"]
+        tool_id = tool_call["id"]
+
+        start = time.time()
+        try:
+            result = await self._aexecute_tool(tool_name, tool_args)
+            duration = time.time() - start
+
+            logger.info(f"Tool {tool_name} completed in {duration:.2f}s")
+
+            return {
+                "output": result,
+                "duration": duration,
+                "tool_name": tool_name,
+                "tool_id": tool_id,
+                "status": "success",
+            }
+        except Exception as e:
+            duration = time.time() - start
+            logger.error(f"Tool {tool_name} failed after {duration:.2f}s: {e}")
+
+            return {
+                "output": str(e),
+                "duration": duration,
+                "tool_name": tool_name,
+                "tool_id": tool_id,
+                "status": "error",
+            }
+
+    async def _execute_tools_concurrent(
+        self,
+        tool_calls: List[dict],
+        lc_messages: List,
+    ) -> AsyncIterator[dict]:
+        """
+        Execute multiple tools concurrently using asyncio.gather.
+
+        Args:
+            tool_calls: List of tool call dicts with 'name', 'args', 'id'
+            lc_messages: LangChain message list (for adding tool results)
+
+        Yields:
+            Events for tool execution progress and results
+        """
+        import asyncio
+
+        tool_count = len(tool_calls)
+        logger.info(f"[CONCURRENT] Starting concurrent execution of {tool_count} tools")
+
+        # Emit start event
+        yield {
+            "type": "concurrent_execution_start",
+            "tool_count": tool_count,
+            "mode": "concurrent",
+        }
+
+        # Execute all tools concurrently
+        results = await asyncio.gather(
+            *[self._execute_tool_with_tracking(tc) for tc in tool_calls],
+            return_exceptions=True
+        )
+
+        # Process results
+        for idx, result in enumerate(results):
+            # Handle unexpected exceptions
+            if isinstance(result, Exception):
+                logger.error(f"[CONCURRENT] Tool {idx} raised exception: {result}")
+                yield {
+                    "type": "tool_output",
+                    "tool_name": tool_calls[idx]["name"],
+                    "output": str(result),
+                    "status": "error",
+                }
+                # Add error message to conversation
+                lc_messages.append(
+                    ToolMessage(
+                        content=str(result),
+                        tool_call_id=tool_calls[idx]["id"]
+                    )
+                )
+                continue
+
+            # Process normal result
+            tool_name = result["tool_name"]
+            tool_id = result["tool_id"]
+            status = result["status"]
+            output = result["output"]
+            duration = result["duration"]
+
+            # Emit tool call event (for compatibility)
+            yield {
+                "type": "tool_call",
+                "tool_calls": [{
+                    "id": tool_id,
+                    "name": tool_name,
+                    "arguments": tool_calls[idx]["args"],
+                }]
+            }
+
+            # Emit tool output event
+            yield {
+                "type": "tool_output",
+                "tool_name": tool_name,
+                "output": str(output),
+                "status": status,
+                "duration": duration,
+            }
+
+            # Add result to conversation history
+            lc_messages.append(
+                ToolMessage(
+                    content=str(output),
+                    tool_call_id=tool_id
+                )
+            )
+
+        # Emit completion event
+        yield {
+            "type": "concurrent_execution_complete",
+            "tool_count": tool_count,
+            "mode": "concurrent",
+        }
+
+        logger.info(f"[CONCURRENT] All {tool_count} tools executed")
 
     def _get_tool_by_name(self, name: str) -> Optional[BaseTool]:
         """Get tool by name."""

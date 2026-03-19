@@ -78,14 +78,14 @@ class MemoryManager:
 
             if not extraction_result.memories:
                 logger.info(f"No memories extracted from session {session_id}")
-                return extraction_result
+                # Don't return early - still need to index conversation for semantic search
+            else:
+                logger.info(
+                    f"Extracted {len(extraction_result.memories)} memories, "
+                    f"summary: {extraction_result.summary[:100]}..."
+                )
 
-            logger.info(
-                f"Extracted {len(extraction_result.memories)} memories, "
-                f"summary: {extraction_result.summary[:100]}..."
-            )
-
-            # Step 2: Store conversation in vector store
+            # Step 2: Store conversation in vector store (always do this, even if extraction fails)
             if self.settings.enable_semantic_search:
                 await self.store_conversation_vector(session_id)
                 logger.info(f"Stored conversation in vector store: {session_id}")
@@ -111,6 +111,9 @@ class MemoryManager:
         """
         Store conversation in vector store for semantic search.
 
+        This method includes retry logic to handle cases where the embedding
+        model is not yet ready (e.g., still warming up).
+
         Args:
             session_id: Session ID to store
         """
@@ -126,8 +129,43 @@ class MemoryManager:
             logger.warning(f"No messages in session for vector storage: {session_id}")
             return
 
-        # Use RAG engine's conversation indexing
-        await self.rag_engine.index_conversation(session_id, messages)
+        # Retry logic for embedding model not ready
+        max_retries = self.settings.vector_indexing_max_retries
+        retry_delay = self.settings.vector_indexing_retry_delay
+
+        for attempt in range(max_retries):
+            try:
+                # Use RAG engine's conversation indexing
+                await self.rag_engine.index_conversation(session_id, messages)
+                logger.info(f"Successfully indexed conversation for session {session_id}")
+                return  # Success, exit retry loop
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    # Check if error is due to embedding model not ready
+                    error_msg = str(e).lower()
+                    if "embedding model not ready" in error_msg or "not ready" in error_msg:
+                        logger.warning(
+                            f"Embedding model not ready for indexing session {session_id} "
+                            f"(attempt {attempt + 1}/{max_retries}), retrying in {retry_delay:.1f}s..."
+                        )
+                        import asyncio
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 1.5  # Exponential backoff
+                        continue
+                    else:
+                        # Other errors, don't retry
+                        logger.error(
+                            f"Failed to index conversation for session {session_id}: {e}",
+                            exc_info=True
+                        )
+                        break
+                else:
+                    # Final attempt failed
+                    logger.error(
+                        f"Failed to index conversation for session {session_id} after {max_retries} attempts: {e}",
+                        exc_info=True
+                    )
 
     async def search_relevant_history(
         self,
@@ -223,3 +261,17 @@ def get_memory_manager() -> MemoryManager:
         _memory_manager_instance = MemoryManager()
 
     return _memory_manager_instance
+
+
+def reset_memory_manager() -> None:
+    """
+    Reset the global memory manager to force recreation on next access.
+
+    This should be called when LLM configuration is updated to ensure
+    the new configuration is picked up immediately.
+    """
+    global _memory_manager_instance
+    _memory_manager_instance = None
+    # Also reset the extractor since it holds an LLM instance
+    from app.memory.extractor import reset_memory_extractor
+    reset_memory_extractor()
