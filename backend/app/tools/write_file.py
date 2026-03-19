@@ -51,32 +51,47 @@ class WriteFileTool(BaseTool):
 
     name: str = "write_file"
     description: str = """
-    Write content to a file on the local filesystem.
+    ⚠️ CRITICAL: This is the ONLY tool for writing files!
+
+    ALWAYS use write_file for ALL file operations:
+    - Creating new files
+    - Saving code/scripts
+    - Writing documentation
+    - Updating configuration
+    - Generating any file content
+
+    NEVER use python_repl or terminal to write files!
+    - ❌ DON'T: python_repl with Path.write_text(), open(), etc.
+    - ❌ DON'T: terminal with echo, redirect, etc.
+    - ✅ DO: Use write_file tool
 
     Features:
     - Restricted to project directory
     - Prevents path traversal attacks
     - Automatic directory creation
     - Sensitive file protection
+    - Proper path resolution
 
     Modes:
     - overwrite: Replace existing file content (default)
     - append: Add content to the end of existing file
 
-    Common uses:
-    - Create configuration files
-    - Save generated code
-    - Write log files
-    - Update documentation
+    Parameters:
+    - path (required): File path (relative or absolute)
+    - content (required): Content to write
+    - mode (optional): "overwrite" or "append" (default: "overwrite")
+    - create_dirs (optional): Auto-create parent directories (default: true)
 
     Examples:
     - write_file: path="config.json", content='{"key": "value"}'
-    - write_file: path="output.txt", content="Hello World", mode="overwrite"
+    - write_file: path="scripts/myscript.py", content="print('Hello')", mode="overwrite"
+    - write_file: path="data/skills/my-skill/SKILL.md", content="# My Skill\\n...", mode="overwrite"
     - write_file: path="log.txt", content="New entry\\n", mode="append"
 
     Security:
     - Cannot overwrite sensitive files (credentials, .env, etc.)
     - Path is restricted to project directory
+    - Automatically validates file paths
     """
 
     args_schema: type[WriteFileInput] = WriteFileInput
