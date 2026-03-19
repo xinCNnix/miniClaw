@@ -278,203 +278,203 @@ async def chat_stream_generator(
                 logger.info(f"[RID:{request_id}] User message: {request.message[:200]}...")
 
                 # Send thinking start event
-            yield format_sse_event(
-                ChatEvent(type="thinking_start")
-            )
-
-            # Load or create session
-            session_manager = get_session_manager()
-            session = session_manager.load_session(request.session_id)
-
-            if session is None:
-                session = session_manager.create_session(
-                    session_id=request.session_id,
-                    metadata=request.context,
-                )
-
-            # Prepare messages
-            messages = []
-
-            # Get session history
-            session_messages = session.get("messages", [])
-
-            # === INTELLIGENT CONTEXT PRUNING ===
-            # Strategy: Use task boundary detection to prune irrelevant history
-            #
-            # 1. Check if there's a task boundary in recent history
-            # 2. If boundary found, only keep messages AFTER the boundary
-            # 3. If no boundary, keep last 3 messages
-            #
-            # This ensures LLM doesn't see "Beijing weather" when asking "Shanghai weather"
-
-            MAX_CONTEXT_MESSAGES = 3
-            recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
-
-            # Check for task boundary in recent messages
-            boundary_index = -1  # -1 means no boundary found
-            for i in range(len(recent_messages) - 1, 0, -1):
-                if i < len(recent_messages) - 1:  # Not the last message
-                    if detect_task_boundary(recent_messages[i], recent_messages[i + 1]):
-                        boundary_index = i
-                        logger.info(f"Task boundary found at index {i}, pruning earlier history")
-                        break
-
-            # Prune messages based on boundary
-            if boundary_index >= 0:
-                # Keep only messages after the boundary
-                recent_messages = recent_messages[boundary_index + 1:]
-                logger.info(f"Pruned to {len(recent_messages)} messages after boundary")
-            else:
-                # No boundary: keep recent messages as-is
-                logger.debug(f"No task boundary, keeping {len(recent_messages)} recent messages")
-
-            for i, msg in enumerate(recent_messages):
-                if msg["role"] in ["user", "assistant"]:
-                    # Check if this is the last message (current question)
-                    is_last_message = (i == len(recent_messages) - 1)
-
-                    if is_last_message:
-                        # CURRENT MESSAGE: Use full content - this is what LLM should focus on
-                        message_dict = {
-                            "role": msg["role"],
-                            "content": msg["content"],
-                        }
-                        logger.debug(f"Loading current message: {msg['content'][:50]}...")
-
-                        # Add images if present (only for current message)
-                        if msg.get("images"):
-                            # Format content for vision models
-                            content_list = [{"type": "text", "text": msg["content"]}]
-                            for img in msg["images"]:
-                                content_list.append({
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                                })
-                            message_dict["content"] = content_list
-                    else:
-                        # HISTORICAL MESSAGE: Abstract to type only - prevents interference
-                        # Don't show "Beijing weather" - show "Weather Information Query" instead
-                        # Don't include images for historical messages
-                        message_type = _classify_conversation_type(msg.get("content", ""))
-                        message_dict = {
-                            "role": msg["role"],
-                            "content": f"[COMPLETED_TASK] {message_type} - Task finished, ignore details",
-                        }
-                        logger.debug(f"Abstracted historical message to: {message_type}")
-
-                    messages.append(message_dict)
-
-            # Add current message
-            current_message = {
-                "role": "user",
-                "content": request.message,
-            }
-            # Add images from current request if present
-            if request.images:
-                content_list = [{"type": "text", "text": request.message}]
-                for img in request.images:
-                    content_list.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                    })
-                current_message["content"] = content_list
-            messages.append(current_message)
-
-            # Log input
-            exec_logger.log_input(messages, system_prompt)
-
-            # Stream agent response
-            logger.info("Starting agent stream...")
-            event_count = 0
-            tool_call_count = 0
-            assistant_message_parts = []  # Collect assistant response for saving
-
-            async for event in agent.astream(
-                messages=messages,
-                system_prompt=system_prompt,
-            ):
-                event_count += 1
-
-                # Log each event
-                event_type = event.get("type", "unknown")
-                logger.debug(f"Agent event #{event_count}: {event_type}")
-
-                if event_type == "tool_call":
-                    tool_call_count += 1
-                    tool_calls = event.get("tool_calls", [])
-                    for tc in tool_calls:
-                        tc_name = tc.get("name", "unknown")
-                        tc_args = tc.get("arguments", {})
-                        exec_logger.log_tool_call(tc_name, tc_args)
-                        logger.info(f"Tool call: {tc_name}")
-
-                elif event_type == "tool_output":
-                    tool_name = event.get("tool_name", "unknown")
-                    output = event.get("output", "")
-                    status = event.get("status", "unknown")
-                    success = status == "success"
-                    exec_logger.log_tool_result(tool_name, output, success)
-                    logger.info(f"Tool output: {tool_name} - {status}")
-
-                elif event_type == "content_delta":
-                    content = event.get("content", "")
-                    logger.debug(f"Content delta: {len(content)} chars")
-                    # Collect assistant response for saving
-                    assistant_message_parts.append(content)
-                    logger.debug(f"Content delta: {len(content)} chars")
-
                 yield format_sse_event(
-                    ChatEvent(**event)
+                    ChatEvent(type="thinking_start")
                 )
 
-            logger.info(f"Agent stream completed. Total events: {event_count}, Tool calls: {tool_call_count}")
+                    # Load or create session
+                session_manager = get_session_manager()
+                session = session_manager.load_session(request.session_id)
 
-            # Save user message to session
-            session_manager.add_message(
-                session_id=request.session_id,
-                role="user",
-                content=request.message,
-                images=request.images,
-            )
+                if session is None:
+                    session = session_manager.create_session(
+                        session_id=request.session_id,
+                        metadata=request.context,
+                    )
 
-            # Save assistant response to session (if any)
-            if assistant_message_parts:
-                assistant_full_response = "".join(assistant_message_parts)
+                # Prepare messages
+                messages = []
+
+                # Get session history
+                session_messages = session.get("messages", [])
+
+                # === INTELLIGENT CONTEXT PRUNING ===
+                # Strategy: Use task boundary detection to prune irrelevant history
+                #
+                # 1. Check if there's a task boundary in recent history
+                # 2. If boundary found, only keep messages AFTER the boundary
+                # 3. If no boundary, keep last 3 messages
+                #
+                # This ensures LLM doesn't see "Beijing weather" when asking "Shanghai weather"
+
+                MAX_CONTEXT_MESSAGES = 3
+                recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
+
+                # Check for task boundary in recent messages
+                boundary_index = -1  # -1 means no boundary found
+                for i in range(len(recent_messages) - 1, 0, -1):
+                    if i < len(recent_messages) - 1:  # Not the last message
+                        if detect_task_boundary(recent_messages[i], recent_messages[i + 1]):
+                            boundary_index = i
+                            logger.info(f"Task boundary found at index {i}, pruning earlier history")
+                            break
+
+                # Prune messages based on boundary
+                if boundary_index >= 0:
+                    # Keep only messages after the boundary
+                    recent_messages = recent_messages[boundary_index + 1:]
+                    logger.info(f"Pruned to {len(recent_messages)} messages after boundary")
+                else:
+                    # No boundary: keep recent messages as-is
+                    logger.debug(f"No task boundary, keeping {len(recent_messages)} recent messages")
+
+                for i, msg in enumerate(recent_messages):
+                    if msg["role"] in ["user", "assistant"]:
+                        # Check if this is the last message (current question)
+                        is_last_message = (i == len(recent_messages) - 1)
+
+                        if is_last_message:
+                            # CURRENT MESSAGE: Use full content - this is what LLM should focus on
+                            message_dict = {
+                                "role": msg["role"],
+                                "content": msg["content"],
+                            }
+                            logger.debug(f"Loading current message: {msg['content'][:50]}...")
+
+                            # Add images if present (only for current message)
+                            if msg.get("images"):
+                                # Format content for vision models
+                                content_list = [{"type": "text", "text": msg["content"]}]
+                                for img in msg["images"]:
+                                    content_list.append({
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
+                                    })
+                                message_dict["content"] = content_list
+                        else:
+                            # HISTORICAL MESSAGE: Abstract to type only - prevents interference
+                            # Don't show "Beijing weather" - show "Weather Information Query" instead
+                            # Don't include images for historical messages
+                            message_type = _classify_conversation_type(msg.get("content", ""))
+                            message_dict = {
+                                "role": msg["role"],
+                                "content": f"[COMPLETED_TASK] {message_type} - Task finished, ignore details",
+                            }
+                            logger.debug(f"Abstracted historical message to: {message_type}")
+
+                        messages.append(message_dict)
+
+                # Add current message
+                current_message = {
+                    "role": "user",
+                    "content": request.message,
+                }
+                # Add images from current request if present
+                if request.images:
+                    content_list = [{"type": "text", "text": request.message}]
+                    for img in request.images:
+                        content_list.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
+                        })
+                    current_message["content"] = content_list
+                messages.append(current_message)
+
+                # Log input
+                exec_logger.log_input(messages, system_prompt)
+
+                # Stream agent response
+                logger.info("Starting agent stream...")
+                event_count = 0
+                tool_call_count = 0
+                assistant_message_parts = []  # Collect assistant response for saving
+
+                async for event in agent.astream(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                ):
+                    event_count += 1
+
+                    # Log each event
+                    event_type = event.get("type", "unknown")
+                    logger.debug(f"Agent event #{event_count}: {event_type}")
+
+                    if event_type == "tool_call":
+                        tool_call_count += 1
+                        tool_calls = event.get("tool_calls", [])
+                        for tc in tool_calls:
+                            tc_name = tc.get("name", "unknown")
+                            tc_args = tc.get("arguments", {})
+                            exec_logger.log_tool_call(tc_name, tc_args)
+                            logger.info(f"Tool call: {tc_name}")
+
+                    elif event_type == "tool_output":
+                        tool_name = event.get("tool_name", "unknown")
+                        output = event.get("output", "")
+                        status = event.get("status", "unknown")
+                        success = status == "success"
+                        exec_logger.log_tool_result(tool_name, output, success)
+                        logger.info(f"Tool output: {tool_name} - {status}")
+
+                    elif event_type == "content_delta":
+                        content = event.get("content", "")
+                        logger.debug(f"Content delta: {len(content)} chars")
+                        # Collect assistant response for saving
+                        assistant_message_parts.append(content)
+                        logger.debug(f"Content delta: {len(content)} chars")
+
+                    yield format_sse_event(
+                        ChatEvent(**event)
+                    )
+
+                logger.info(f"Agent stream completed. Total events: {event_count}, Tool calls: {tool_call_count}")
+
+                # Save user message to session
                 session_manager.add_message(
                     session_id=request.session_id,
-                    role="assistant",
-                    content=assistant_full_response,
+                    role="user",
+                    content=request.message,
+                    images=request.images,
                 )
-                logger.info(f"Saved assistant response: {len(assistant_full_response)} chars")
-            else:
-                logger.warning("No assistant response to save")
 
-            # Trigger background memory extraction (non-blocking)
-            try:
-                from app.config import get_settings
-                settings = get_settings()
-
-                if settings.enable_memory_extraction:
-                    asyncio.create_task(
-                        _background_memory_extraction(request.session_id)
+                # Save assistant response to session (if any)
+                if assistant_message_parts:
+                    assistant_full_response = "".join(assistant_message_parts)
+                    session_manager.add_message(
+                        session_id=request.session_id,
+                        role="assistant",
+                        content=assistant_full_response,
                     )
-            except Exception as e:
-                import logging
-                logging.warning(f"Failed to trigger memory extraction: {e}")
+                    logger.info(f"Saved assistant response: {len(assistant_full_response)} chars")
+                else:
+                    logger.warning("No assistant response to save")
 
-            # Send done event
-            yield format_sse_event(
-                ChatEvent(type="done")
-            )
+                # Trigger background memory extraction (non-blocking)
+                try:
+                    from app.config import get_settings
+                    settings = get_settings()
 
-        except Exception as e:
-            # Send error event
-            yield format_sse_event(
-                ChatEvent(
-                    type="error",
-                    error=str(e),
+                    if settings.enable_memory_extraction:
+                        asyncio.create_task(
+                            _background_memory_extraction(request.session_id)
+                        )
+                except Exception as e:
+                    import logging
+                    logging.warning(f"Failed to trigger memory extraction: {e}")
+
+                # Send done event
+                yield format_sse_event(
+                    ChatEvent(type="done")
                 )
-            )
+
+            except Exception as e:
+                # Send error event
+                yield format_sse_event(
+                    ChatEvent(
+                        type="error",
+                        error=str(e),
+                    )
+                )
 
 
 @router.post("")
