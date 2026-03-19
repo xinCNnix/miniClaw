@@ -431,7 +431,8 @@ class Settings(BaseSettings):
     log_to_console: bool = True  # Enable console logging
     log_max_bytes: int = 10 * 1024 * 1024  # Max log file size (10MB)
     log_backup_count: int = 5  # Number of backup files to keep
-    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Log format
+    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Log format (without request_id)
+    log_format_with_tracking: str = "%(asctime)s - [RID:%(request_id)s] - %(name)s - %(levelname)s - %(message)s"  # Log format with request tracking
     debug_agent: bool = True  # Enable detailed agent execution logging
 
 

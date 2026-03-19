@@ -20,6 +20,8 @@ from app.core.smart_stopping import (
     should_stop_before_execution,
     should_stop_after_execution,
 )
+from app.core.performance_tracker import track_performance, get_performance_tracker, track_async
+from app.core.tracking_context import get_request_id, get_session_id
 
 # Multi-round tool calling configuration
 MAX_TOOL_ROUNDS = 10  # Maximum rounds of tool calling (prevents infinite loops)
@@ -265,11 +267,12 @@ class AgentManager:
         Async stream agent responses.
         """
         start_time = time.time()
+        request_id = get_request_id()
 
         try:
-            logger.info("=== Agent astream START ===")
-            logger.debug(f"Messages count: {len(messages)}")
-            logger.debug(f"System prompt length: {len(system_prompt)} chars")
+            logger.info(f"[RID:{request_id}] === Agent astream START ===")
+            logger.debug(f"[RID:{request_id}] Messages count: {len(messages)}")
+            logger.debug(f"[RID:{request_id}] System prompt length: {len(system_prompt)} chars")
 
             # Get settings early (needed before smart stopping reset)
             settings = get_settings()
@@ -280,10 +283,13 @@ class AgentManager:
             lc_messages = self._convert_messages(messages, system_prompt)
 
             yield {"type": "thinking_start"}
-            logger.info("Thinking...")
+            logger.info(f"[RID:{request_id}] Thinking...")
 
             # Get max_tool_rounds from settings
             max_tool_rounds = settings.max_tool_rounds
+
+            # 🔧 新增：性能追踪
+            perf_tracker = get_performance_tracker()
 
             # Multi-round tool calling loop
             round_count = 0
@@ -298,10 +304,19 @@ class AgentManager:
                     # 收集完整的响应用于后续工具调用检查
                     full_response_chunks = []
                     all_content = []  # 收集所有文本内容
+                    chunk_count = 0
 
                     async for chunk in self.llm_with_tools.astream(lc_messages):
+                        chunk_count += 1
                         # 收集所有 chunks
                         full_response_chunks.append(chunk)
+
+                        # 🔧 新增：记录每个 chunk 的属性
+                        if chunk_count == 1 or chunk_count % 10 == 0:  # 每10个chunk记录一次
+                            logger.debug(f"[LLM_STREAM] Chunk {chunk_count}: "
+                                       f"has_content={hasattr(chunk, 'content')}, "
+                                       f"has_tool_calls={hasattr(chunk, 'tool_calls')}, "
+                                       f"has_tool_call_chunks={hasattr(chunk, 'tool_call_chunks')}")
 
                         # 收集文本内容
                         if hasattr(chunk, 'content') and chunk.content:
@@ -314,7 +329,12 @@ class AgentManager:
 
                         # 输出工具调用片段（让用户看到工具调用的过程）
                         if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
-                            for tc in chunk.tool_call_chunks:
+                            logger.debug(f"[TOOL_CALL_CHUNKS] Received {len(chunk.tool_call_chunks)} chunks")
+                            for idx, tc in enumerate(chunk.tool_call_chunks):
+                                logger.debug(f"[TOOL_CALL_CHUNK {idx}] "
+                                           f"index={tc.get('index')}, "
+                                           f"name={tc.get('name')}, "
+                                           f"args_len={len(tc.get('args', ''))}")
                                 # 工具名称片段
                                 if tc.get("name"):
                                     yield {
@@ -332,22 +352,28 @@ class AgentManager:
 
                     # 构建完整 response 对象
                     if full_response_chunks:
+                        logger.debug(f"[LLM_RESPONSE] Total chunks received: {len(full_response_chunks)}")
+
                         # 从所有 chunks 中找到第一个包含有效 tool_calls 的 chunk
                         # 修复：最后一个 chunk 可能没有 tool_calls
                         response_with_tool_calls = None
-                        for chunk in full_response_chunks:
+                        for idx, chunk in enumerate(full_response_chunks):
                             if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
                                 # 检查是否有有效的 tool_calls（非空名称）
                                 valid_calls = [tc for tc in chunk.tool_calls if tc.get('name')]
                                 if valid_calls:
                                     response_with_tool_calls = chunk
-                                    logger.debug(f"[DEBUG] Found chunk with tool_calls: {len(valid_calls)} calls")
+                                    logger.debug(f"[TOOL_CALLS] Found at chunk {idx}: {len(valid_calls)} calls")
+                                    # 🔧 新增：记录每个 tool_call 的详细信息
+                                    for j, tc in enumerate(valid_calls):
+                                        logger.debug(f"[TOOL_CALL {j}] name={tc.get('name')}, "
+                                                   f"args={tc.get('args')}, id={tc.get('id')}")
                                     break
 
                         # 如果没找到有 tool_calls 的 chunk，使用最后一个 chunk
                         if response_with_tool_calls is None:
                             response_with_tool_calls = full_response_chunks[-1]
-                            logger.debug(f"[DEBUG] No chunk with tool_calls found, using last chunk")
+                            logger.warning(f"[TOOL_CALLS] No chunk with tool_calls found, using last chunk")
 
                         response = response_with_tool_calls
 
@@ -359,27 +385,42 @@ class AgentManager:
                             # 获取 tool_calls（优先使用找到的有 tool_calls 的 chunk）
                             tool_calls_to_use = getattr(response, 'tool_calls', [])
 
+                            logger.debug(f"[ASSEMBLY] tool_calls count: {len(tool_calls_to_use)}")
+
                             # 如果 tool_calls 的 args 是空的，尝试从 tool_call_chunks 组装
                             if tool_calls_to_use:
                                 for i, tc in enumerate(tool_calls_to_use):
+                                    tc_args = tc.get('args')
+                                    logger.debug(f"[ASSEMBLY] Tool {i}: name={tc.get('name')}, "
+                                               f"has_args={tc_args is not None}, args_empty={tc_args == {}}")
+
                                     if not tc.get('args') or tc.get('args') == {}:
+                                        logger.warning(f"[ASSEMBLY] Tool {i} ({tc.get('name')}) has empty args, attempting assembly")
                                         # 从 tool_call_chunks 组装 args
                                         args_parts = []
-                                        for chunk in full_response_chunks:
+                                        for chunk_idx, chunk in enumerate(full_response_chunks):
                                             if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
                                                 for tcc in chunk.tool_call_chunks:
                                                     if tcc.get('index') == i and tcc.get('args'):
                                                         args_parts.append(tcc['args'])
+                                                        logger.debug(f"[ASSEMBLY] Found args part at chunk {chunk_idx}: "
+                                                                   f"len={len(tcc['args'])}")
+
+                                        logger.debug(f"[ASSEMBLY] Total args parts for tool {i}: {len(args_parts)}")
 
                                         if args_parts:
                                             args_str = ''.join(args_parts)
+                                            logger.debug(f"[ASSEMBLY] Raw args string for tool {i}: {args_str}")
                                             try:
                                                 import json
                                                 parsed_args = json.loads(args_str)
                                                 tool_calls_to_use[i]['args'] = parsed_args
-                                                logger.debug(f"[DEBUG] Assembled args for tool {i}: {parsed_args}")
+                                                logger.info(f"[ASSEMBLY] ✓ Successfully assembled args for tool {i}: {parsed_args}")
                                             except json.JSONDecodeError as e:
-                                                logger.warning(f"[DEBUG] Failed to parse args for tool {i}: {e}")
+                                                logger.error(f"[ASSEMBLY] ✗ Failed to parse args for tool {i}: {e}")
+                                                logger.error(f"[ASSEMBLY] Raw parts: {args_parts}")
+                                        else:
+                                            logger.error(f"[ASSEMBLY] ✗ No args parts found for tool {i}, args will remain {{}}")
 
                             # 创建新的 AIMessage
                             response = AIMessage(
@@ -405,6 +446,12 @@ class AgentManager:
                 # === 流式响应开关结束 ===
 
                 llm_duration = time.time() - llm_start
+
+                # 🔧 新增：性能追踪 - 记录LLM调用耗时
+                perf_tracker._record_success(
+                    f"llm_round_{round_count + 1}",
+                    llm_duration
+                )
 
                 logger.info(f"[Round {round_count + 1}] LLM response received in {llm_duration:.2f}s")
 
@@ -517,10 +564,17 @@ class AgentManager:
                             }]
                         }
 
+                        # 🔧 新增：性能追踪 - 记录工具执行开始时间
+                        tool_start = time.time()
+
                         try:
                             tool_output = await self._aexecute_tool(tool_name, tool_args)
 
-                            logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed")
+                            # 🔧 新增：性能追踪 - 记录工具执行耗时
+                            tool_duration = time.time() - tool_start
+                            perf_tracker._record_success(f"tool_{tool_name}", tool_duration)
+
+                            logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed in {tool_duration:.2f}s")
 
                             yield {
                                 "type": "tool_output",
@@ -529,6 +583,10 @@ class AgentManager:
                                 "status": "success",
                             }
                         except Exception as e:
+                            # 🔧 新增：性能追踪 - 记录工具执行失败
+                            tool_duration = time.time() - tool_start
+                            perf_tracker._record_failure(f"tool_{tool_name}", tool_duration, str(e))
+
                             logger.error(f"[Round {round_count + 1}] Tool {tool_name} failed: {e}")
                             yield {
                                 "type": "tool_output",
@@ -606,7 +664,21 @@ class AgentManager:
                     }
 
             total_duration = time.time() - start_time
-            logger.info(f"=== Agent astream COMPLETE in {total_duration:.2f}s ===")
+
+            # 🔧 新增：性能追踪 - 输出性能摘要
+            perf_summary = perf_tracker.get_summary()
+            if perf_summary:
+                logger.info(f"[PERF_SUMMARY] Total: {total_duration:.2f}s")
+                for op_name, stats in perf_summary.items():
+                    logger.info(
+                        f"[PERF_SUMMARY] {op_name}: "
+                        f"count={stats['count']}, "
+                        f"avg={stats['avg_duration']:.2f}s, "
+                        f"max={stats['max_duration']:.2f}s, "
+                        f"success_rate={stats['success_rate']:.1f}%"
+                    )
+
+            logger.info(f"[RID:{request_id}] === Agent astream COMPLETE in {total_duration:.2f}s ===")
 
         except Exception as e:
             logger.error(f"Agent astream error: {e}", exc_info=True)

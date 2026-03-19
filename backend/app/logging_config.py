@@ -9,7 +9,35 @@ import logging
 import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+from typing import Optional
 from app.config import get_settings
+
+
+class LevelFilter(logging.Filter):
+    """
+    日志级别过滤器，只允许特定级别的日志通过
+
+    Args:
+        low: 最低级别（包含）
+        high: 最高级别（包含）
+    """
+
+    def __init__(self, low: int, high: int):
+        super().__init__()
+        self.low = low
+        self.high = high
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """
+        过滤日志记录
+
+        Args:
+            record: 日志记录
+
+        Returns:
+            True 如果日志级别在范围内，否则 False
+        """
+        return self.low <= record.levelno <= self.high
 
 
 class SafeConsoleHandler(logging.StreamHandler):
@@ -38,6 +66,59 @@ class SafeConsoleHandler(logging.StreamHandler):
             self.flush()
         except Exception:
             self.handleError(record)
+
+
+class RequestTrackingFormatter(logging.Formatter):
+    """
+    自定义日志格式化器，支持请求追踪 ID
+
+    如果日志记录中包含 request_id，使用带追踪的格式；
+    否则使用普通格式。
+    """
+
+    def __init__(self, fmt_default=None, fmt_with_tracking=None, datefmt=None, style='%'):
+        """
+        初始化请求追踪格式化器
+
+        Args:
+            fmt_default: 普通日志格式
+            fmt_with_tracking: 带请求追踪的日志格式
+            datefmt: 日期格式
+            style: 格式化风格（默认为 %）
+        """
+        super().__init__(fmt_default, datefmt, style)
+        self.fmt_default = fmt_default
+        self.fmt_with_tracking = fmt_with_tracking
+
+    def format(self, record):
+        """
+        格式化日志记录
+
+        Args:
+            record: 日志记录
+
+        Returns:
+            格式化后的日志字符串
+        """
+        # 检查是否有 request_id
+        if hasattr(record, 'request_id') and record.request_id:
+            # 使用带追踪的格式
+            original_fmt = self._fmt
+            self._fmt = self.fmt_with_tracking or self.fmt_default or self._fmt
+            # 更新 style 以使用新格式
+            self._style = logging.PercentStyle(self._fmt)
+            # 确保 request_id 在记录中可用
+            if 'request_id' not in record.__dict__:
+                record.__dict__['request_id'] = record.request_id
+            # 格式化并恢复原始格式
+            try:
+                return super().format(record)
+            finally:
+                self._fmt = original_fmt
+                self._style = logging.PercentStyle(self._fmt)
+        else:
+            # 使用普通格式
+            return super().format(record)
 
 
 def setup_logging(
@@ -74,9 +155,10 @@ def setup_logging(
     # Remove existing handlers
     root_logger.handlers.clear()
 
-    # Create formatter
-    formatter = logging.Formatter(
-        fmt=settings.log_format,
+    # Create formatters (with and without request tracking)
+    formatter = RequestTrackingFormatter(
+        fmt_default=settings.log_format,
+        fmt_with_tracking=getattr(settings, 'log_format_with_tracking', settings.log_format),
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
@@ -87,7 +169,7 @@ def setup_logging(
         console_handler.setFormatter(formatter)
         root_logger.addHandler(console_handler)
 
-    # File handler (rotating)
+    # File handler (rotating) - Main backend log (all levels)
     if log_to_file:
         file_handler = RotatingFileHandler(
             filename=log_path / "backend.log",
@@ -98,6 +180,30 @@ def setup_logging(
         file_handler.setLevel(getattr(logging, log_level.upper()))
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
+
+        # DEBUG-only log file (only DEBUG level messages)
+        debug_handler = RotatingFileHandler(
+            filename=log_path / "debug.log",
+            maxBytes=settings.log_max_bytes,
+            backupCount=settings.log_backup_count,
+            encoding="utf-8",
+        )
+        debug_handler.setLevel(logging.DEBUG)
+        debug_handler.addFilter(LevelFilter(logging.DEBUG, logging.DEBUG))  # Only DEBUG
+        debug_handler.setFormatter(formatter)
+        root_logger.addHandler(debug_handler)
+
+        # ERROR-only log file (ERROR and CRITICAL)
+        error_handler = RotatingFileHandler(
+            filename=log_path / "error.log",
+            maxBytes=settings.log_max_bytes,
+            backupCount=settings.log_backup_count,
+            encoding="utf-8",
+        )
+        error_handler.setLevel(logging.ERROR)  # ERROR and CRITICAL
+        error_handler.addFilter(LevelFilter(logging.ERROR, logging.CRITICAL))  # Only ERROR and CRITICAL
+        error_handler.setFormatter(formatter)
+        root_logger.addHandler(error_handler)
 
     # Separate file for agent execution (always DEBUG level)
     agent_handler = RotatingFileHandler(
@@ -123,6 +229,12 @@ def setup_logging(
     logging.info("Logging system initialized")
     logging.info(f"Log level: {log_level}")
     logging.info(f"Log directory: {log_path.absolute()}")
+    if log_to_file:
+        logging.info("Log files:")
+        logging.info(f"  - backend.log: All logs (level {log_level}+)")
+        logging.info(f"  - debug.log: DEBUG level only")
+        logging.info(f"  - error.log: ERROR and CRITICAL level only")
+        logging.info(f"  - agent.log: Agent execution logs (DEBUG level)")
     if settings.debug_agent:
         logging.info("DEBUG AGENT mode is ENABLED - detailed agent execution will be logged")
 
@@ -136,11 +248,29 @@ def _configure_specific_loggers():
         "app.api.chat",
         "app.core.agent",
         "app.tools",
+        "app.core.tot",           # ToT framework
+        "app.core.tot.nodes",     # ToT nodes
+        "app.core.smart_stopping", # Smart stopping mechanism
     ]
 
     if settings.debug_agent:
+        # 🔧 修复：确保所有 handlers 也允许 DEBUG 级别
+        root_logger = logging.getLogger()
+
+        # 降低所有 handlers 的级别到 DEBUG
+        for handler in root_logger.handlers:
+            if handler.level > logging.DEBUG:
+                handler.setLevel(logging.DEBUG)
+
+        # 设置模块级别为 DEBUG
         for module in agent_modules:
-            logging.getLogger(module).setLevel(logging.DEBUG)
+            module_logger = logging.getLogger(module)
+            module_logger.setLevel(logging.DEBUG)
+
+            # 确保模块的 handlers 也是 DEBUG 级别
+            for handler in module_logger.handlers:
+                if handler.level > logging.DEBUG:
+                    handler.setLevel(logging.DEBUG)
 
 
 def get_agent_logger(name: str = "agent") -> logging.Logger:

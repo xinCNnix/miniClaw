@@ -8,9 +8,7 @@ import json
 import asyncio
 import logging
 import time
-import hashlib
 from typing import AsyncIterator
-from functools import lru_cache
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
@@ -21,6 +19,13 @@ from app.memory.prompts import build_system_prompt
 from app.memory.session import get_session_manager
 from app.skills.bootstrap import bootstrap_skills
 from app.logging_config import AgentExecutionLogger, get_agent_logger
+from app.core.tracking_context import (
+    generate_request_id,
+    set_request_id,
+    set_session_id,
+    RequestTrackingContext,
+    get_tracking_logger
+)
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -31,63 +36,62 @@ router = APIRouter(tags=["chat"])
 
 # Global agent manager (singleton)
 _agent_manager: AgentManager = None
-_current_llm_id: str = None
-
-
-def reset_agent_manager() -> None:
-    """
-    Reset the global agent manager to force recreation on next access.
-
-    This should be called when LLM configuration is updated to ensure
-    the new configuration is picked up immediately.
-    """
-    global _agent_manager, _current_llm_id
-    _agent_manager = None
-    _current_llm_id = None
-
-    # Also reset memory manager to ensure it uses the new LLM
-    from app.memory.memory_manager import reset_memory_manager
-    reset_memory_manager()
+_current_provider: str = None
 
 
 def get_agent_manager() -> AgentManager:
     """
-    Get or create the global agent manager with current LLM.
+    Get or create the global agent manager.
 
-    每次都重新加载当前 LLM 配置，确保前端设置与后端使用一致。
+    This function implements hot-switching by checking if the configured
+    provider has changed and recreating the agent manager if necessary.
+
+    Returns:
+        AgentManager instance
+
+    Raises:
+        HTTPException: If initialization fails
     """
-    global _agent_manager, _current_llm_id
+    global _agent_manager, _current_provider
 
     try:
-        from app.core.llm_config import get_current_llm_id, load_llm_config
-        from app.core.llm import create_llm_from_config
-        from app.tools import CORE_TOOLS
+        from app.config import get_settings
+        settings = get_settings()
 
-        # 获取当前 LLM ID
-        current_llm_id = get_current_llm_id()
-
-        # 检查是否需要重新创建 Agent Manager
-        if _current_llm_id != current_llm_id or _agent_manager is None:
+        # Check if provider has changed (hot-switch support)
+        if _current_provider != settings.llm_provider:
             import logging
-            logging.info(f"=== LLM changed: {_current_llm_id} → {current_llm_id} ===")
+            logging.info(f"=== LLM provider changed: {_current_provider} → {settings.llm_provider} ===")
 
-            # 加载当前 LLM 配置
-            llm_config = load_llm_config(current_llm_id)
+            # Import tools directly
+            from app.tools import CORE_TOOLS
+            logging.info(f"Tools: {[t.name for t in CORE_TOOLS]}")
 
-            if llm_config is None:
-                raise ValueError(f"Current LLM {current_llm_id} not found")
-
-            # 创建 LLM 实例
-            llm = create_llm_from_config(llm_config)
-
-            # 创建 Agent Manager
+            # Recreate agent manager with new provider
             _agent_manager = create_agent_manager(
                 tools=CORE_TOOLS,
-                llm=llm,
+                llm_provider=settings.llm_provider,
             )
-            _current_llm_id = current_llm_id
+            _current_provider = settings.llm_provider
 
-            logging.info(f"=== Agent Manager recreated with LLM: {current_llm_id} ===")
+            logging.info("=== Agent manager recreated successfully ===")
+
+        elif _agent_manager is None:
+            import logging
+            logging.info(f"=== Creating agent manager ===")
+            logging.info(f"Tools type: {type(CORE_TOOLS)}")
+            logging.info(f"Tools: {[t.name for t in CORE_TOOLS]}")
+
+            # Create agent manager
+            logging.info(f"Creating agent with provider: {settings.llm_provider}")
+
+            _agent_manager = create_agent_manager(
+                tools=CORE_TOOLS,
+                llm_provider=settings.llm_provider,
+            )
+            _current_provider = settings.llm_provider
+
+            logging.info("=== Agent manager created successfully ===")
 
         return _agent_manager
 
@@ -100,6 +104,25 @@ def get_agent_manager() -> AgentManager:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to initialize agent: {str(e)}",
         )
+
+
+def reset_agent_manager() -> None:
+    """
+    Reset the global agent manager to force recreation on next access.
+
+    This should be called when LLM configuration is updated to ensure
+    the new configuration is picked up immediately.
+    """
+    global _agent_manager, _current_provider
+    _agent_manager = None
+    _current_provider = None
+
+    # Also reset memory manager to ensure it uses the new LLM
+    try:
+        from app.memory.memory_manager import reset_memory_manager
+        reset_memory_manager()
+    except Exception as e:
+        logger.warning(f"Failed to reset memory manager: {e}")
 
 
 def format_sse_event(event: ChatEvent) -> str:
@@ -219,322 +242,20 @@ def detect_task_boundary(msg1: dict, msg2: dict) -> bool:
         except:
             pass
 
-    # Paper/Code/File switches (with time gap check)
+    # Paper/Code/File switches
     if (has_keywords(content1, paper_keywords) and has_keywords(content2, code_keywords)) or \
        (has_keywords(content1, code_keywords) and has_keywords(content2, paper_keywords)):
-        # Check time gap to avoid false positives for continuous workflows
-        try:
-            time1 = datetime.fromisoformat(msg1.get("timestamp", ""))
-            time2 = datetime.fromisoformat(msg2.get("timestamp", ""))
-            time_diff = (time2 - time1).total_seconds()
-
-            # Only treat as task boundary if there's a significant time gap
-            # This prevents false positives for continuous workflows (e.g., research → write doc)
-            if time_diff > 300:  # 5 minutes
-                logger.info(f"Task boundary: paper ↔ code (time gap: {time_diff}s)")
-                return True
-            else:
-                logger.info(f"Paper ↔ code detected but time gap is short ({time_diff}s), treating as continuous workflow")
-                return False
-        except Exception as e:
-            # If time parsing fails, be conservative and treat as boundary
-            logger.warning(f"Failed to parse timestamps for paper/code boundary: {e}")
-            logger.info("Task boundary: paper ↔ code (conservative)")
-            return True
+        logger.info("Task boundary: paper ↔ code")
+        return True
 
     return False
-
-
-def _contains_chinese(text: str) -> bool:
-    """
-    Check if text contains Chinese characters.
-
-    Args:
-        text: Text to check
-
-    Returns:
-        True if text contains Chinese characters
-    """
-    return any('\u4e00' <= char <= '\u9fff' for char in text)
-
-
-# ============================================================================
-# Performance Optimization: Caching
-# ============================================================================
-
-# Semantic search cache with TTL support
-_semantic_search_cache: dict = {}
-_semantic_search_timestamps: dict = {}
-
-
-def _get_query_hash(query: str) -> str:
-    """Generate MD5 hash for query."""
-    return hashlib.md5(query.encode('utf-8')).hexdigest()
-
-
-def _get_cached_semantic_search(query: str, ttl: int = 300):
-    """
-    Get cached semantic search result if available and not expired.
-
-    Args:
-        query: Search query
-        ttl: Time-to-live in seconds (default 5 minutes)
-
-    Returns:
-        Cached result or None
-    """
-    query_hash = _get_query_hash(query)
-    current_time = time.time()
-
-    if query_hash in _semantic_search_cache:
-        timestamp = _semantic_search_timestamps.get(query_hash, 0)
-        if current_time - timestamp < ttl:
-            logger.debug(f"Semantic search cache hit for query: {query[:50]}...")
-            return _semantic_search_cache[query_hash]
-        else:
-            # Cache expired
-            del _semantic_search_cache[query_hash]
-            del _semantic_search_timestamps[query_hash]
-            logger.debug(f"Semantic search cache expired for query: {query[:50]}...")
-
-    return None
-
-
-def _set_cached_semantic_search(query: str, result):
-    """
-    Cache semantic search result with timestamp.
-
-    Args:
-        query: Search query
-        result: Search result to cache
-    """
-    query_hash = _get_query_hash(query)
-    _semantic_search_cache[query_hash] = result
-    _semantic_search_timestamps[query_hash] = time.time()
-    logger.debug(f"Cached semantic search result for query: {query[:50]}...")
-
-
-def _clear_semantic_search_cache():
-    """Clear all semantic search cache entries."""
-    global _semantic_search_cache, _semantic_search_timestamps
-    _semantic_search_cache.clear()
-    _semantic_search_timestamps.clear()
-    logger.info("Semantic search cache cleared")
-
-
-# Conversation context cache with hash-based invalidation
-_conversation_context_cache: dict = {}
-
-
-def _get_context_hash(messages: list) -> str:
-    """
-    Generate hash for conversation context based on recent messages.
-
-    Args:
-        messages: List of messages
-
-    Returns:
-        Hash string
-    """
-    # Use last 10 messages for hash generation
-    recent_messages = messages[-10:] if len(messages) > 10 else messages
-    content = "".join(f"{m.get('role', '')}:{m.get('content', '')}" for m in recent_messages)
-    return hashlib.md5(content.encode('utf-8')).hexdigest()
-
-
-def _get_cached_conversation_context(session_id: str, messages: list):
-    """
-    Get cached conversation context if available.
-
-    Args:
-        session_id: Session ID
-        messages: Current messages list
-
-    Returns:
-        Cached context or None
-    """
-    current_hash = _get_context_hash(messages)
-    cache_key = f"{session_id}:{current_hash}"
-
-    if cache_key in _conversation_context_cache:
-        logger.debug(f"Conversation context cache hit for session: {session_id}")
-        return _conversation_context_cache[cache_key]
-
-    return None
-
-
-def _set_cached_conversation_context(session_id: str, messages: list, context: str):
-    """
-    Cache conversation context with hash-based key.
-
-    Args:
-        session_id: Session ID
-        messages: Current messages list
-        context: Context to cache
-    """
-    current_hash = _get_context_hash(messages)
-    cache_key = f"{session_id}:{current_hash}"
-    _conversation_context_cache[cache_key] = context
-
-    # Limit cache size
-    if len(_conversation_context_cache) > 64:
-        # Remove oldest entry (first item)
-        oldest_key = next(iter(_conversation_context_cache))
-        del _conversation_context_cache[oldest_key]
-
-    logger.debug(f"Cached conversation context for session: {session_id}")
-
-
-def _extract_conversation_context(
-    session_messages: list,
-) -> str:
-    """
-    Extract conversation context from current session with complete recent turns.
-
-    Strategy:
-    1. Use task boundary detection to identify relevant history
-    2. Include complete recent conversation turns (user + assistant)
-    3. Preserve dialogue continuity for LLM understanding
-
-    Args:
-        session_messages: Current session's message list
-
-    Returns:
-        Context string with recent conversation turns
-    """
-    if not session_messages:
-        return ""
-
-    # Detect task boundary from the end
-    boundary_index = -1
-    for i in range(len(session_messages) - 1, 1, -1):
-        if detect_task_boundary(session_messages[i-1], session_messages[i]):
-            boundary_index = i
-            logger.info(f"Task boundary found at index {i} in current session")
-            break
-
-    # Keep messages after boundary (current task sequence)
-    if boundary_index >= 0:
-        recent = session_messages[boundary_index:]
-    else:
-        # No boundary: all messages are part of current task sequence
-        recent = session_messages
-
-    if not recent:
-        return ""
-
-    # Extract complete conversation turns (user + assistant pairs)
-    # Exclude the last message if it's a user message (current one being processed)
-    context_messages = []
-    last_is_user = recent and recent[-1].get("role") == "user"
-
-    # Process messages in pairs
-    i = 0
-    while i < len(recent):
-        msg = recent[i]
-
-        # Skip if this is the current user message being processed
-        if last_is_user and i == len(recent) - 1:
-            break
-
-        role = msg.get("role", "")
-        content = msg.get("content", "")
-
-        if role == "user":
-            # Start a new turn
-            context_messages.append({
-                "type": "user",
-                "content": content
-            })
-        elif role == "assistant" and context_messages:
-            # Add to previous user message as response
-            if context_messages[-1]["type"] == "user":
-                context_messages[-1]["response"] = content
-            else:
-                # Orphan assistant message, add as separate entry
-                context_messages.append({
-                    "type": "assistant",
-                    "content": content
-                })
-
-        i += 1
-
-    if not context_messages:
-        return ""
-
-    # Build context string
-    context_parts = ["# Recent Conversation (This Session)", ""]
-
-    for idx, turn in enumerate(context_messages, 1):
-        if turn["type"] == "user":
-            context_parts.append(f"## Turn {idx}")
-            context_parts.append(f"**User**: {turn['content']}")
-            if "response" in turn:
-                # Truncate long responses
-                response = turn["response"]
-                if len(response) > 500:
-                    response = response[:500] + "..."
-                context_parts.append(f"**Assistant**: {response}")
-            context_parts.append("")
-
-    # Detect language preference
-    has_chinese = any(
-        msg.get("role") == "user" and _contains_chinese(msg.get("content", ""))
-        for msg in recent
-    )
-    if has_chinese:
-        context_parts.append("## Communication Preference")
-        context_parts.append("- User communicates in Chinese")
-        context_parts.append("")
-
-    return "\n".join(context_parts)
-
-
-def _extract_key_info(content: str) -> str:
-    """
-    Extract key information from user message for context.
-
-    For example:
-    - "北京天气如何" → "查询北京天气"
-    - "帮我分析foo.py文件" → "分析文件: foo.py"
-
-    Args:
-        content: User message content
-
-    Returns:
-        Key information string or None
-    """
-    import re
-
-    # Weather queries
-    weather_pattern = r"(?:北京|上海|广州|深圳|杭州|成都|重庆|武汉|西安|南京|天津|青岛|大连|厦门|苏州|无锡|宁波|济南|青岛|郑州|长沙|哈尔滨|沈阳|长春|石家庄|太原|呼和浩特|西安|兰州|银川|西宁|乌鲁木齐|拉萨|昆明|贵阳|南宁|海口|福州|合肥|南昌|济南|青岛)[省市]?的?天气"
-    match = re.search(weather_pattern, content)
-    if match:
-        city = match.group(1)
-        return f"查询{city}的天气"
-
-    # File operations
-    if "文件" in content or "file" in content.lower():
-        file_match = re.search(r'["\']?([\w\-./]+\.(?:py|js|ts|txt|md|json|yaml|yml|html|css|java|cpp|c|go|rs|rb|php|sh|bash|zsh))["\']?', content)
-        if file_match:
-            filename = file_match.group(1)
-            return f"操作文件: {filename}"
-
-    # Paper search
-    if "论文" in content or "paper" in content.lower() or "arxiv" in content.lower():
-        # Extract paper title/topic
-        if "关于" in content:
-            topic_match = re.search(r"关于(.{2,20}?)(?:的论文|论文)", content)
-            if topic_match:
-                return f"搜索论文: {topic_match.group(1)}"
-
-    return None  # No key info extracted
 
 
 async def chat_stream_generator(
     request: ChatRequest,
     agent: AgentManager,
     system_prompt: str,
+    request_id: str,  # 🔧 新增：请求 ID
 ) -> AsyncIterator[str]:
     """
     Generate SSE stream for chat response.
@@ -543,17 +264,20 @@ async def chat_stream_generator(
         request: Chat request
         agent: Agent manager
         system_prompt: System prompt
+        request_id: Request tracking ID
 
     Yields:
         SSE formatted strings
     """
-    # Start execution logging
-    with AgentExecutionLogger(f"chat_{request.session_id}") as exec_logger:
-        try:
-            logger.info(f"New chat request - Session: {request.session_id}")
-            logger.info(f"User message: {request.message[:200]}...")
+    # 🔧 新增：使用请求追踪上下文
+    with RequestTrackingContext(session_id=request.session_id, request_id=request_id):
+        # Start execution logging
+        with AgentExecutionLogger(f"chat_{request.session_id}") as exec_logger:
+            try:
+                logger.info(f"[RID:{request_id}] New chat request - Session: {request.session_id}")
+                logger.info(f"[RID:{request_id}] User message: {request.message[:200]}...")
 
-            # Send thinking start event
+                # Send thinking start event
             yield format_sse_event(
                 ChatEvent(type="thinking_start")
             )
@@ -563,26 +287,88 @@ async def chat_stream_generator(
             session = session_manager.load_session(request.session_id)
 
             if session is None:
-                # New session: create it
                 session = session_manager.create_session(
                     session_id=request.session_id,
                     metadata=request.context,
                 )
-                logger.info(f"New session created: {request.session_id}")
-            # Note: conversation_context is already extracted in the parent function
-            # and included in system_prompt, no need to extract again here
 
-            # === KEY DESIGN: messages list only contains current user message ===
-            # Historical conversation is NOT included in messages to avoid confusion
-            # Context is provided separately via system_prompt components
+            # Prepare messages
             messages = []
 
-            # Add only the current user message
+            # Get session history
+            session_messages = session.get("messages", [])
+
+            # === INTELLIGENT CONTEXT PRUNING ===
+            # Strategy: Use task boundary detection to prune irrelevant history
+            #
+            # 1. Check if there's a task boundary in recent history
+            # 2. If boundary found, only keep messages AFTER the boundary
+            # 3. If no boundary, keep last 3 messages
+            #
+            # This ensures LLM doesn't see "Beijing weather" when asking "Shanghai weather"
+
+            MAX_CONTEXT_MESSAGES = 3
+            recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
+
+            # Check for task boundary in recent messages
+            boundary_index = -1  # -1 means no boundary found
+            for i in range(len(recent_messages) - 1, 0, -1):
+                if i < len(recent_messages) - 1:  # Not the last message
+                    if detect_task_boundary(recent_messages[i], recent_messages[i + 1]):
+                        boundary_index = i
+                        logger.info(f"Task boundary found at index {i}, pruning earlier history")
+                        break
+
+            # Prune messages based on boundary
+            if boundary_index >= 0:
+                # Keep only messages after the boundary
+                recent_messages = recent_messages[boundary_index + 1:]
+                logger.info(f"Pruned to {len(recent_messages)} messages after boundary")
+            else:
+                # No boundary: keep recent messages as-is
+                logger.debug(f"No task boundary, keeping {len(recent_messages)} recent messages")
+
+            for i, msg in enumerate(recent_messages):
+                if msg["role"] in ["user", "assistant"]:
+                    # Check if this is the last message (current question)
+                    is_last_message = (i == len(recent_messages) - 1)
+
+                    if is_last_message:
+                        # CURRENT MESSAGE: Use full content - this is what LLM should focus on
+                        message_dict = {
+                            "role": msg["role"],
+                            "content": msg["content"],
+                        }
+                        logger.debug(f"Loading current message: {msg['content'][:50]}...")
+
+                        # Add images if present (only for current message)
+                        if msg.get("images"):
+                            # Format content for vision models
+                            content_list = [{"type": "text", "text": msg["content"]}]
+                            for img in msg["images"]:
+                                content_list.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
+                                })
+                            message_dict["content"] = content_list
+                    else:
+                        # HISTORICAL MESSAGE: Abstract to type only - prevents interference
+                        # Don't show "Beijing weather" - show "Weather Information Query" instead
+                        # Don't include images for historical messages
+                        message_type = _classify_conversation_type(msg.get("content", ""))
+                        message_dict = {
+                            "role": msg["role"],
+                            "content": f"[COMPLETED_TASK] {message_type} - Task finished, ignore details",
+                        }
+                        logger.debug(f"Abstracted historical message to: {message_type}")
+
+                    messages.append(message_dict)
+
+            # Add current message
             current_message = {
                 "role": "user",
                 "content": request.message,
             }
-
             # Add images from current request if present
             if request.images:
                 content_list = [{"type": "text", "text": request.message}]
@@ -592,9 +378,7 @@ async def chat_stream_generator(
                         "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
                     })
                 current_message["content"] = content_list
-
             messages.append(current_message)
-            logger.debug(f"Prepared messages list with {len(messages)} message(s): current user message only")
 
             # Log input
             exec_logger.log_input(messages, system_prompt)
@@ -693,106 +477,6 @@ async def chat_stream_generator(
             )
 
 
-async def tot_stream_generator(
-    request: ChatRequest,
-    orchestrator: any,
-    system_prompt: str,
-) -> AsyncIterator[str]:
-    """
-    Generate SSE stream for ToT-based chat response.
-
-    Args:
-        request: Chat request
-        orchestrator: ToT orchestrator
-        system_prompt: System prompt
-
-    Yields:
-        SSE formatted strings
-    """
-    from app.core.tot.streaming import ToTEventStreamer
-
-    try:
-        logger.info(f"=== ToT stream generator: New request - Session: {request.session_id} ===")
-        logger.info(f"=== User message: {request.message[:100]}... ===")
-
-        # Load or create session
-        session_manager = get_session_manager()
-        session = session_manager.load_session(request.session_id)
-
-        if session is None:
-            session = session_manager.create_session(
-                session_id=request.session_id,
-                metadata=request.context,
-            )
-            logger.info(f"=== New session created: {request.session_id} ===")
-
-        # Prepare messages
-        messages = [{"role": "user", "content": request.message}]
-        logger.info(f"=== Prepared {len(messages)} message(s) ===")
-
-        # Stream ToT reasoning
-        assistant_message_parts = []
-        event_count = 0
-
-        logger.info("=== Starting orchestrator.process_request with enable_tot=True ===")
-        async for event in orchestrator.process_request(
-            messages=messages,
-            system_prompt=system_prompt,
-            enable_tot=True,
-        ):
-            event_count += 1
-            event_type = event.get("type", "unknown")
-            logger.debug(f"ToT event #{event_count}: {event_type}")
-
-            # Yield SSE event
-            yield format_sse_event(ChatEvent(**event))
-
-            # Collect content
-            if event.get("type") == "content_delta":
-                assistant_message_parts.append(event.get("content", ""))
-
-        logger.info(f"=== ToT stream completed. Total events: {event_count} ===")
-
-        # Save messages to session
-        session_manager.add_message(
-            session_id=request.session_id,
-            role="user",
-            content=request.message,
-            images=request.images,
-        )
-
-        if assistant_message_parts:
-            assistant_full_response = "".join(assistant_message_parts)
-            session_manager.add_message(
-                session_id=request.session_id,
-                role="assistant",
-                content=assistant_full_response,
-            )
-            logger.info(f"=== Saved assistant response: {len(assistant_full_response)} chars ===")
-
-        # Trigger background memory extraction
-        try:
-            from app.config import get_settings
-            settings = get_settings()
-            if settings.enable_memory_extraction:
-                asyncio.create_task(
-                    _background_memory_extraction(request.session_id)
-                )
-        except Exception as e:
-            logger.warning(f"Failed to trigger memory extraction: {e}")
-
-    except Exception as e:
-        logger.error(f"=== ToT stream generator error: {e} ===")
-        import traceback
-        logger.error(f"=== Traceback: {traceback.format_exc()} ===")
-        yield format_sse_event(
-            ChatEvent(
-                type="error",
-                error=str(e),
-            )
-        )
-
-
 @router.post("")
 async def chat(request: ChatRequest):
     """
@@ -883,25 +567,13 @@ async def chat(request: ChatRequest):
     Raises:
         HTTPException: If agent initialization fails
     """
-    # EARLY DEBUG: Verify function is being called
-    import sys
-    with open("I:\\code\\miniclaw\\chat_entry.log", "a", encoding="utf-8") as f:
-        f.write(f"ENTER: chat() function at {__file__}\n")
-        f.write(f"Message: {request.message[:100]}\n")
-        f.write(f"Python version: {sys.version}\n")
-        f.write("-" * 50 + "\n")
-
-    print(f"[EARLY DEBUG] chat() function called with message: {request.message[:50]}")
-    logger.info(f"[EARLY DEBUG] chat() function called with message: {request.message[:50]}")
-
     # Ensure skills are loaded
     bootstrap_skills()
 
     # === Retrieve relevant conversation history via semantic search ===
-    semantic_history = ""
+    recent_history = ""
     try:
         from app.config import get_settings
-        # get_settings() always returns fresh instance (no caching)
         settings = get_settings()
 
         # Only trigger semantic search for substantial queries (not simple greetings)
@@ -909,8 +581,8 @@ async def chat(request: ChatRequest):
         is_substantial_query = (
             message_len > 20 and  # At least 20 characters
             not request.message.strip() in ["你好", "hello", "hi", "嗨", "您好"] and  # Not simple greetings
-            ("?" in request.message or "？" in request.message or  # Questions
-             any(word in request.message.lower() for word in ["如何", "怎么", "什么", "为什么", "how", "what", "why", "how to"]))  # Complex queries
+            "?" in request.message or "？" in request.message or  # Questions
+            any(word in request.message.lower() for word in ["如何", "怎么", "什么", "为什么", "how", "what", "why", "how to"])  # Complex queries
         )
 
         # Check embedding model status before semantic search
@@ -931,25 +603,11 @@ async def chat(request: ChatRequest):
             from app.memory.memory_manager import get_memory_manager
             memory_manager = get_memory_manager()
 
-            # Try cache first if enabled
-            relevant = None
-            if settings.enable_semantic_search_cache:
-                relevant = _get_cached_semantic_search(
-                    request.message,
-                    ttl=settings.semantic_search_cache_ttl
-                )
-
-            # Cache miss or disabled - perform search
-            if relevant is None:
-                # Search with relevance threshold
-                relevant = await memory_manager.search_relevant_history(
-                    request.message,
-                    top_k=3
-                )
-
-                # Cache the result if enabled
-                if settings.enable_semantic_search_cache and relevant is not None:
-                    _set_cached_semantic_search(request.message, relevant)
+            # Search with relevance threshold
+            relevant = await memory_manager.search_relevant_history(
+                request.message,
+                top_k=3
+            )
 
             # Filter by relevance score (if available) and content quality
             if relevant:
@@ -964,81 +622,39 @@ async def chat(request: ChatRequest):
                             filtered_results.append(r)
 
                 if filtered_results:
-                    # Format with specific content (not just type)
+                    # Format with pattern type only (no specific content)
                     formatted_entries = []
                     for idx, r in enumerate(filtered_results, 1):
                         similarity = r.get('similarity', 0.0)
                         session_id = r.get('metadata', {}).get('session_id', 'unknown')
                         content = r['content']
 
-                        # Truncate content if too long (show first 200 chars)
-                        preview = content[:200] + "..." if len(content) > 200 else content
+                        # Extract pattern type (no specific values)
+                        entry_type = _classify_conversation_type(content)
 
                         entry = f"""---
-## Segment #{idx}
-**Session**: {session_id} | **Relevance**: {similarity:.1%}
+📜 **Historical Pattern #{idx}**
+   👤 Session: {session_id}
+   🎯 Relevance: {similarity:.1%}
+   📋 Pattern Type: {entry_type}
 
-**Content Preview**:
-{preview}
-
-⚠️ *This is a historical conversation segment. Use it to understand the user's expression style and needs. Do NOT assume you need to "continue" this conversation.*
+   ⚠️  This is a PAST conversation pattern. Extract the approach, NOT specific values.
 """
                         formatted_entries.append(entry)
 
-                    semantic_history = "\n".join(formatted_entries)
-                    logger.info(f"Found {len(filtered_results)} relevant conversation chunks for query: {request.message[:50]}")
+                    recent_history = "\n".join(formatted_entries)
+                    import logging
+                    logging.info(f"Found {len(filtered_results)} relevant conversation chunks for query: {request.message[:50]}")
     except Exception as e:
-        logger.warning(f"Semantic search failed: {e}")
+        import logging
+        logging.warning(f"Semantic search failed: {e}")
 
-    # === Extract conversation context from current session ===
-    conversation_context = ""
+    # Build system prompt
     try:
-        session_manager = get_session_manager()
-        session = session_manager.load_session(request.session_id)
-
-        if session is not None:
-            session_messages = session.get("messages", [])
-            if session_messages:
-                # Try cache first if enabled
-                from app.config import get_settings
-                settings = get_settings()
-
-                if settings.enable_context_cache:
-                    conversation_context = _get_cached_conversation_context(
-                        request.session_id,
-                        session_messages
-                    )
-
-                # Cache miss or disabled - extract context
-                if conversation_context is None:
-                    conversation_context = _extract_conversation_context(session_messages)
-                    logger.debug(f"Extracted conversation context from session")
-
-                    # Cache the result if enabled
-                    if settings.enable_context_cache:
-                        _set_cached_conversation_context(
-                            request.session_id,
-                            session_messages,
-                            conversation_context
-                        )
-
-                logger.info(f"[DEBUG] conversation_context length: {len(conversation_context)} chars")
-                if conversation_context:
-                    logger.info(f"[DEBUG] conversation_context preview:\n{conversation_context[:500]}")
-    except Exception as e:
-        logger.warning(f"Failed to extract conversation context: {e}")
-
-    # Build system prompt with new session data structure
-    try:
-        logger.info(f"[DEBUG] Building system prompt with conversation_context of {len(conversation_context)} chars")
-        if conversation_context:
-            logger.info(f"[DEBUG] conversation_context:\n{conversation_context}")
-
         system_prompt = build_system_prompt(
             session_data={
                 "user_context": request.context,
-                "conversation_context": conversation_context,  # Current session context
-                "semantic_history": semantic_history,          # Semantic search results
+                "recent_history": recent_history,
             }
         )
     except Exception as e:
@@ -1050,134 +666,21 @@ async def chat(request: ChatRequest):
     # Get agent manager
     agent = get_agent_manager()
 
-    # Check if ToT should be enabled for this request
-    from app.config import get_settings
-    settings = get_settings()
+    # 🔧 新增：生成请求追踪 ID
+    request_id = generate_request_id()
+    set_request_id(request_id)
+    set_session_id(request.session_id)
 
-    # Check if ToT is enabled globally or per-request
-    # Pydantic model: request.enable_tot will be None if not provided in request
-    request_enable_tot = request.enable_tot
-    logger.info(f"=== DEBUG: request.enable_tot={request_enable_tot} ===")
+    logger.info(f"[RID:{request_id}] New chat request from session: {request.session_id}")
 
-    if request_enable_tot is not None:
-        # Per-request setting overrides global setting
-        enable_tot = request_enable_tot
-        logger.info(f"=== ToT per-request setting: enable_tot={enable_tot} ===")
-    else:
-        # Use global setting
-        enable_tot = settings.enable_tot
-        logger.info(f"=== Using global ToT setting: enable_tot={enable_tot} ===")
-
-    # Force write to file to verify execution
-    with open("I:\\code\\miniclaw\\tot_debug.log", "a", encoding="utf-8") as f:
-        f.write(f"[DEBUG] ToT Config: enable_tot={enable_tot}\n")
-
-    print(f"[DEBUG] === ToT Config: enable_tot={enable_tot} ===")
-    logger.info(f"=== ToT Config: enable_tot={enable_tot} ===")
-
-    # Check if query complexity requires ToT
-    should_use_tot = False
-
-    # Check if research mode is requested and determine thinking mode
-    research_mode = None
-    thinking_config = None
-    custom_branching = None
-
-    if request.context:
-        research_mode = request.context.get("research_mode", None)
-        # Read custom branching factor if provided
-        custom_branching = request.context.get("branching_factor", None)
-
-        if research_mode in settings.thinking_modes:
-            thinking_config = settings.thinking_modes[research_mode]
-            # Use custom branching factor if provided, otherwise use default
-            branching = custom_branching if custom_branching else thinking_config['branching']
-            logger.info(f"=== Thinking mode: {thinking_config['name']} (depth={thinking_config['depth']}, branching={branching}) ===")
-            if custom_branching:
-                logger.info(f"=== Custom branching factor: {custom_branching} ===")
-
-    # Check if ToT is explicitly enabled per-request (force mode)
-    is_force_tot = False
-
-    # request_enable_tot was already set above
-    logger.info(f"=== DEBUG: request_enable_tot={request_enable_tot}, type={type(request_enable_tot)} ===")
-
-    if request_enable_tot is not None:
-        logger.info(f"=== DEBUG: request_enable_tot is not None, value={request_enable_tot} ===")
-        # If user explicitly sets enable_tot=True, force ToT regardless of complexity
-        if request_enable_tot:
-            logger.info("=== DEBUG: Setting force mode ===")
-            is_force_tot = True
-            should_use_tot = True
-            logger.info("=== ToT explicitly enabled via request parameter (force mode) ===")
-        else:
-            logger.info(f"=== DEBUG: request_enable_tot is False ===")
-    else:
-        logger.info("=== DEBUG: request_enable_tot is None, using global setting ===")
-
-    # For global enable_tot setting, still check complexity
-    if enable_tot and not is_force_tot:
-        from app.core.tot.router import TaskComplexityClassifier
-        classifier = TaskComplexityClassifier()
-        complexity = classifier.classify(request.message)
-        should_use_tot = (complexity == "complex")
-        logger.info(f"=== Query: '{request.message[:50]}...' ===")
-        logger.info(f"=== Complexity: {complexity}, should_use_tot: {should_use_tot} ===")
-
-    if research_mode:
-        should_use_tot = True
-        logger.info(f"=== Research mode '{research_mode}' requested, enabling ToT ===")
-
-    logger.info(f"=== Final decision: should_use_tot={should_use_tot} ===")
-
-    # Use ToT orchestrator for complex queries, otherwise use standard agent
-    if should_use_tot:
-        logger.info("=== Using ToT Orchestrator for complex query ===")
-        try:
-            from app.core.tot.router import ToTOrchestrator
-            from app.core.tot.streaming import ToTEventStreamer
-
-            # Determine ToT parameters based on thinking mode
-            tot_depth = thinking_config['depth'] if thinking_config else settings.tot_max_depth
-            # Use custom branching factor if provided, otherwise use config default
-            tot_branching = custom_branching if custom_branching else (
-                thinking_config['branching'] if thinking_config else settings.tot_branching_factor
-            )
-
-            logger.info(f"=== Creating ToTOrchestrator with depth={tot_depth}, branching={tot_branching} ===")
-            orchestrator = ToTOrchestrator(
-                agent_manager=agent,
-                max_depth=tot_depth,
-                branching_factor=tot_branching
-            )
-            logger.info("=== ToTOrchestrator created successfully ===")
-
-            logger.info("=== Starting tot_stream_generator ===")
-            response = StreamingResponse(
-                tot_stream_generator(request, orchestrator, system_prompt),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                },
-            )
-            logger.info("=== Returning ToT StreamingResponse ===")
-            return response
-        except Exception as e:
-            logger.error(f"=== FAILED to create/use ToT Orchestrator: {e} ===")
-            import traceback
-            logger.error(f"=== Traceback: {traceback.format_exc()} ===")
-            logger.info("=== Falling back to standard agent ===")
-            # Fall through to standard agent below
-
-    # Standard agent path (either should_use_tot=False or ToT failed)
-    logger.info("=== Using standard Agent Manager ===")
+    # Return SSE stream
     return StreamingResponse(
-        chat_stream_generator(request, agent, system_prompt),
+        chat_stream_generator(request, agent, system_prompt, request_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-Request-ID": request_id,  # 🔧 新增：在响应头中返回请求 ID
         },
     )
 
