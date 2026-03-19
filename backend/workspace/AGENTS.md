@@ -152,8 +152,32 @@
 - ✅ 使用 `python_repl` 执行计算、数据处理、逻辑操作
 - ❌ 不要用 `python_repl` 进行文件 I/O
 
+**Python 文件执行规则（CRITICAL）**：
+- ✅ 执行 Python 脚本：使用 `terminal` 工具，命令格式为 `python script.py`
+- ❌ **禁止**：只运行 `python` 命令（会启动 REPL 卡住）
+- ✅ 执行前先检查依赖是否已安装
+
+**正确示例**：
+```json
+// ✅ 正确：执行 Python 文件
+{
+  "name": "terminal",
+  "arguments": {
+    "command": "python backend/app/tools/example.py"
+  }
+}
+```
+
 **错误示例**：
 ```json
+// ❌ 错误：只运行 python（会启动 REPL 卡住）
+{
+  "name": "terminal",
+  "arguments": {
+    "command": "python"
+  }
+}
+
 // ❌ 错误：用 python_repl 写文件
 {
   "name": "python_repl",
@@ -174,6 +198,54 @@
   }
 }
 ```
+
+### 依赖检查和安装流程
+
+**执行 Python 文件前的标准流程**：
+
+1. **检查依赖是否已安装**：
+   ```json
+   {
+     "name": "terminal",
+     "arguments": {
+       "command": "pip show <package_name>"
+     }
+   }
+   ```
+
+2. **如果依赖缺失，安装依赖**：
+   ```json
+   {
+     "name": "terminal",
+     "arguments": {
+       "command": "pip install <package_name>"
+     }
+   }
+   ```
+
+3. **执行 Python 文件**：
+   ```json
+   {
+     "name": "terminal",
+     "arguments": {
+       "command": "python script.py"
+     }
+   }
+   ```
+
+**示例：执行需要 requests 的脚本**：
+```json
+// Step 1: 检查依赖
+{"name": "terminal", "arguments": {"command": "pip show requests"}}
+
+// Step 2: 如果缺失，安装（terminal 会自动检测并提示安装）
+{"name": "terminal", "arguments": {"command": "pip install requests"}}
+
+// Step 3: 执行脚本
+{"name": "terminal", "arguments": {"command": "python fetch_data.py"}}
+```
+
+**注意**：terminal 工具已内置依赖检测功能。当执行 Python 命令失败时，会自动检测 ModuleNotFoundError 并尝试自动安装依赖。
 
 #### terminal - 执行 Shell 命令
 - **command** (必需): 要执行的 shell 命令字符串

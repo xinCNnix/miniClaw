@@ -90,9 +90,25 @@ class PythonREPLTool(BaseTool):
     description: str = """
     Execute Python code for computation, data analysis, and logic operations.
 
-    ⚠️ CRITICAL: DO NOT use this tool for file I/O operations!
-    - To WRITE files: Use write_file tool
-    - To READ files: Use read_file tool
+    ⚠️ CRITICAL - When to use this tool:
+
+    ✅ USE python_repl FOR:
+    - Quick calculations and data processing
+    - String/text manipulation
+    - Parsing JSON/API responses
+    - Testing algorithms and logic
+    - Mathematical operations (numpy, pandas, etc.)
+    - Data structure operations (lists, dicts, sets)
+
+    ❌ DO NOT USE python_repl FOR:
+    - File I/O operations → Use write_file/read_file tools instead
+    - Running Python scripts → Use terminal("python script.py") instead
+    - Installing packages → Use terminal("pip install ...") instead
+
+    Comparison with terminal tool:
+    - python_repl: Executes code snippets directly, no files needed ✅
+    - terminal("python script.py"): Executes .py script files ✅
+    - terminal("python"): Will hang! Never use bare python command ❌
 
     Execution Modes:
     - safe: Conservative protection (60s timeout, 20% memory, 1M operations)
@@ -100,33 +116,22 @@ class PythonREPLTool(BaseTool):
     - free: Free mode (30min timeout, 80% memory, unlimited operations)
 
     Features:
-    - Data processing and calculation
-    - String manipulation and formatting
-    - Math and scientific computing (numpy, pandas, etc.)
-    - Data structure operations (lists, dicts, sets)
-    - Full Python standard library access (EXCEPT file I/O)
-    - Separate namespace (isolated from system)
+    - Isolated namespace (variables persist across calls)
     - Memory limits based on available system memory
     - Operation counting to prevent infinite loops
     - Timeout protection
-    - Error capturing and reporting
-
-    Common uses:
-    - Data processing and analysis
-    - Mathematical calculations
-    - String/text manipulation
-    - Data structure operations
-    - Algorithm implementation
-    - API response parsing
-    - Data validation and transformation
+    - Full Python standard library access (EXCEPT file I/O)
 
     Examples:
-    - python_repl: result = 2 + 2; print(result)
-    - python_repl: import json; data = json.loads('{"key": "value"}'); print(data["key"])
-    - python_repl: text = "Hello World"; print(text.upper())
-    - python_repl: numbers = [1, 2, 3, 4, 5]; print(sum(numbers))
+    - code="result = 2 + 2; print(result)"
+    - code="import json; data = json.loads('{\"key\": \"value\"}'); print(data['key'])"
+    - code="text = 'Hello World'; print(text.upper())"
+    - code="numbers = [1, 2, 3, 4, 5]; print(sum(numbers))"
 
-    Note: For file operations, ALWAYS use write_file or read_file tools instead.
+    Parameters:
+    - code (required): Python code to execute
+    - mode (optional): Execution mode (safe/standard/free)
+    - timeout (optional): Timeout in seconds
     """
 
     args_schema: type[PythonREPLInput] = PythonREPLInput

@@ -40,27 +40,46 @@ class ReadFileTool(BaseTool):
 
     name: str = "read_file"
     description: str = """
-    Read the contents of a file from the local filesystem.
+    ⚠️ CRITICAL: This is the ONLY tool for reading files!
+
+    ALWAYS use read_file for ALL file reading operations:
+    - Reading source code (.py, .js, .ts, etc.)
+    - Reading configuration files (.env, .yaml, .json)
+    - Reading documentation (SKILL.md, README.md)
+    - Reading data files (.txt, .csv, .json)
+    - Reading log files
+
+    NEVER use other tools to read files!
+    - ❌ DON'T: python_repl with open(), Path.read_text()
+    - ❌ DON'T: terminal with cat, type, less
+    - ✅ DO: Use read_file tool
+
+    Comparison with other tools:
+    - read_file("data.json") → Read file contents ✅
+    - terminal("cat data.json") → Use read_file instead ❌
+    - python_repl("open('data.json').read()") → Use read_file instead ❌
 
     Features:
-    - Restricted to project directory
+    - Restricted to project directory (security)
     - Prevents path traversal attacks
-    - Automatic encoding detection
-    - Binary file detection
+    - Automatic encoding detection (utf-8 default)
+    - Binary file detection (will warn)
+    - Proper error messages for missing files
 
-    Common uses:
-    - Read configuration files
-    - Read Markdown documentation (SKILL.md)
-    - Read source code
-    - Read data files
+    Parameters:
+    - path (required): File path (relative or absolute)
+    - encoding (optional): File encoding (default: utf-8)
 
     Examples:
-    - read_file: README.md
-    - read_file: data/skills/get_weather/SKILL.md
-    - read_file: app/config.py
+    - read_file("README.md")
+    - read_file("backend/app/config.py")
+    - read_file("data/skills/get_weather/SKILL.md")
+    - read_file(".env.example")
 
-    Note: Only files within the project directory can be read.
-    Binary files will return an error message.
+    Use Cases:
+    - Before using a skill: read_file("data/skills/<skill_name>/SKILL.md")
+    - Analyzing code: read_file("backend/app/tools/terminal.py")
+    - Checking configs: read_file("app/config.py")
     """
     args_schema: type[ReadFileInput] = ReadFileInput
 
