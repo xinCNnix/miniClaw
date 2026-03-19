@@ -331,10 +331,13 @@ class AgentManager:
                         if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
                             logger.debug(f"[TOOL_CALL_CHUNKS] Received {len(chunk.tool_call_chunks)} chunks")
                             for idx, tc in enumerate(chunk.tool_call_chunks):
+                                # 🔧 修复：处理 args 为 None 的情况
+                                # tc.get('args', '') 在 args=None 时仍返回 None，需要使用 or
+                                args_value = tc.get('args') or ''
                                 logger.debug(f"[TOOL_CALL_CHUNK {idx}] "
                                            f"index={tc.get('index')}, "
                                            f"name={tc.get('name')}, "
-                                           f"args_len={len(tc.get('args', ''))}")
+                                           f"args_len={len(args_value)}")
                                 # 工具名称片段
                                 if tc.get("name"):
                                     yield {
