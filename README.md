@@ -48,6 +48,21 @@ miniClaw is a lightweight, highly transparent AI Agent system that combines data
   - Environment variable-based switching
   - Mix local and cloud models seamlessly
 
+- **Tree of Thoughts (ToT) Reasoning System**
+  - Advanced reasoning with multiple thought branches exploration
+  - Three thinking modes: Heuristic (⚡), Analytical (🔬), Exhaustive (🌌)
+  - Automatic complexity detection and mode switching
+  - Real-time reasoning visualization with thought tree
+  - Smart stopping to balance quality and speed
+  - Tool result caching to avoid redundant calls
+  - Research mode for deep investigation with knowledge base + arXiv + web sources
+
+- **Research Mode**
+  - Deep research capabilities with structured multi-stage investigation
+  - Knowledge base + arXiv + web sources integration
+  - Evidence synthesis and cross-reference analysis
+  - Streamed research progress with stage indicators
+
 ---
 
 ## Development & Testing Platform
@@ -158,9 +173,9 @@ Access:
 
 ## Core Features
 
-### 5 Core Tools
+### 6 Core Tools
 
-miniClaw includes 5 carefully designed core tools covering the most common AI Agent scenarios:
+miniClaw includes 6 carefully designed core tools covering the most common AI Agent scenarios:
 
 | Tool | Function | Security Features | Example |
 |------|----------|-------------------|---------|
@@ -168,6 +183,7 @@ miniClaw includes 5 carefully designed core tools covering the most common AI Ag
 | **python_repl** | Python code interpreter | Timeout control + exception handling | Data analysis, computation |
 | **fetch_url** | Web scraping | HTML auto-cleaning | News fetching, API calls |
 | **read_file** | File reading | Restricted to project directory | Reading code, documentation |
+| **write_file** | File writing | Path restrictions + sensitive file protection | Creating files, saving results |
 | **search_kb** | RAG knowledge base retrieval | Hybrid search (semantic + keyword) | Document queries, knowledge Q&A |
 
 > 💡 All tools can be automatically invoked by Agent through instructions in System Prompt.
@@ -187,9 +203,10 @@ skill-name/
 
 **Built-in Skills:**
 
-- **get_weather** - Weather query (using wttr.in)
 - **arxiv-search** - Academic paper search (arXiv API)
+- **arxiv-download-paper** - Download academic papers from arXiv
 - **github** - GitHub operations (gh CLI)
+- **get_weather** - Weather query (using wttr.in)
 - **find-skill** - Find and install new Skills
 - **skill-creator** - Create custom Skills
 - **skill_validator** - Validate Skills integrity
@@ -253,14 +270,26 @@ miniclaw/
 │   │   ├── core/                # Core modules
 │   │   │   ├── agent.py         # LangChain Agent wrapper
 │   │   │   ├── llm.py           # LLM model initialization
+│   │   │   ├── llm_config.py    # LLM configuration management
 │   │   │   ├── rag_engine.py    # RAG retrieval engine
-│   │   │   └── obfuscation.py   # API key obfuscation
+│   │   │   ├── obfuscation.py   # API key obfuscation
+│   │   │   ├── database.py      # Database operations
+│   │   │   ├── smart_stopping.py # Smart tool stopping
+│   │   │   ├── performance_tracker.py # Performance monitoring
+│   │   │   ├── tracking_context.py # Request tracking
+│   │   │   └── tot/             # Tree of Thoughts reasoning system
+│   │   │       ├── nodes/       # ToT node implementations
+│   │   │       ├── cache.py     # Tool result caching
+│   │   │       ├── state.py     # ToT state management
+│   │   │       ├── router.py    # ToT mode router
+│   │   │       └── research_agent.py # Research mode agent
 │   │   │
-│   │   ├── tools/               # 5 core tools
+│   │   ├── tools/               # 6 core tools
 │   │   │   ├── terminal.py      # Shell command execution
 │   │   │   ├── python_repl.py   # Python code interpreter
 │   │   │   ├── fetch_url.py     # Web scraping
 │   │   │   ├── read_file.py     # File reading
+│   │   │   ├── write_file.py    # File writing
 │   │   │   └── search_kb.py     # Knowledge base search
 │   │   │
 │   │   ├── skills/              # Skills system

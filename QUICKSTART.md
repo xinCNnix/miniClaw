@@ -360,6 +360,129 @@ cd frontend
 npm update
 ```
 
+### Q: Embedding model download fails or times out
+
+**A:** The knowledge base feature requires an embedding model for semantic search. If automatic download fails, manually download it:
+
+**Model Storage Location:**
+- **Default directory**: `backup/data/models/` (in project root)
+- **HuggingFace cache**: `backup/data/models/hub/`
+- **Model name**: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+- **Model size**: ~470MB
+
+**Method 1: Manual Download (Recommended for China users)**
+
+```bash
+# Install huggingface_hub
+pip install huggingface_hub
+
+# Download model using HF-Mirror (faster in China)
+HF_ENDPOINT=https://hf-mirror.com huggingface-cli download sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 --local-dir backup/data/models/paraphrase-multilingual-MiniLM-L12-v2
+
+# Alternative: Download to default cache location
+HF_ENDPOINT=https://hf-mirror.com huggingface-cli download sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+```
+
+**Method 2: Using Python Script**
+
+Create a script `download_model.py` in the project root:
+
+```python
+from huggingface_hub import snapshot_download
+import os
+
+# Use HF-Mirror for faster download in China
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
+# Download model
+model_path = snapshot_download(
+    repo_id="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    local_dir="backup/data/models/paraphrase-multilingual-MiniLM-L12-v2",
+    local_dir_use_symlinks=False
+)
+
+print(f"Model downloaded to: {model_path}")
+```
+
+Run the script:
+```bash
+python download_model.py
+```
+
+**Method 3: Download from Official HuggingFace**
+
+If you're outside China or have reliable access to HuggingFace:
+
+```bash
+# Set environment variables
+export HF_HUB_DOWNLOAD_TIMEOUT=300  # 5 minutes
+export HF_HUB_DOWNLOAD_RETRY=5
+
+# Download model
+huggingface-cli download sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 --local-dir backup/data/models/paraphrase-multilingual-MiniLM-L12-v2
+```
+
+**Verification:**
+
+After download, verify the model files exist:
+
+```bash
+# Check if model directory exists
+ls backup/data/models/paraphrase-multilingual-MiniLM-L12-v2/
+
+# Expected files:
+# - config.json
+# - model.safetensors (or pytorch_model.bin)
+# - tokenizer_config.json
+# - vocab.txt
+# - modules.json (optional)
+```
+
+**Network Issues:**
+
+If download fails due to network issues:
+
+1. **Use HF-Mirror (China users)**:
+   ```bash
+   export HF_ENDPOINT=https://hf-mirror.com
+   ```
+
+2. **Increase timeout**:
+   ```bash
+   export HF_HUB_DOWNLOAD_TIMEOUT=600  # 10 minutes
+   ```
+
+3. **Use a download manager**:
+   - Visit: https://hf-mirror.com/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/tree/main
+   - Download files manually to `backup/data/models/paraphrase-multilingual-MiniLM-L12-v2/`
+
+**Configuration:**
+
+If you want to use a different model, edit `backend/.env`:
+
+```bash
+# Use a different embedding model
+EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5  # Chinese model
+# or
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2  # English model (smaller)
+```
+
+**Troubleshooting:**
+
+1. **Model not found error**:
+   - Check if model files exist in `backup/data/models/`
+   - Verify all required files are present (config.json, model weights, tokenizer files)
+
+2. **Timeout during first use**:
+   - The model is loaded on first knowledge base search
+   - Preload by restarting backend after manual download
+
+3. **Out of memory**:
+   - The default model requires ~500MB RAM
+   - Use a smaller model: `sentence-transformers/all-MiniLM-L6-v2` (~80MB)
+
+**Note:** Once downloaded, the model is cached locally and will load instantly on future starts.
+
 ## 📖 Next Steps
 
 - 📖 Read full documentation: [README.md](./README.md)
