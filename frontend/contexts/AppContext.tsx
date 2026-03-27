@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, ReactNode, useEffect, useState } from "react"
+import { createContext, useContext, ReactNode, useEffect, useState, useCallback, useMemo } from "react"
 import { useChat } from "@/hooks/useChat"
 import { useEditor } from "@/hooks/useEditor"
 import type { Locale } from "@/lib/i18n"
@@ -52,8 +52,8 @@ export function AppProvider({ children, apiUrl = "" }: AppProviderProps) {
     saveLocale(newLocale)
   }
 
-  // Load sessions on mount
-  const refreshSessions = async () => {
+  // Load sessions on mount - use useCallback to prevent re-creation
+  const refreshSessions = useCallback(async () => {
     try {
       const { apiClient } = await import("@/lib/api")
       const response = await apiClient.listSessions()
@@ -61,16 +61,18 @@ export function AppProvider({ children, apiUrl = "" }: AppProviderProps) {
     } catch (error) {
       console.error("Failed to load sessions:", error)
     }
-  }
+  }, []) // Empty deps - this function should be stable
 
   // Load files and sessions on mount
   useEffect(() => {
     editor.refreshFiles()
     refreshSessions()
+    // editor.refreshFiles changes on every render, so we disable the warning
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [refreshSessions])
 
-  const value = {
+  // Use useMemo to prevent unnecessary re-renders of consumers
+  const value = useMemo(() => ({
     chat,
     editor,
     apiUrl,
@@ -81,7 +83,7 @@ export function AppProvider({ children, apiUrl = "" }: AppProviderProps) {
     loadFile: editor.loadFile,
     saveFile: editor.saveFile,
     closeFile: editor.closeFile,
-  }
+  }), [chat, editor, apiUrl, locale, sessions, refreshSessions])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

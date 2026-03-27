@@ -17,7 +17,7 @@ from typing import Callable
 
 from app.config import get_settings
 from app.logging_config import setup_logging
-from app.api import chat_router, files_router, sessions_router
+from app.api import chat_router, files_router, sessions_router, debug_config
 from app.api import config as config_api
 from app.api import python_repl as python_repl_api
 from app.api import knowledge_base
@@ -122,6 +122,17 @@ async def startup_event():
     logger.info(f"LLM Provider: {settings.llm_provider}")
     logger.info(f"CORS Origins: {settings.cors_origins}")
 
+    # Initialize DI container
+    try:
+        from app.core.container import setup_container
+
+        container = setup_container()
+        logger.info("Service container initialized successfully")
+        logger.info("Registered services: LLMProvider, EmbeddingProvider, VectorStore, MessageHistoryStore, AgentManager")
+    except Exception as e:
+        logger.error(f"Failed to initialize service container: {e}", exc_info=True)
+        logger.warning("Application will continue with direct instantiation")
+
     # Create necessary directories
     import os
     from pathlib import Path
@@ -194,9 +205,9 @@ async def _warmup_embedding_model(embedding_manager, timeout: int):
         logger.info(f"Starting embedding model warmup (timeout: {timeout}s)...")
         success = await embedding_manager.warmup(timeout=timeout)
         if success:
-            logger.info("✓ Embedding model warmed up successfully")
+            logger.info("[OK] Embedding model warmed up successfully")
         else:
-            logger.warning("✗ Embedding model warmup failed or timed out (requests will skip semantic search)")
+            logger.warning("[FAILED] Embedding model warmup failed or timed out (requests will skip semantic search)")
     except Exception as e:
         logger.error(f"Embedding warmup error: {e}", exc_info=True)
 
@@ -206,6 +217,16 @@ async def _warmup_embedding_model(embedding_manager, timeout: int):
 async def shutdown_event():
     """Run application shutdown tasks."""
     logger.info(f"Shutting down {settings.app_name}")
+
+    # Reset DI container
+    try:
+        from app.core.container import get_container
+
+        container = get_container()
+        container.reset()
+        logger.info("Service container reset successfully")
+    except Exception as e:
+        logger.warning(f"Failed to reset service container: {e}")
 
 
 # Root endpoint
@@ -278,6 +299,7 @@ app.include_router(memory_api.router, prefix="/api")
 app.include_router(memory_sync_api.router)
 app.include_router(websocket_api.router, prefix="/api")
 app.include_router(embedding_api.router, prefix="/api/embedding")
+app.include_router(debug_config.router, prefix="/api")  # Debug endpoint
 
 
 if __name__ == "__main__":

@@ -20,8 +20,6 @@ from app.core.smart_stopping import (
     should_stop_before_execution,
     should_stop_after_execution,
 )
-from app.core.performance_tracker import track_performance, get_performance_tracker, track_async
-from app.core.tracking_context import get_request_id, get_session_id
 
 # Multi-round tool calling configuration
 MAX_TOOL_ROUNDS = 10  # Maximum rounds of tool calling (prevents infinite loops)
@@ -262,20 +260,21 @@ class AgentManager:
         self,
         messages: List[dict],
         system_prompt: str,
+        callbacks: list | None = None,
     ) -> AsyncIterator[dict]:
         """
         Async stream agent responses.
         """
         start_time = time.time()
-        request_id = get_request_id()
 
         try:
-            logger.info(f"[RID:{request_id}] === Agent astream START ===")
-            logger.debug(f"[RID:{request_id}] Messages count: {len(messages)}")
-            logger.debug(f"[RID:{request_id}] System prompt length: {len(system_prompt)} chars")
+            logger.info("=== Agent astream START ===")
+            logger.debug(f"Messages count: {len(messages)}")
+            logger.debug(f"System prompt length: {len(system_prompt)} chars")
 
             # Get settings early (needed before smart stopping reset)
             settings = get_settings()
+            logger.info(f"[CONFIG] enable_event_driven_streaming={settings.enable_event_driven_streaming}, enable_streaming_response={settings.enable_streaming_response}")
 
             # 智能停止已在 SmartToolStopping 类中管理状态
 
@@ -283,13 +282,44 @@ class AgentManager:
             lc_messages = self._convert_messages(messages, system_prompt)
 
             yield {"type": "thinking_start"}
-            logger.info(f"[RID:{request_id}] Thinking...")
+            logger.info("Thinking...")
 
+            # === Phase 4: Event-Driven Streaming Architecture ===
+            # Use new event-driven architecture if enabled
+            logger.info(f"[DEBUG] enable_event_driven_streaming = {settings.enable_event_driven_streaming}")
+            if settings.enable_event_driven_streaming:
+                logger.info("Using event-driven streaming architecture (Phase 4)")
+                from app.core.streaming.stream_coordinator import StreamCoordinator
+
+                # Create coordinator with all necessary components
+                coordinator = StreamCoordinator(
+                    llm=self.llm_with_tools,
+                    tools=self.tools,
+                    max_rounds=settings.max_tool_rounds,
+                    settings=settings
+                )
+
+                # Set reflection callbacks for ToT integration
+                if hasattr(self, '_on_reflection_callback') and self._on_reflection_callback:
+                    coordinator.set_reflection_callback(self._on_reflection_callback)
+                if hasattr(self, '_on_thought_complete_callback') and self._on_thought_complete_callback:
+                    coordinator.set_thought_complete_callback(self._on_thought_complete_callback)
+
+                # Prepare messages with system prompt
+                messages_with_system = [
+                    {"role": "system", "content": system_prompt},
+                    *messages
+                ]
+
+                # Stream using coordinator
+                async for event in coordinator.astream(messages_with_system, callbacks=callbacks):
+                    yield event
+
+                return  # Exit after using new architecture
+
+            # === Original implementation (fallback) ===
             # Get max_tool_rounds from settings
             max_tool_rounds = settings.max_tool_rounds
-
-            # 🔧 新增：性能追踪
-            perf_tracker = get_performance_tracker()
 
             # Multi-round tool calling loop
             round_count = 0
@@ -304,19 +334,10 @@ class AgentManager:
                     # 收集完整的响应用于后续工具调用检查
                     full_response_chunks = []
                     all_content = []  # 收集所有文本内容
-                    chunk_count = 0
 
                     async for chunk in self.llm_with_tools.astream(lc_messages):
-                        chunk_count += 1
                         # 收集所有 chunks
                         full_response_chunks.append(chunk)
-
-                        # 🔧 新增：记录每个 chunk 的属性
-                        if chunk_count == 1 or chunk_count % 10 == 0:  # 每10个chunk记录一次
-                            logger.debug(f"[LLM_STREAM] Chunk {chunk_count}: "
-                                       f"has_content={hasattr(chunk, 'content')}, "
-                                       f"has_tool_calls={hasattr(chunk, 'tool_calls')}, "
-                                       f"has_tool_call_chunks={hasattr(chunk, 'tool_call_chunks')}")
 
                         # 收集文本内容
                         if hasattr(chunk, 'content') and chunk.content:
@@ -329,15 +350,10 @@ class AgentManager:
 
                         # 输出工具调用片段（让用户看到工具调用的过程）
                         if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
-                            logger.debug(f"[TOOL_CALL_CHUNKS] Received {len(chunk.tool_call_chunks)} chunks")
-                            for idx, tc in enumerate(chunk.tool_call_chunks):
-                                # 🔧 修复：处理 args 为 None 的情况
-                                # tc.get('args', '') 在 args=None 时仍返回 None，需要使用 or
-                                args_value = tc.get('args') or ''
-                                logger.debug(f"[TOOL_CALL_CHUNK {idx}] "
-                                           f"index={tc.get('index')}, "
-                                           f"name={tc.get('name')}, "
-                                           f"args_len={len(args_value)}")
+                            for tc in chunk.tool_call_chunks:
+                                # 🔧 DEBUG: 记录所有 tool_call_chunks
+                                logger.info(f"[DEBUG] tool_call_chunk: index={tc.get('index')}, name={tc.get('name')}, args_preview={str(tc.get('args'))[:50] if tc.get('args') else 'None'}")
+
                                 # 工具名称片段
                                 if tc.get("name"):
                                     yield {
@@ -355,83 +371,158 @@ class AgentManager:
 
                     # 构建完整 response 对象
                     if full_response_chunks:
-                        logger.debug(f"[LLM_RESPONSE] Total chunks received: {len(full_response_chunks)}")
-
                         # 从所有 chunks 中找到第一个包含有效 tool_calls 的 chunk
                         # 修复：最后一个 chunk 可能没有 tool_calls
                         response_with_tool_calls = None
-                        for idx, chunk in enumerate(full_response_chunks):
+                        for chunk in full_response_chunks:
                             if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
                                 # 检查是否有有效的 tool_calls（非空名称）
                                 valid_calls = [tc for tc in chunk.tool_calls if tc.get('name')]
                                 if valid_calls:
                                     response_with_tool_calls = chunk
-                                    logger.debug(f"[TOOL_CALLS] Found at chunk {idx}: {len(valid_calls)} calls")
-                                    # 🔧 新增：记录每个 tool_call 的详细信息
-                                    for j, tc in enumerate(valid_calls):
-                                        logger.debug(f"[TOOL_CALL {j}] name={tc.get('name')}, "
-                                                   f"args={tc.get('args')}, id={tc.get('id')}")
+                                    logger.debug(f"[DEBUG] Found chunk with tool_calls: {len(valid_calls)} calls")
                                     break
 
                         # 如果没找到有 tool_calls 的 chunk，使用最后一个 chunk
                         if response_with_tool_calls is None:
                             response_with_tool_calls = full_response_chunks[-1]
-                            logger.warning(f"[TOOL_CALLS] No chunk with tool_calls found, using last chunk")
+                            logger.debug(f"[DEBUG] No chunk with tool_calls found, using last chunk")
 
                         response = response_with_tool_calls
 
                         # 获取 tool_calls（优先使用找到的有 tool_calls 的 chunk）
                         tool_calls_to_use = getattr(response, 'tool_calls', [])
 
-                        logger.debug(f"[ASSEMBLY] tool_calls count: {len(tool_calls_to_use)}")
+                        # 如果 tool_calls 的 args 是空的，尝试从 tool_call_chunks 组装
+                        # 这段逻辑必须在 if all_content: 之外，因为即使没有文本内容也可能有工具调用
+                        if tool_calls_to_use or (full_response_chunks and any(hasattr(c, 'tool_call_chunks') for c in full_response_chunks)):
+                            logger.info(f"[DEBUG] ========== Checking tool_calls args ==========")
+                            logger.info(f"[DEBUG] tool_calls_to_use: {len(tool_calls_to_use) if tool_calls_to_use else 0}")
 
-                        # 🔧 修复：即使 all_content 为空，也要处理 tool_calls 的 args 组装
-                        # 这解决了 LLM 只返回工具调用而没有文本内容时，args 为空导致验证失败的问题
-                        if tool_calls_to_use:
-                            for i, tc in enumerate(tool_calls_to_use):
+                            for i, tc in enumerate(tool_calls_to_use if tool_calls_to_use else []):
+                                tc_name = tc.get('name', 'unknown')
                                 tc_args = tc.get('args')
-                                logger.debug(f"[ASSEMBLY] Tool {i}: name={tc.get('name')}, "
-                                           f"has_args={tc_args is not None}, args_empty={tc_args == {}}")
+                                logger.info(f"[DEBUG] Tool {i}: name={tc_name}, args={tc_args}, has_args={bool(tc_args and tc_args != {})}")
 
                                 if not tc.get('args') or tc.get('args') == {}:
-                                    logger.warning(f"[ASSEMBLY] Tool {i} ({tc.get('name')}) has empty args, attempting assembly")
+                                    logger.info(f"[DEBUG] Tool {i} ({tc_name}) has no args, assembling from chunks...")
                                     # 从 tool_call_chunks 组装 args
                                     args_parts = []
                                     for chunk_idx, chunk in enumerate(full_response_chunks):
                                         if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
-                                            for tcc in chunk.tool_call_chunks:
-                                                if tcc.get('index') == i and tcc.get('args'):
-                                                    args_parts.append(tcc['args'])
-                                                    logger.debug(f"[ASSEMBLY] Found args part at chunk {chunk_idx}: "
-                                                               f"len={len(tcc['args'])}")
+                                            for tcc_idx, tcc in enumerate(chunk.tool_call_chunks):
+                                                tcc_index = tcc.get('index')
+                                                tcc_args = tcc.get('args')
+                                                if tcc_index == i and tcc_args:
+                                                    args_parts.append(tcc_args)
+                                                    logger.info(f"[DEBUG]   Found matching chunk: chunk[{chunk_idx}].tcc[{tcc_idx}], index={tcc_index}, args_preview={str(tcc_args)[:50]}")
 
-                                    logger.debug(f"[ASSEMBLY] Total args parts for tool {i}: {len(args_parts)}")
-
+                                    logger.info(f"[DEBUG] Tool {i} collected {len(args_parts)} args parts")
                                     if args_parts:
                                         args_str = ''.join(args_parts)
-                                        logger.debug(f"[ASSEMBLY] Raw args string for tool {i}: {args_str}")
+                                        logger.info(f"[DEBUG] Tool {i} assembled args string (len={len(args_str)}): {args_str[:200]}")
                                         try:
                                             import json
                                             parsed_args = json.loads(args_str)
                                             tool_calls_to_use[i]['args'] = parsed_args
-                                            logger.info(f"[ASSEMBLY] ✓ Successfully assembled args for tool {i}: {parsed_args}")
+                                            logger.info(f"[DEBUG] ✅ Tool {i} args parsed: {parsed_args}")
                                         except json.JSONDecodeError as e:
-                                            logger.error(f"[ASSEMBLY] ✗ Failed to parse args for tool {i}: {e}")
-                                            logger.error(f"[ASSEMBLY] Raw parts: {args_parts}")
-                                    else:
-                                        logger.error(f"[ASSEMBLY] ✗ No args parts found for tool {i}, args will remain {{}}")
+                                            logger.warning(f"[DEBUG] ❌ Tool {i} JSON parse failed: {e}")
+                            else:
+                                logger.warning(f"[DEBUG] No tool_calls_to_use to process, but tool_call_chunks exist")
+                                # 按 index 分组组装参数（支持多工具调用）
+                                from collections import defaultdict
+                                tool_calls_by_index = defaultdict(lambda: {'name': None, 'args_parts': []})
+
+                                for chunk_idx, chunk in enumerate(full_response_chunks):
+                                    if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                                        for tcc in chunk.tool_call_chunks:
+                                            tcc_index = tcc.get('index')
+                                            tcc_name = tcc.get('name')
+                                            tcc_args = tcc.get('args')
+
+                                            if tcc_index is not None:
+                                                if tcc_name:
+                                                    tool_calls_by_index[tcc_index]['name'] = tcc_name
+                                                if tcc_args:
+                                                    tool_calls_by_index[tcc_index]['args_parts'].append(tcc_args)
+                                                    logger.info(f"[DEBUG] Found args for index {tcc_index} in chunk[{chunk_idx}].tcc")
+
+                                # 为每个 index 创建 tool_call
+                                for tcc_index, tcc_data in tool_calls_by_index.items():
+                                    tool_name = tcc_data['name']
+                                    args_parts = tcc_data['args_parts']
+
+                                    if args_parts and tool_name:
+                                        args_str = ''.join(args_parts)
+                                        logger.info(f"[DEBUG] Assembled args for index {tcc_index}, tool {tool_name}: {args_str[:200]}")
+                                        try:
+                                            import json
+                                            parsed_args = json.loads(args_str)
+                                            # 创建一个新的tool_call
+                                            tool_calls_to_use.append({
+                                                'name': tool_name,
+                                                'args': parsed_args,
+                                                'id': f"call_assembled_index{tcc_index}_{tool_name}",
+                                                'type': 'tool_call'
+                                            })
+                                            logger.info(f"[DEBUG] ✅ Assembled tool_call for {tool_name} (index {tcc_index}): {parsed_args}")
+                                        except json.JSONDecodeError as e:
+                                            logger.warning(f"[DEBUG] ❌ Failed to parse args for {tool_name} (index {tcc_index}): {e}")
+
+                            logger.info(f"[DEBUG] ========== Checking tool_calls args ==========")
+                            for i, tc in enumerate(tool_calls_to_use):
+                                tc_name = tc.get('name', 'unknown')
+                                tc_args = tc.get('args')
+                                logger.info(f"[DEBUG] Tool {i}: name={tc_name}, args={tc_args}, has_args={bool(tc_args and tc_args != {})}")
+
+                                if not tc.get('args') or tc.get('args') == {}:
+                                    logger.info(f"[DEBUG] Tool {i} ({tc_name}) has no args, assembling from chunks...")
+                                    # 从 tool_call_chunks 组装 args
+                                    args_parts = []
+                                    for chunk_idx, chunk in enumerate(full_response_chunks):
+                                        if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                                            for tcc_idx, tcc in enumerate(chunk.tool_call_chunks):
+                                                tcc_index = tcc.get('index')
+                                                tcc_args = tcc.get('args')
+                                                if tcc_index == i and tcc_args:
+                                                    args_parts.append(tcc_args)
+                                                    logger.info(f"[DEBUG]   Found matching chunk: chunk[{chunk_idx}].tcc[{tcc_idx}], index={tcc_index}, args_preview={str(tcc_args)[:50]}")
+
+                                    logger.info(f"[DEBUG] Tool {i} collected {len(args_parts)} args parts")
+                                    if args_parts:
+                                        args_str = ''.join(args_parts)
+                                        logger.info(f"[DEBUG] Tool {i} assembled args string (len={len(args_str)}): {args_str[:200]}")
+                                        try:
+                                            import json
+                                            parsed_args = json.loads(args_str)
+                                            tool_calls_to_use[i]['args'] = parsed_args
+                                            logger.info(f"[DEBUG] ✅ Tool {i} args parsed: {parsed_args}")
+                                        except json.JSONDecodeError as e:
+                                            logger.warning(f"[DEBUG] ❌ Tool {i} JSON parse failed: {e}")
 
                         # 确保包含完整的 content（合并所有文本）
-                        from langchain_core.messages import AIMessage
-                        merged_content = ''.join(all_content) if all_content else ""
+                        if all_content:
+                            from langchain_core.messages import AIMessage
+                            merged_content = ''.join(all_content)
 
-                        # 创建新的 AIMessage
-                        response = AIMessage(
-                            content=merged_content,
-                            tool_calls=tool_calls_to_use,
-                            additional_kwargs=getattr(response, 'additional_kwargs', {}),
-                        )
-                        logger.debug(f"[DEBUG] Merged content length: {len(merged_content)}, chunks: {len(all_content)}, tool_calls: {len(tool_calls_to_use)}")
+                            # 创建新的 AIMessage
+                            response = AIMessage(
+                                content=merged_content,
+                                tool_calls=tool_calls_to_use,
+                                additional_kwargs=getattr(response, 'additional_kwargs', {}),
+                            )
+                            logger.debug(f"[DEBUG] Merged content length: {len(merged_content)}, chunks: {len(all_content)}, tool_calls: {len(tool_calls_to_use)}")
+                        else:
+                            # 没有文本内容，但有工具调用的情况
+                            # 创建只有 tool_calls 的 AIMessage
+                            from langchain_core.messages import AIMessage
+                            response = AIMessage(
+                                content="",
+                                tool_calls=tool_calls_to_use,
+                                additional_kwargs=getattr(response, 'additional_kwargs', {}),
+                            )
+                            logger.debug(f"[DEBUG] No text content, tool_calls: {len(tool_calls_to_use)}")
                     else:
                         # 如果没有 chunks（异常情况），使用空响应
                         from langchain_core.messages import AIMessage
@@ -446,15 +537,17 @@ class AgentManager:
                             "type": "content_delta",
                             "content": response.content,
                         }
+
+                    # 非流式模式也需要参数组装逻辑
+                    # 检查tool_calls的args是否为空，如果为空则无法组装（因为没有tool_call_chunks）
+                    if hasattr(response, 'tool_calls') and response.tool_calls:
+                        for i, tc in enumerate(response.tool_calls):
+                            if not tc.get('args') or tc.get('args') == {}:
+                                logger.warning(f"[Round {round_count + 1}] Tool {i} ({tc.get('name')}) has empty args in non-streaming mode")
+                                logger.warning(f"[Round {round_count + 1}] This is a known limitation when LLM doesn't provide args in tool_calls")
                 # === 流式响应开关结束 ===
 
                 llm_duration = time.time() - llm_start
-
-                # 🔧 新增：性能追踪 - 记录LLM调用耗时
-                perf_tracker._record_success(
-                    f"llm_round_{round_count + 1}",
-                    llm_duration
-                )
 
                 logger.info(f"[Round {round_count + 1}] LLM response received in {llm_duration:.2f}s")
 
@@ -567,17 +660,13 @@ class AgentManager:
                             }]
                         }
 
-                        # 🔧 新增：性能追踪 - 记录工具执行开始时间
-                        tool_start = time.time()
+                        # Initialize tool_output before try-except
+                        tool_output = None
 
                         try:
                             tool_output = await self._aexecute_tool(tool_name, tool_args)
 
-                            # 🔧 新增：性能追踪 - 记录工具执行耗时
-                            tool_duration = time.time() - tool_start
-                            perf_tracker._record_success(f"tool_{tool_name}", tool_duration)
-
-                            logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed in {tool_duration:.2f}s")
+                            logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed")
 
                             yield {
                                 "type": "tool_output",
@@ -586,11 +675,8 @@ class AgentManager:
                                 "status": "success",
                             }
                         except Exception as e:
-                            # 🔧 新增：性能追踪 - 记录工具执行失败
-                            tool_duration = time.time() - tool_start
-                            perf_tracker._record_failure(f"tool_{tool_name}", tool_duration, str(e))
-
                             logger.error(f"[Round {round_count + 1}] Tool {tool_name} failed: {e}")
+                            tool_output = str(e)  # Ensure tool_output is defined in except block
                             yield {
                                 "type": "tool_output",
                                 "tool_name": tool_name,
@@ -667,21 +753,7 @@ class AgentManager:
                     }
 
             total_duration = time.time() - start_time
-
-            # 🔧 新增：性能追踪 - 输出性能摘要
-            perf_summary = perf_tracker.get_summary()
-            if perf_summary:
-                logger.info(f"[PERF_SUMMARY] Total: {total_duration:.2f}s")
-                for op_name, stats in perf_summary.items():
-                    logger.info(
-                        f"[PERF_SUMMARY] {op_name}: "
-                        f"count={stats['count']}, "
-                        f"avg={stats['avg_duration']:.2f}s, "
-                        f"max={stats['max_duration']:.2f}s, "
-                        f"success_rate={stats['success_rate']:.1f}%"
-                    )
-
-            logger.info(f"[RID:{request_id}] === Agent astream COMPLETE in {total_duration:.2f}s ===")
+            logger.info(f"=== Agent astream COMPLETE in {total_duration:.2f}s ===")
 
         except Exception as e:
             logger.error(f"Agent astream error: {e}", exc_info=True)

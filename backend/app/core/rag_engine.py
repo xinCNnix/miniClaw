@@ -408,15 +408,34 @@ class RAGEngine:
         doc_info = self._documents[doc_id]
         logger.info(f"Deleting document: {doc_info['filename']} (id: {doc_id})")
 
-        # Delete from vector store
-        # Note: Chroma doesn't support direct deletion by doc_id in the current version
-        # We'll need to rebuild the index without this document
+        # Try to delete from Chroma vector store by doc_id
+        try:
+            # Get the Chroma collection
+            chroma_client = chromadb.PersistentClient(path=str(self.vector_store_dir))
+            collection = chroma_client.get_collection("knowledge_base")
 
-        # For now, just remove from metadata
+            # Delete all nodes with this doc_id in metadata
+            # Chroma stores metadata as JSON, so we query by doc_id
+            try:
+                # Try to delete by metadata filter (Chroma >= 0.4.0)
+                collection.delete(where={"doc_id": doc_id})
+                logger.info(f"Deleted vectors for document {doc_id} from Chroma")
+            except Exception as filter_error:
+                # If metadata filter doesn't work, invalidate index to force rebuild
+                logger.debug(f"Could not delete by metadata filter: {filter_error}")
+                logger.info("Will invalidate index to trigger rebuild on next search")
+        except Exception as e:
+            logger.warning(f"Failed to delete from vector store: {e}")
+            logger.info("Will invalidate index to trigger rebuild on next search")
+
+        # Remove from metadata
         del self._documents[doc_id]
         self._save_documents_metadata()
 
-        # TODO: Rebuild index without deleted document
+        # Invalidate index to force rebuild on next search
+        # This ensures the deleted document won't appear in search results
+        self._index = None
+        logger.info(f"Index invalidated - will rebuild on next search without document {doc_id}")
 
         logger.info(f"Document deleted: {doc_id}")
 

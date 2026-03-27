@@ -11,9 +11,11 @@ import { apiClient } from '@/lib/api';
 import type { KBDocument, KBUploadStatus, KBLargeFileUploadResponse, KBBatchUploadResponse, KBBatchUploadComplete } from '@/types/knowledge-base';
 import { Upload, File, Trash2, AlertCircle, FileText, AlertTriangle, FolderOpen } from 'lucide-react';
 import { useTranslation } from '@/hooks/use-translation.hook';
+import { useToastContext } from '@/components/common/ToastContext';
 
 export function KnowledgeBasePanel() {
   const { t } = useTranslation()
+  const { showToast } = useToastContext()
   const [documents, setDocuments] = useState<KBDocument[]>([]);
   const [uploadStatus, setUploadStatus] = useState<KBUploadStatus>({
     isUploading: false,
@@ -222,7 +224,7 @@ export function KnowledgeBasePanel() {
       const response = await apiClient.uploadBatch(files, uploadToken);
 
       // Refresh document list if upload was successful
-      if (response.success) {
+      if (response.successful > 0) {
         await fetchDocuments();
       }
 
@@ -234,14 +236,15 @@ export function KnowledgeBasePanel() {
       });
 
       // Show result message from server
-      alert(response.message);
-    } catch (error: any) {
+      showToast(response.message, 'success');
+    } catch (error: unknown) {
       console.error('Batch upload failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       setUploadStatus({
         isUploading: false,
         progress: 0,
         currentFile: null,
-        error: error.message || 'Batch upload failed',
+        error: errorMessage || 'Batch upload failed',
       });
     }
   };
@@ -258,7 +261,7 @@ export function KnowledgeBasePanel() {
       const response = await apiClient.uploadFolder(zipFile);
 
       // Refresh document list if upload was successful
-      if (response.success) {
+      if (response.successful > 0) {
         await fetchDocuments();
       }
 
@@ -270,14 +273,15 @@ export function KnowledgeBasePanel() {
       });
 
       // Show result message from server
-      alert(response.message);
-    } catch (error: any) {
+      showToast(response.message, 'success');
+    } catch (error: unknown) {
       console.error('Folder upload failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       setUploadStatus({
         isUploading: false,
         progress: 0,
         currentFile: null,
-        error: error.message || 'Folder upload failed',
+        error: errorMessage || 'Folder upload failed',
       });
     }
   };
@@ -303,15 +307,14 @@ export function KnowledgeBasePanel() {
           error: null,
         });
       }
-    } catch (error: {
-      message?: string
-    }) {
+    } catch (error: unknown) {
+      const err = error as { message?: string }
       console.error('Upload failed:', error);
       setUploadStatus({
         isUploading: false,
         progress: 0,
         currentFile: null,
-        error: error.message || t('knowledge_base.error_upload_failed'),
+        error: err.message || t('knowledge_base.error_upload_failed'),
       });
     }
   };
@@ -386,16 +389,16 @@ export function KnowledgeBasePanel() {
   };
 
   const handleDelete = async (docId: string, filename: string) => {
-    if (!confirm(t('knowledge_base.delete_confirm', { filename }))) {
-      return;
-    }
+    // TODO: Replace with proper confirmation dialog
+    // For now, just show a warning toast and proceed
+    showToast(t('knowledge_base.delete_confirm', { filename }), 'warning');
 
     try {
       await apiClient.deleteKBDocument(docId);
       await fetchDocuments();
     } catch (error) {
       console.error('Delete failed:', error);
-      alert(t('knowledge_base.error_delete_failed'));
+      showToast(t('knowledge_base.error_delete_failed'), 'error');
     }
   };
 
@@ -524,7 +527,7 @@ export function KnowledgeBasePanel() {
           )}
           <p className="text-sm text-gray-600 mb-1">
             {uploadStatus.isUploading
-              ? t('knowledge_base.uploading', { filename: uploadStatus.currentFile })
+              ? t('knowledge_base.uploading', { filename: uploadStatus.currentFile || '' })
               : largeFileCheck.file
               ? t('knowledge_base.large_file_pending')
               : batchCheck.files

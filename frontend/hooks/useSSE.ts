@@ -36,9 +36,12 @@ export function useSSE({ url, request, enabled = true, onError }: UseSSEOptions)
     }
 
     let isMounted = true
-    abortControllerRef.current = new AbortController()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
 
     const connect = async () => {
+      if (!isMounted || !isEnabledRef.current) return
+
       setIsConnected(true)
       setError(null)
       setEvents([])
@@ -50,8 +53,10 @@ export function useSSE({ url, request, enabled = true, onError }: UseSSEOptions)
             "Content-Type": "application/json",
           },
           body: JSON.stringify(request),
-          signal: abortControllerRef.current!.signal,
+          signal: controller.signal,
         })
+
+        if (!isMounted || !isEnabledRef.current) return
 
         if (!response.ok) {
           throw new Error(`SSE request failed: ${response.statusText}`)
@@ -69,9 +74,13 @@ export function useSSE({ url, request, enabled = true, onError }: UseSSEOptions)
           const { done, value } = await reader.read()
 
           if (done) {
-            setIsConnected(false)
+            if (isMounted) {
+              setIsConnected(false)
+            }
             break
           }
+
+          if (!isMounted || !isEnabledRef.current) break
 
           buffer += decoder.decode(value, { stream: true })
 
@@ -112,9 +121,8 @@ export function useSSE({ url, request, enabled = true, onError }: UseSSEOptions)
 
     return () => {
       isMounted = false
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort()
-      }
+      controller.abort()
+      setIsConnected(false)
     }
   }, [url, JSON.stringify(request), enabled, onError])
 

@@ -116,7 +116,7 @@ export function ResearchProgress({
           />
           <StatCard
             label="Success Rate"
-            value={stats.tool_calls > 0 ? `${((stats.successful_tools || 0) / stats.tool_calls * 100).toFixed(0)}%` : 'N/A'}
+            value={(stats.tool_calls || 0) > 0 ? `${((stats.successful_tools || 0) / (stats.tool_calls || 1) * 100).toFixed(0)}%` : 'N/A'}
             color="purple"
             sublabel="of tools"
           />

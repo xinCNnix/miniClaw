@@ -9,7 +9,10 @@ from typing import List, Dict, Any, Literal, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -63,7 +66,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "miniClaw"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     debug: bool = False
 
     # Server
@@ -138,7 +141,12 @@ class Settings(BaseSettings):
     # Tool Security
     terminal_root_dir: str = "."  # Restrict terminal commands to this directory
     terminal_blocked_commands: list[str] = [
-        # Unix/Linux dangerous commands
+        # 🔧 Enhanced security - Block all dangerous deletion commands
+        "rm -rf",  # Block ALL rm -rf commands regardless of path
+        "rm -r",   # Block recursive rm
+        "rm -f",   # Block force rm
+
+        # Original root-level protections
         "rm -rf /",
         "rm -rf /.*",
         "rm -rf /*",
@@ -156,6 +164,16 @@ class Settings(BaseSettings):
         "chmod -r 777 /etc",
         "chmod -r 777 /etc/shadow",
         "chown -r root:root",
+
+        # Malicious download commands
+        "curl http://evil.com",
+        "curl http://malware.com",
+        "curl http://hack.com",
+        "wget http://evil.com",
+        "wget http://malware.com",
+        "curl https://evil.com",
+        "curl https://malware.com",
+        "curl https://hack.com",
 
         # Windows dangerous commands
         "format",  # Format disk
@@ -435,6 +453,122 @@ class Settings(BaseSettings):
     log_format_with_tracking: str = "%(asctime)s - [RID:%(request_id)s] - %(name)s - %(levelname)s - %(message)s"  # Log format with request tracking
     debug_agent: bool = True  # Enable detailed agent execution logging
 
+    # ========== Logging System Enhancement Configuration ==========
+
+    # Structured Logging
+    enable_json_logs: bool = False
+    json_log_file: str = "backend.json.log"
+
+    # Agent Execution Trajectory
+    enable_agent_trajectory: bool = True  # Enable Agent trajectory tracking
+    trajectory_log_dir: str = "logs/trajectories"  # Trajectory log directory
+    save_trajectory_to_file: bool = True  # Save trajectory to file
+    max_trajectory_size: int = 10000  # Maximum trajectory records
+
+    # ========== LangChain Callback Configuration ==========
+    # LangChain callback handler for trajectory capture
+    enable_langchain_callbacks: bool = True  # Enable LangChain callback mechanism
+    callback_capture_thoughts: bool = True  # Capture LLM output as thought
+    callback_capture_actions: bool = True  # Capture agent actions
+    callback_capture_results: bool = True  # Capture tool results
+
+    # Sensitive Information Sanitization
+    enable_log_sanitization: bool = True
+    sanitize_user_input: bool = False  # Sanitize user input (may over-sanitize)
+    sanitize_file_paths: bool = True  # Partially sanitize file paths
+
+    # Error Tracking
+    enable_error_context: bool = True
+    capture_locals_in_errors: bool = False  # Capture local variables (use with caution)
+    max_local_vars_to_capture: int = 10  # Maximum local variables to capture
+
+    # Business Metrics
+    enable_business_metrics: bool = True
+    metrics_log_file: str = "metrics.log"
+    metrics_aggregation_interval: int = 60  # Metrics aggregation interval (seconds)
+
+    # Error Aggregation and Alerting
+    enable_error_aggregation: bool = True
+    error_alert_threshold: int = 10  # Errors per time window
+    error_alert_window: int = 60  # Time window in seconds
+
+    # ============================================================
+    # Layered Reflection Trigger Configuration
+    # ============================================================
+
+    # Agent macro-reflection
+    enable_agent_reflection: bool = True
+    agent_reflection_quality_threshold: float = 6.0  # Trigger reflection if quality below this
+
+    # LLM micro-evaluation
+    tot_llm_eval_interval: int = 3  # Evaluate every N depths
+
+    # ============================================================
+    # Structured Reflection Output Configuration
+    # ============================================================
+
+    # ReflectionResult fields
+    reflection_require_failure_type: bool = True
+    reflection_require_root_cause: bool = True
+    reflection_require_reusable_pattern: bool = False  # Optional
+
+    # Reward calculation
+    reward_quality_weight: float = 0.7  # Quality score weight
+    reward_shaping_weight: float = 0.3  # Shaping reward weight
+
+    # ============================================================
+    # Pattern Memory Configuration
+    # ============================================================
+
+    # Pattern Memory Settings
+    enable_pattern_memory: bool = True
+    pattern_storage_path: str = "data/patterns.json"
+    pattern_nn_path: str = "data/pattern_nn.pth"
+
+    # Embedder Settings
+    pattern_embedder_model_name: str = "all-MiniLM-L6-v2"
+
+    # NN Settings
+    pattern_nn_embed_dim: int = 384
+    pattern_nn_hidden1: int = 256
+    pattern_nn_hidden2: int = 128
+    pattern_nn_num_patterns: int = 64
+    pattern_nn_learning_rate: float = 1e-3
+    pattern_nn_dropout: float = 0.1
+
+    # ============================================================
+    # Event-Driven Streaming Configuration (Phase 4)
+    # ============================================================
+    enable_event_driven_streaming: bool = True  # Enable event-driven streaming architecture
+
+    # ============================================================
+    # Reflection Learning Configuration
+    # ============================================================
+    enable_reflection_learning: bool = False
+    reflection_trigger_threshold: float = 0.5
+    reflection_min_execution_time: float = 1.0
+
+    # ============================================================
+    # RL Training Configuration
+    # ============================================================
+    enable_rl_training: bool = False
+    rl_target_update_freq: int = 100
+    rl_tau: float = 0.005
+    rl_transformer_lr: float = 1e-4
+    rl_mlp_lr: float = 1e-3
+    rl_kl_coef: float = 0.01
+    rl_prompt_consistency_coef: float = 0.05
+    rl_batch_size: int = 32
+    rl_gradient_clip: float = 1.0
+
+    # ============================================================
+    # Neural Strategy Configuration
+    # ============================================================
+    enable_neural_strategy: bool = False
+    neural_strategy_auto_transition: bool = True
+    neural_strategy_performance_threshold: float = 0.7
+    neural_strategy_rollback_on_degradation: bool = True
+
 
 def _load_obfuscated_config() -> None:
     """
@@ -501,8 +635,10 @@ def _load_obfuscated_config() -> None:
                 provider = credentials["_current_provider"]
                 os.environ["LLM_PROVIDER"] = provider
 
-    except Exception:
+    except Exception as e:
         # Silently fail - allows fallback to environment variables
+        # Log at debug level to avoid cluttering normal startup
+        logger.debug(f"Failed to load obfuscated config: {e}. Using environment variables.")
         pass
 
 

@@ -298,41 +298,91 @@ def get_agent_logger(name: str = "agent") -> logging.Logger:
 
 class AgentExecutionLogger:
     """
-    Context manager for logging agent execution details.
+    Context manager for logging agent execution details with full trajectory tracking.
+
+    Enhanced to support:
+    - Complete execution trajectory (thought, action, input, result)
+    - JSON format for analysis
+    - Trajectory visualization
+    - Request/session correlation
 
     Usage:
         with AgentExecutionLogger("task_name") as logger:
             logger.log_input(user_message)
-            # ... execute ...
+            logger.log_step("thought", "action", {"input": "data"})
+            logger.log_step_result(0, "result", True, 1.2)
             logger.log_output(response)
+            trajectory = logger.get_trajectory_json()
     """
 
-    def __init__(self, task_name: str):
+    def __init__(
+        self,
+        task_name: str,
+        enable_trajectory: bool = True,
+        session_id: Optional[str] = None,
+        request_id: Optional[str] = None
+    ):
         """
         Initialize agent execution logger.
 
         Args:
             task_name: Name of the task being executed
+            enable_trajectory: Enable detailed trajectory tracking
+            session_id: Optional session ID for correlation
+            request_id: Optional request ID for correlation
         """
         self.task_name = task_name
+        self.enable_trajectory = enable_trajectory
+        self.session_id = session_id
+        self.request_id = request_id
         self.logger = get_agent_logger()
+        self.execution_history: list[dict] = []
+        self.trajectory: list[dict] = []  # Enhanced trajectory tracking
+        self.step_counter = 0
+        self.start_time = None
+        self.end_time = None
 
     def __enter__(self):
         """Start execution logging."""
+        import time
+        self.start_time = time.time()
         self.logger.info("=" * 80)
         self.logger.info(f"AGENT EXECUTION START: {self.task_name}")
+        if self.request_id:
+            self.logger.info(f"Request ID: {self.request_id}")
+        if self.session_id:
+            self.logger.info(f"Session ID: {self.session_id}")
         self.logger.info("=" * 80)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """End execution logging."""
+        import time
+        self.end_time = time.time()
+
         if exc_type is not None:
             self.logger.error(f"AGENT EXECUTION FAILED: {self.task_name}")
             self.logger.error(f"Error: {exc_val}", exc_info=True)
+            # Mark trajectory as failed
+            if self.enable_trajectory and self.trajectory:
+                self.trajectory[-1]["success"] = False
+                self.trajectory[-1]["error"] = str(exc_val)
         else:
+            duration = self.end_time - self.start_time
             self.logger.info("=" * 80)
             self.logger.info(f"AGENT EXECUTION COMPLETE: {self.task_name}")
+            self.logger.info(f"Total Duration: {duration:.2f}s")
+            self.logger.info(f"Total Steps: {self.step_counter}")
             self.logger.info("=" * 80)
+
+            # Log trajectory summary
+            if self.enable_trajectory:
+                summary = self._get_trajectory_summary()
+                self.logger.info(f"Successful Steps: {summary['successful_steps']}")
+                self.logger.info(f"Failed Steps: {summary['failed_steps']}")
+                if summary.get('actions_used'):
+                    self.logger.info(f"Actions Used: {', '.join(summary['actions_used'])}")
+
         self.logger.info("")  # Empty line for readability
 
     def log_input(self, messages: list, system_prompt: str):
@@ -341,18 +391,31 @@ class AgentExecutionLogger:
         self.logger.debug(f"System prompt length: {len(system_prompt)} chars")
         self.logger.debug(f"System prompt preview: {system_prompt[:500]}...")
 
-        for i, msg in enumerate(messages[-3:]):  # Last 3 messages
+        # ✅ 完整记录所有消息（修复截断问题）
+        for i, msg in enumerate(messages):
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
-            self.logger.debug(f"Message {i+1} [{role}]: {content[:200]}...")
+            self.logger.info(f"Message {i+1} [{role}] ({len(content)} chars):")
+            # ✅ 完整记录，不再截断
+            self.logger.info(f"  {content}")
 
     def log_tool_call(self, tool_name: str, tool_args: dict):
         """Log tool invocation."""
+        import time
         self.logger.info(f"TOOL CALL: {tool_name}")
         self.logger.debug(f"Arguments: {tool_args}")
 
+        # Record in execution history
+        self.execution_history.append({
+            "type": "tool_call",
+            "tool_name": tool_name,
+            "input": tool_args,
+            "timestamp": time.time(),
+        })
+
     def log_tool_result(self, tool_name: str, result: str, success: bool, duration: float = None):
         """Log tool result."""
+        import time
         status = "SUCCESS" if success else "FAILED"
         self.logger.info(f"TOOL RESULT: {tool_name} - {status}")
         if duration:
@@ -365,6 +428,15 @@ class AgentExecutionLogger:
         # Log result size
         result_size = len(result) if result else 0
         self.logger.debug(f"Result size: {result_size} chars")
+
+        # Update execution history with result
+        for record in reversed(self.execution_history):
+            if record.get("type") == "tool_call" and record.get("tool_name") == tool_name:
+                record["success"] = success
+                record["duration"] = duration or 0.0
+                record["output"] = result
+                record["error"] = None if success else result
+                break
 
     def log_llm_response(self, response_content: str, tool_calls: list = None):
         """Log LLM response."""
@@ -381,4 +453,239 @@ class AgentExecutionLogger:
     def log_final_output(self, output: str):
         """Log final agent output."""
         self.logger.info(f"FINAL OUTPUT: {len(output)} chars")
-        self.logger.debug(f"Output content: {output}")
+        # ✅ 完整记录最终输出，不再只在 debug 级别
+        self.logger.info(f"Content: {output}")
+
+    def get_tool_calls(self) -> list[dict]:
+        """
+        Get tool call records from execution history.
+
+        Returns:
+            List of tool call dictionaries, each containing:
+                - tool_name: str
+                - success: bool
+                - duration: float
+                - input: dict
+                - output: str
+                - error: str or None
+        """
+        tool_calls = []
+        for record in self.execution_history:
+            if record.get("type") == "tool_call":
+                tool_calls.append({
+                    "tool_name": record.get("tool_name", "unknown"),
+                    "success": record.get("success", True),
+                    "duration": record.get("duration", 0.0),
+                    "input": record.get("input", {}),
+                    "output": record.get("output", ""),
+                    "error": record.get("error", None),
+                })
+        return tool_calls
+
+    def get_execution_time(self) -> float:
+        """
+        Get total execution time.
+
+        Returns:
+            Total execution time in seconds, or 0.0 if not available
+        """
+        if not self.execution_history or self.start_time is None:
+            return 0.0
+
+        import time
+        end_time = self.execution_history[-1].get("timestamp", time.time())
+        return end_time - self.start_time
+
+    def log_step(
+        self,
+        thought: str,
+        action: str,
+        input_data: dict
+    ) -> None:
+        """
+        Log a single execution step with thought, action, and input.
+
+        Args:
+            thought: Agent's thought process
+            action: Action taken by the agent
+            input_data: Input data for the action
+        """
+        import time
+
+        if not self.enable_trajectory:
+            return
+
+        step = {
+            "step_number": self.step_counter,
+            "thought": thought,
+            "action": action,
+            "input": input_data,
+            "timestamp": time.time()
+        }
+
+        self.trajectory.append(step)
+
+        # ✅ 递增步骤计数器（修复）
+        self.step_counter += 1
+
+        # Log to file
+        self.logger.info(f"STEP {self.step_counter - 1}: {action}")
+        self.logger.debug(f"  Thought: {thought[:200]}...")
+        self.logger.debug(f"  Input: {str(input_data)[:200]}...")
+
+    def log_step_result(
+        self,
+        step_number: int,
+        result: str,
+        success: bool,
+        duration: float
+    ) -> None:
+        """
+        Log the result of a step.
+
+        Args:
+            step_number: Step number (0-indexed)
+            result: Result of the action
+            success: Whether the action succeeded
+            duration: Duration of the action in seconds
+        """
+        if not self.enable_trajectory:
+            return
+
+        if step_number < len(self.trajectory):
+            self.trajectory[step_number]["result"] = result
+            self.trajectory[step_number]["success"] = success
+            self.trajectory[step_number]["duration"] = duration
+
+            # Log to file
+            status = "SUCCESS" if success else "FAILED"
+            self.logger.info(f"STEP {step_number} RESULT: {status} ({duration:.2f}s)")
+            self.logger.debug(f"  Result: {result[:300]}...")
+
+    def get_trajectory(self) -> list[dict]:
+        """
+        Get the complete execution trajectory.
+
+        Returns:
+            List of trajectory steps
+        """
+        return self.trajectory.copy()
+
+    def get_trajectory_json(self) -> str:
+        """
+        Get the complete execution trajectory as JSON.
+
+        Returns:
+            JSON string of trajectory
+        """
+        import json
+        import time
+
+        trajectory_data = {
+            "task_name": self.task_name,
+            "session_id": self.session_id,
+            "request_id": self.request_id,
+            "start_time": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(self.start_time)
+            ) if self.start_time else None,
+            "end_time": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ",
+                time.gmtime(self.end_time)
+            ) if self.end_time else None,
+            "total_duration": (self.end_time - self.start_time) if self.end_time and self.start_time else 0,
+            "total_steps": len(self.trajectory),
+            "steps": self.trajectory,
+            "summary": self._get_trajectory_summary()
+        }
+
+        return json.dumps(trajectory_data, indent=2, ensure_ascii=False)
+
+    def save_trajectory(self, filepath: str) -> None:
+        """
+        Save execution trajectory to file.
+
+        Args:
+            filepath: Path to save trajectory JSON
+        """
+        import json
+        from pathlib import Path
+
+        # Ensure directory exists
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(self.get_trajectory_json())
+
+        self.logger.info(f"Trajectory saved to: {filepath}")
+
+    def _get_trajectory_summary(self) -> dict:
+        """
+        Get trajectory summary statistics.
+
+        Returns:
+            Summary dictionary
+        """
+        if not self.trajectory:
+            return {
+                "successful_steps": 0,
+                "failed_steps": 0,
+                "total_duration": 0,
+                "actions_used": []
+            }
+
+        successful = sum(1 for step in self.trajectory if step.get("success", True))
+        failed = len(self.trajectory) - successful
+        actions = list(set(step.get("action", "unknown") for step in self.trajectory))
+        total_duration = sum(step.get("duration", 0) for step in self.trajectory)
+
+        return {
+            "successful_steps": successful,
+            "failed_steps": failed,
+            "total_duration": total_duration,
+            "actions_used": actions
+        }
+
+    def get_step_statistics(self) -> dict:
+        """
+        Get statistics about execution steps.
+
+        Returns:
+            Statistics dictionary
+        """
+        if not self.trajectory:
+            return {}
+
+        stats = {
+            "total_steps": len(self.trajectory),
+            "successful_steps": 0,
+            "failed_steps": 0,
+            "average_step_duration": 0,
+            "max_step_duration": 0,
+            "min_step_duration": float('inf'),
+            "actions_count": {}
+        }
+
+        durations = []
+        for step in self.trajectory:
+            if step.get("success", True):
+                stats["successful_steps"] += 1
+            else:
+                stats["failed_steps"] += 1
+
+            duration = step.get("duration", 0)
+            durations.append(duration)
+            stats["max_step_duration"] = max(stats["max_step_duration"], duration)
+            stats["min_step_duration"] = min(stats["min_step_duration"], duration)
+
+            # Count actions
+            action = step.get("action", "unknown")
+            stats["actions_count"][action] = stats["actions_count"].get(action, 0) + 1
+
+        if durations:
+            stats["average_step_duration"] = sum(durations) / len(durations)
+            if stats["min_step_duration"] == float('inf'):
+                stats["min_step_duration"] = 0
+
+        return stats
+

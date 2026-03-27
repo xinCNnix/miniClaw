@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useMemo } from "react"
 import { apiClient } from "@/lib/api"
 import type { FileContent, File } from "@/types/api"
 
@@ -121,7 +121,8 @@ export function useEditor(options: UseEditorOptions = {}): UseEditorReturn {
     setCurrentFile(null)
   }, [])
 
-  return {
+  // Memoize the return value to prevent infinite re-renders
+  const editorValue = useMemo(() => ({
     files,
     directories,
     currentFile,
@@ -133,5 +134,19 @@ export function useEditor(options: UseEditorOptions = {}): UseEditorReturn {
     refreshFiles,
     changeDirectory,
     goUpDirectory,
-  }
+  }), [
+    files,
+    directories,
+    currentFile,
+    currentDirectory,
+    isLoading,
+    loadFile,
+    saveFile,
+    closeFile,
+    refreshFiles,
+    changeDirectory,
+    goUpDirectory,
+  ])
+
+  return editorValue
 }

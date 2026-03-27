@@ -89,7 +89,7 @@ export function ThinkingChainDisplay({ events, isLoading = false }: ThinkingChai
             return (
               <div key={index} className="text-sm">
                 {isToolCall && (
-                  <div className="flex items-start gap-2 p-2 bg-white rounded border border-gray-200">
+                  <div data-type="tool_call" className="flex items-start gap-2 p-2 bg-white rounded border border-gray-200">
                     <div className="text-blue-600 mt-0.5">
                       {getToolIcon()}
                     </div>
@@ -109,7 +109,7 @@ export function ThinkingChainDisplay({ events, isLoading = false }: ThinkingChai
                 )}
 
                 {isToolOutput && (
-                  <div className="flex items-start gap-2 p-2 bg-white rounded border border-gray-200 ml-6">
+                  <div data-type="tool_output" className="flex items-start gap-2 p-2 bg-white rounded border border-gray-200 ml-6">
                     <div className={clsx("mt-0.5", getStatusColor(event.status))}>
                       {getStatusIcon(event.status)}
                     </div>

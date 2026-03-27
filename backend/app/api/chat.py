@@ -19,13 +19,6 @@ from app.memory.prompts import build_system_prompt
 from app.memory.session import get_session_manager
 from app.skills.bootstrap import bootstrap_skills
 from app.logging_config import AgentExecutionLogger, get_agent_logger
-from app.core.tracking_context import (
-    generate_request_id,
-    set_request_id,
-    set_session_id,
-    RequestTrackingContext,
-    get_tracking_logger
-)
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -255,7 +248,6 @@ async def chat_stream_generator(
     request: ChatRequest,
     agent: AgentManager,
     system_prompt: str,
-    request_id: str,  # 🔧 新增：请求 ID
 ) -> AsyncIterator[str]:
     """
     Generate SSE stream for chat response.
@@ -264,217 +256,249 @@ async def chat_stream_generator(
         request: Chat request
         agent: Agent manager
         system_prompt: System prompt
-        request_id: Request tracking ID
 
     Yields:
         SSE formatted strings
     """
-    # 🔧 新增：使用请求追踪上下文
-    with RequestTrackingContext(session_id=request.session_id, request_id=request_id):
-        # Start execution logging
-        with AgentExecutionLogger(f"chat_{request.session_id}") as exec_logger:
-            try:
-                logger.info(f"[RID:{request_id}] New chat request - Session: {request.session_id}")
-                logger.info(f"[RID:{request_id}] User message: {request.message[:200]}...")
+    # Start execution logging
+    with AgentExecutionLogger(
+        f"chat_{request.session_id}",
+        session_id=request.session_id,
+    ) as exec_logger:
+        try:
+            logger.info(f"New chat request - Session: {request.session_id}")
+            logger.info(f"User message: {request.message[:200]}...")
 
-                # Send thinking start event
-                yield format_sse_event(
-                    ChatEvent(type="thinking_start")
+            # Send thinking start event
+            yield format_sse_event(
+                ChatEvent(type="thinking_start")
+            )
+
+            # Load or create session
+            session_manager = get_session_manager()
+            session = session_manager.load_session(request.session_id)
+
+            if session is None:
+                session = session_manager.create_session(
+                    session_id=request.session_id,
+                    metadata=request.context,
                 )
 
-                    # Load or create session
-                session_manager = get_session_manager()
-                session = session_manager.load_session(request.session_id)
+            # Prepare messages
+            messages = []
 
-                if session is None:
-                    session = session_manager.create_session(
-                        session_id=request.session_id,
-                        metadata=request.context,
-                    )
+            # Get session history
+            session_messages = session.get("messages", [])
 
-                # Prepare messages
-                messages = []
+            # === INTELLIGENT CONTEXT PRUNING ===
+            # Strategy: Use task boundary detection to prune irrelevant history
+            #
+            # 1. Check if there's a task boundary in recent history
+            # 2. If boundary found, only keep messages AFTER the boundary
+            # 3. If no boundary, keep last 3 messages
+            #
+            # This ensures LLM doesn't see "Beijing weather" when asking "Shanghai weather"
 
-                # Get session history
-                session_messages = session.get("messages", [])
+            MAX_CONTEXT_MESSAGES = 3
+            recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
 
-                # === INTELLIGENT CONTEXT PRUNING ===
-                # Strategy: Use task boundary detection to prune irrelevant history
-                #
-                # 1. Check if there's a task boundary in recent history
-                # 2. If boundary found, only keep messages AFTER the boundary
-                # 3. If no boundary, keep last 3 messages
-                #
-                # This ensures LLM doesn't see "Beijing weather" when asking "Shanghai weather"
+            # Check for task boundary in recent messages
+            boundary_index = -1  # -1 means no boundary found
+            for i in range(len(recent_messages) - 1, 0, -1):
+                if i < len(recent_messages) - 1:  # Not the last message
+                    if detect_task_boundary(recent_messages[i], recent_messages[i + 1]):
+                        boundary_index = i
+                        logger.info(f"Task boundary found at index {i}, pruning earlier history")
+                        break
 
-                MAX_CONTEXT_MESSAGES = 3
-                recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
+            # Prune messages based on boundary
+            if boundary_index >= 0:
+                # Keep only messages after the boundary
+                recent_messages = recent_messages[boundary_index + 1:]
+                logger.info(f"Pruned to {len(recent_messages)} messages after boundary")
+            else:
+                # No boundary: keep recent messages as-is
+                logger.debug(f"No task boundary, keeping {len(recent_messages)} recent messages")
 
-                # Check for task boundary in recent messages
-                boundary_index = -1  # -1 means no boundary found
-                for i in range(len(recent_messages) - 1, 0, -1):
-                    if i < len(recent_messages) - 1:  # Not the last message
-                        if detect_task_boundary(recent_messages[i], recent_messages[i + 1]):
-                            boundary_index = i
-                            logger.info(f"Task boundary found at index {i}, pruning earlier history")
-                            break
+            for i, msg in enumerate(recent_messages):
+                if msg["role"] in ["user", "assistant"]:
+                    # Check if this is the last message (current question)
+                    is_last_message = (i == len(recent_messages) - 1)
 
-                # Prune messages based on boundary
-                if boundary_index >= 0:
-                    # Keep only messages after the boundary
-                    recent_messages = recent_messages[boundary_index + 1:]
-                    logger.info(f"Pruned to {len(recent_messages)} messages after boundary")
-                else:
-                    # No boundary: keep recent messages as-is
-                    logger.debug(f"No task boundary, keeping {len(recent_messages)} recent messages")
+                    if is_last_message:
+                        # CURRENT MESSAGE: Use full content - this is what LLM should focus on
+                        message_dict = {
+                            "role": msg["role"],
+                            "content": msg["content"],
+                        }
+                        logger.debug(f"Loading current message: {msg['content'][:50]}...")
 
-                for i, msg in enumerate(recent_messages):
-                    if msg["role"] in ["user", "assistant"]:
-                        # Check if this is the last message (current question)
-                        is_last_message = (i == len(recent_messages) - 1)
+                        # Add images if present (only for current message)
+                        if msg.get("images"):
+                            # Format content for vision models
+                            content_list = [{"type": "text", "text": msg["content"]}]
+                            for img in msg["images"]:
+                                content_list.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
+                                })
+                            message_dict["content"] = content_list
+                    else:
+                        # HISTORICAL MESSAGE: Abstract to type only - prevents interference
+                        # Don't show "Beijing weather" - show "Weather Information Query" instead
+                        # Don't include images for historical messages
+                        message_type = _classify_conversation_type(msg.get("content", ""))
+                        message_dict = {
+                            "role": msg["role"],
+                            "content": f"[COMPLETED_TASK] {message_type} - Task finished, ignore details",
+                        }
+                        logger.debug(f"Abstracted historical message to: {message_type}")
 
-                        if is_last_message:
-                            # CURRENT MESSAGE: Use full content - this is what LLM should focus on
-                            message_dict = {
-                                "role": msg["role"],
-                                "content": msg["content"],
-                            }
-                            logger.debug(f"Loading current message: {msg['content'][:50]}...")
+                    messages.append(message_dict)
 
-                            # Add images if present (only for current message)
-                            if msg.get("images"):
-                                # Format content for vision models
-                                content_list = [{"type": "text", "text": msg["content"]}]
-                                for img in msg["images"]:
-                                    content_list.append({
-                                        "type": "image_url",
-                                        "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                                    })
-                                message_dict["content"] = content_list
-                        else:
-                            # HISTORICAL MESSAGE: Abstract to type only - prevents interference
-                            # Don't show "Beijing weather" - show "Weather Information Query" instead
-                            # Don't include images for historical messages
-                            message_type = _classify_conversation_type(msg.get("content", ""))
-                            message_dict = {
-                                "role": msg["role"],
-                                "content": f"[COMPLETED_TASK] {message_type} - Task finished, ignore details",
-                            }
-                            logger.debug(f"Abstracted historical message to: {message_type}")
+            # Add current message
+            current_message = {
+                "role": "user",
+                "content": request.message,
+            }
+            # Add images from current request if present
+            if request.images:
+                content_list = [{"type": "text", "text": request.message}]
+                for img in request.images:
+                    content_list.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
+                    })
+                current_message["content"] = content_list
+            messages.append(current_message)
 
-                        messages.append(message_dict)
+            # Log input
+            exec_logger.log_input(messages, system_prompt)
 
-                # Add current message
-                current_message = {
-                    "role": "user",
-                    "content": request.message,
-                }
-                # Add images from current request if present
-                if request.images:
-                    content_list = [{"type": "text", "text": request.message}]
-                    for img in request.images:
-                        content_list.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                        })
-                    current_message["content"] = content_list
-                messages.append(current_message)
+            # Stream agent response
+            logger.info("Starting agent stream...")
+            event_count = 0
+            tool_call_count = 0
+            assistant_message_parts = []  # Collect assistant response for saving
+            tool_call_timestamps: dict[str, float] = {}  # Track start time per tool name
 
-                # Log input
-                exec_logger.log_input(messages, system_prompt)
+            async for event in agent.astream(
+                messages=messages,
+                system_prompt=system_prompt,
+            ):
+                event_count += 1
 
-                # Stream agent response
-                logger.info("Starting agent stream...")
-                event_count = 0
-                tool_call_count = 0
-                assistant_message_parts = []  # Collect assistant response for saving
+                # Log each event
+                event_type = event.get("type", "unknown")
+                logger.debug(f"Agent event #{event_count}: {event_type}")
 
-                async for event in agent.astream(
-                    messages=messages,
-                    system_prompt=system_prompt,
-                ):
-                    event_count += 1
+                if event_type == "tool_call":
+                    tool_call_count += 1
+                    tool_calls = event.get("tool_calls", [])
+                    import time as _time
+                    for tc in tool_calls:
+                        tc_name = tc.get("name", "unknown")
+                        tc_args = tc.get("arguments", {})
+                        tool_call_timestamps[tc_name] = _time.time()
+                        exec_logger.log_tool_call(tc_name, tc_args)
+                        logger.info(f"Tool call: {tc_name}")
 
-                    # Log each event
-                    event_type = event.get("type", "unknown")
-                    logger.debug(f"Agent event #{event_count}: {event_type}")
+                elif event_type == "tool_output":
+                    tool_name = event.get("tool_name", "unknown")
+                    output = event.get("output", "")
+                    status = event.get("status", "unknown")
+                    success = status == "success"
+                    # Calculate duration from tool_call event
+                    import time as _time
+                    start_ts = tool_call_timestamps.pop(tool_name, None)
+                    duration = (_time.time() - start_ts) if start_ts else None
+                    exec_logger.log_tool_result(tool_name, output, success, duration=duration)
+                    logger.info(f"Tool output: {tool_name} - {status}")
 
-                    if event_type == "tool_call":
-                        tool_call_count += 1
-                        tool_calls = event.get("tool_calls", [])
-                        for tc in tool_calls:
-                            tc_name = tc.get("name", "unknown")
-                            tc_args = tc.get("arguments", {})
-                            exec_logger.log_tool_call(tc_name, tc_args)
-                            logger.info(f"Tool call: {tc_name}")
+                elif event_type == "content_delta":
+                    content = event.get("content", "")
+                    logger.debug(f"Content delta: {len(content)} chars")
+                    # Collect assistant response for saving
+                    assistant_message_parts.append(content)
+                    logger.debug(f"Content delta: {len(content)} chars")
 
-                    elif event_type == "tool_output":
-                        tool_name = event.get("tool_name", "unknown")
-                        output = event.get("output", "")
-                        status = event.get("status", "unknown")
-                        success = status == "success"
-                        exec_logger.log_tool_result(tool_name, output, success)
-                        logger.info(f"Tool output: {tool_name} - {status}")
+                yield format_sse_event(
+                    ChatEvent(**event)
+                )
 
-                    elif event_type == "content_delta":
-                        content = event.get("content", "")
-                        logger.debug(f"Content delta: {len(content)} chars")
-                        # Collect assistant response for saving
-                        assistant_message_parts.append(content)
-                        logger.debug(f"Content delta: {len(content)} chars")
+            logger.info(f"Agent stream completed. Total events: {event_count}, Tool calls: {tool_call_count}")
 
-                    yield format_sse_event(
-                        ChatEvent(**event)
-                    )
+            # Save user message to session
+            session_manager.add_message(
+                session_id=request.session_id,
+                role="user",
+                content=request.message,
+                images=request.images,
+            )
 
-                logger.info(f"Agent stream completed. Total events: {event_count}, Tool calls: {tool_call_count}")
-
-                # Save user message to session
+            # Save assistant response to session (if any)
+            if assistant_message_parts:
+                assistant_full_response = "".join(assistant_message_parts)
                 session_manager.add_message(
                     session_id=request.session_id,
-                    role="user",
-                    content=request.message,
-                    images=request.images,
+                    role="assistant",
+                    content=assistant_full_response,
                 )
+                logger.info(f"Saved assistant response: {len(assistant_full_response)} chars")
+            else:
+                logger.warning("No assistant response to save")
 
-                # Save assistant response to session (if any)
-                if assistant_message_parts:
-                    assistant_full_response = "".join(assistant_message_parts)
-                    session_manager.add_message(
-                        session_id=request.session_id,
-                        role="assistant",
-                        content=assistant_full_response,
+            # Trigger background memory extraction (non-blocking)
+            try:
+                from app.config import get_settings
+                settings = get_settings()
+
+                if settings.enable_memory_extraction:
+                    asyncio.create_task(
+                        _background_memory_extraction(request.session_id)
                     )
-                    logger.info(f"Saved assistant response: {len(assistant_full_response)} chars")
-                else:
-                    logger.warning("No assistant response to save")
-
-                # Trigger background memory extraction (non-blocking)
-                try:
-                    from app.config import get_settings
-                    settings = get_settings()
-
-                    if settings.enable_memory_extraction:
-                        asyncio.create_task(
-                            _background_memory_extraction(request.session_id)
-                        )
-                except Exception as e:
-                    import logging
-                    logging.warning(f"Failed to trigger memory extraction: {e}")
-
-                # Send done event
-                yield format_sse_event(
-                    ChatEvent(type="done")
-                )
-
             except Exception as e:
-                # Send error event
-                yield format_sse_event(
-                    ChatEvent(
-                        type="error",
-                        error=str(e),
-                    )
+                import logging
+                logging.warning(f"Failed to trigger memory extraction: {e}")
+
+            # Save trajectory to file (if enabled)
+            try:
+                from app.config import get_settings
+                from pathlib import Path
+                import time
+
+                settings = get_settings()
+
+                if settings.enable_agent_trajectory and settings.save_trajectory_to_file:
+                    # Create trajectory directory
+                    trajectory_dir = Path(settings.trajectory_log_dir)
+                    trajectory_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Generate filename with timestamp
+                    timestamp = time.strftime("%Y%m%d-%H%M%S")
+                    filename = f"trajectory_{request.session_id}_{timestamp}.json"
+                    filepath = trajectory_dir / filename
+
+                    # Save trajectory
+                    exec_logger.save_trajectory(str(filepath))
+                    logger.info(f"Saved trajectory to {filepath}")
+            except Exception as e:
+                import logging
+                logging.warning(f"Failed to save trajectory: {e}")
+
+            # Send done event
+            yield format_sse_event(
+                ChatEvent(type="done")
+            )
+
+        except Exception as e:
+            # Send error event
+            yield format_sse_event(
+                ChatEvent(
+                    type="error",
+                    error=str(e),
                 )
+            )
 
 
 @router.post("")
@@ -654,7 +678,7 @@ async def chat(request: ChatRequest):
         system_prompt = build_system_prompt(
             session_data={
                 "user_context": request.context,
-                "semantic_history": recent_history,
+                "recent_history": recent_history,
             }
         )
     except Exception as e:
@@ -666,21 +690,13 @@ async def chat(request: ChatRequest):
     # Get agent manager
     agent = get_agent_manager()
 
-    # 🔧 新增：生成请求追踪 ID
-    request_id = generate_request_id()
-    set_request_id(request_id)
-    set_session_id(request.session_id)
-
-    logger.info(f"[RID:{request_id}] New chat request from session: {request.session_id}")
-
     # Return SSE stream
     return StreamingResponse(
-        chat_stream_generator(request, agent, system_prompt, request_id),
+        chat_stream_generator(request, agent, system_prompt),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Request-ID": request_id,  # 🔧 新增：在响应头中返回请求 ID
         },
     )
 

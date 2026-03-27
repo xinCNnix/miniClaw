@@ -52,10 +52,8 @@ miniClaw is a lightweight, highly transparent AI Agent system that combines data
   - Advanced reasoning with multiple thought branches exploration
   - Three thinking modes: Heuristic (⚡), Analytical (🔬), Exhaustive (🌌)
   - Automatic complexity detection and mode switching
-  - Real-time reasoning visualization with thought tree
+  - Real-time reasoning visualization
   - Smart stopping to balance quality and speed
-  - Tool result caching to avoid redundant calls
-  - Research mode for deep investigation with knowledge base + arXiv + web sources
 
 - **Research Mode**
   - Deep research capabilities with structured multi-stage investigation
@@ -173,17 +171,17 @@ Access:
 
 ## Core Features
 
-### 6 Core Tools
+### 5 Core Tools
 
 miniClaw includes 6 carefully designed core tools covering the most common AI Agent scenarios:
 
 | Tool | Function | Security Features | Example |
 |------|----------|-------------------|---------|
 | **terminal** | Shell command execution | Sandboxed + command blacklist | `ls -la`, `git status` |
-| **python_repl** | Python code interpreter | Timeout control + exception handling | Data analysis, computation |
+| **python_repl** | Python code interpreter | Timeout control + 3 execution modes | Data analysis, computation |
 | **fetch_url** | Web scraping | HTML auto-cleaning | News fetching, API calls |
 | **read_file** | File reading | Restricted to project directory | Reading code, documentation |
-| **write_file** | File writing | Path restrictions + sensitive file protection | Creating files, saving results |
+| **write_file** | File writing | Sensitive file protection | Writing code, generating reports |
 | **search_kb** | RAG knowledge base retrieval | Hybrid search (semantic + keyword) | Document queries, knowledge Q&A |
 
 > 💡 All tools can be automatically invoked by Agent through instructions in System Prompt.
@@ -203,10 +201,9 @@ skill-name/
 
 **Built-in Skills:**
 
-- **arxiv-search** - Academic paper search (arXiv API)
-- **arxiv-download-paper** - Download academic papers from arXiv
-- **github** - GitHub operations (gh CLI)
 - **get_weather** - Weather query (using wttr.in)
+- **arxiv-search** - Academic paper search (arXiv API)
+- **github** - GitHub operations (gh CLI)
 - **find-skill** - Find and install new Skills
 - **skill-creator** - Create custom Skills
 - **skill_validator** - Validate Skills integrity
@@ -269,20 +266,20 @@ miniclaw/
 │   │   │
 │   │   ├── core/                # Core modules
 │   │   │   ├── agent.py         # LangChain Agent wrapper
+│   │   │   ├── agent_components/ # Modular agent components (v0.2.0)
 │   │   │   ├── llm.py           # LLM model initialization
-│   │   │   ├── llm_config.py    # LLM configuration management
 │   │   │   ├── rag_engine.py    # RAG retrieval engine
 │   │   │   ├── obfuscation.py   # API key obfuscation
-│   │   │   ├── database.py      # Database operations
-│   │   │   ├── smart_stopping.py # Smart tool stopping
-│   │   │   ├── performance_tracker.py # Performance monitoring
-│   │   │   ├── tracking_context.py # Request tracking
-│   │   │   └── tot/             # Tree of Thoughts reasoning system
+│   │   │   ├── container.py     # Dependency injection container (v0.2.0)
+│   │   │   ├── interfaces.py    # Protocol interfaces (v0.2.0)
+│   │   │   ├── exceptions.py    # Structured exceptions (v0.2.0)
+│   │   │   ├── callback_handler.py  # Trajectory callbacks (v0.2.0)
+│   │   │   ├── streaming/       # Event-driven streaming (v0.2.0)
+│   │   │   ├── reflection/      # Unified evaluation framework (v0.2.0)
+│   │   │   └── tot/             # Tree of Thoughts system
 │   │   │       ├── nodes/       # ToT node implementations
-│   │   │       ├── cache.py     # Tool result caching
-│   │   │       ├── state.py     # ToT state management
-│   │   │       ├── router.py    # ToT mode router
-│   │   │       └── research_agent.py # Research mode agent
+│   │   │       ├── cache.py     # Tool result cache
+│   │   │       └── ...          # state, router, graph_builder
 │   │   │
 │   │   ├── tools/               # 6 core tools
 │   │   │   ├── terminal.py      # Shell command execution
@@ -298,9 +295,10 @@ miniclaw/
 │   │   │   └── dependencies.py  # Dependency management
 │   │   │
 │   │   ├── memory/              # Conversation memory management
-│   │   │   ├── extractor.py     # Information extraction
-│   │   │   ├── long_term_updater.py  # Long-term memory update
-│   │   │   └── prompts.py       # System Prompt components
+│   │   │   ├── session.py       # Session management
+│   │   │   ├── prompts.py       # System Prompt components
+│   │   │   ├── auto_learning/   # Pattern learning system (v0.2.0)
+│   │   │   └── models.py        # Memory Pydantic models
 │   │   │
 │   │   ├── api/                 # API routes
 │   │   │   ├── chat.py          # Chat interface (SSE streaming)
@@ -337,13 +335,16 @@ miniclaw/
 │   ├── components/              # React components
 │   │   ├── ui/                  # Shadcn/UI components
 │   │   ├── chat/                # Chat components
+│   │   ├── common/              # Shared components (v0.2.0)
 │   │   └── editor/              # Code editor
 │   │
 │   ├── lib/                     # Utility libraries
 │   │   └── api.ts               # API client
 │   │
 │   ├── hooks/                   # React Hooks
-│   │   └── useChat.ts           # Chat Hook
+│   │   ├── useChat.ts           # Chat Hook
+│   │   ├── useToast.tsx         # Toast notifications (v0.2.0)
+│   │   └── useSSE.ts            # SSE event handling
 │   │
 │   └── types/                   # TypeScript types
 │       └── chat.ts              # Chat type definitions
@@ -353,6 +354,7 @@ miniclaw/
 │   ├── API.md                   # API documentation
 │   └── DEPLOYMENT.md            # Deployment guide
 │
+├── .env.example                 # Environment variable template
 ├── QUICKSTART.md                # Quick start guide
 ├── README.md                    # This file
 ├── DEVELOPMENT_PLAN.md          # Development plan
@@ -658,14 +660,15 @@ Contributions are welcome! Please follow this process:
 
 ## Roadmap
 
-### v0.2 (Planned)
+### v0.3 (Planned)
 
 - [ ] Multi-session management
 - [ ] Skill marketplace integration
 - [ ] WebRTC voice chat
 - [ ] Multimodal support (images, files)
+- [ ] Production deployment optimization
 
-### v0.3 (Future)
+### v0.4 (Future)
 
 - [ ] Multi-Agent collaboration
 - [ ] Knowledge graph memory

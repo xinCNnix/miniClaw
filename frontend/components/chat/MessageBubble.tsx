@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import type { Message } from "@/types/chat"
+import { useState, useEffect } from "react"
 
 interface MessageBubbleProps {
   message: Message
@@ -17,8 +18,21 @@ interface MessageBubbleProps {
 export function MessageBubble({ message, className }: MessageBubbleProps) {
   const isUser = message.role === "user"
 
+  // Fix hydration error: only render time on client
+  const [time, setTime] = useState("")
+
+  useEffect(() => {
+    if (message.timestamp) {
+      setTime(new Date(message.timestamp).toLocaleTimeString())
+    }
+  }, [message.timestamp])
+
+  // Debug logging to track message renders
+  console.log('[MessageBubble] Render called for', message.role, 'message, content length:', message.content?.length || 0)
+
   return (
     <div
+      data-message-id={message.id}
       data-testid={isUser ? "message-user" : "message-assistant"}
       className={clsx(
         "flex gap-3",
@@ -60,6 +74,26 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
           <p className="whitespace-pre-wrap">{message.content}</p>
         ) : (
           <div className="prose prose-sm max-w-none dark:prose-invert">
+            {/* Tool Calls */}
+            {message.tool_calls && message.tool_calls.length > 0 && (
+              <div className="mb-3 space-y-2">
+                {message.tool_calls.map((tool, idx) => (
+                  <div
+                    key={tool.id || idx}
+                    className="bg-blue-50 border border-blue-200 rounded-md p-3"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-semibold text-blue-700">
+                        🔧 {tool.name}
+                      </span>
+                    </div>
+                    <pre className="text-xs bg-gray-100 rounded p-2 overflow-x-auto">
+                      {JSON.stringify(tool.args, null, 2)}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            )}
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
@@ -142,14 +176,14 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
         )}
 
         {/* Timestamp */}
-        {message.timestamp && (
+        {time && (
           <p
             className={clsx(
               "text-xs mt-1",
               isUser ? "text-emerald-100" : "text-gray-400"
             )}
           >
-            {new Date(message.timestamp).toLocaleTimeString()}
+            {time}
           </p>
         )}
       </div>

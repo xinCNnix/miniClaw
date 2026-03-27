@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Send, Loader2, Image as ImageIcon, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTranslation } from "@/hooks/use-translation.hook"
+import { useToastContext } from "@/components/common/ToastContext"
 
 interface ImageAttachment {
   file: File
@@ -14,7 +15,7 @@ interface ImageAttachment {
 
 interface InputBoxProps {
   className?: string
-  onSend: (content: string, images?: ImageAttachment[]) => void
+  onSend: (content: string, images?: ImageAttachment[]) => Promise<void>
   disabled?: boolean
   placeholder?: string
 }
@@ -26,6 +27,7 @@ export function InputBox({
   placeholder,
 }: InputBoxProps) {
   const { t } = useTranslation()
+  const { showToast } = useToastContext()
   const [content, setContent] = useState("")
   const [images, setImages] = useState<ImageAttachment[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -39,10 +41,21 @@ export function InputBox({
     }
   }, [content])
 
-  const handleSend = () => {
+  // Cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      images.forEach(img => {
+        if (img.preview) {
+          URL.revokeObjectURL(img.preview)
+        }
+      })
+    }
+  }, [images])
+
+  const handleSend = async () => {
     const trimmed = content.trim()
     if ((trimmed || images.length > 0) && !disabled) {
-      onSend(trimmed, images)
+      await onSend(trimmed, images)
       setContent("")
       setImages([])
     }
@@ -64,13 +77,13 @@ export function InputBox({
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
       if (!file.type.startsWith("image/")) {
-        alert(t('chat.upload_only_images'))
+        showToast(t('chat.upload_only_images'), 'error')
         continue
       }
 
       // Limit size to 10MB
       if (file.size > 10 * 1024 * 1024) {
-        alert(t('chat.upload_too_large', { name: file.name }))
+        showToast(t('chat.upload_too_large', { name: file.name }), 'error')
         continue
       }
 
@@ -153,6 +166,7 @@ export function InputBox({
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
           title={t('chat.upload_image_title')}
+          data-testid="image-upload-button"
         >
           <ImageIcon className="w-5 h-5" />
         </Button>
@@ -165,6 +179,7 @@ export function InputBox({
           placeholder={placeholder || t('chat.type_message')}
           disabled={disabled}
           rows={1}
+          data-testid="chat-input"
           className={cn(
             "flex-1 resize-none rounded-md border border-gray-300 px-3 py-2",
             "focus:outline-none focus:ring-2 focus:ring-[var(--ink-green)] focus:border-transparent",
@@ -176,6 +191,7 @@ export function InputBox({
           variant="primary"
           onClick={handleSend}
           disabled={disabled || (!content.trim() && images.length === 0)}
+          data-testid="send-button"
         >
           {disabled ? (
             <Loader2 className="w-5 h-5 animate-spin" />

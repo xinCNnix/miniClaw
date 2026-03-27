@@ -344,7 +344,7 @@ Check API health status.
 ```json
 {
   "status": "healthy",
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
 ```
 
@@ -357,7 +357,7 @@ Get API information.
 ```json
 {
   "name": "miniClaw API",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lightweight, transparent AI Agent system"
 }
 ```

@@ -15,7 +15,7 @@ interface UseChatReturn {
   thinkingEvents: ThinkingEvent[]
   isLoading: boolean
   currentSessionId: string | null
-  sendMessage: (content: string, images?: any[]) => Promise<void>
+  sendMessage: (content: string, images?: any[], context?: Record<string, any>) => Promise<void>
   stopGeneration: () => void
   clearMessages: () => void
   loadMessages: (messages: Message[]) => void
@@ -33,9 +33,10 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  const sendMessage = useCallback(async (content: string, images: any[] = []) => {
+  const sendMessage = useCallback(async (content: string, images: any[] = [], context: Record<string, any> = {}) => {
     // Add user message
     const userMessage: Message = {
+      id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       role: "user",
       content,
       timestamp: new Date().toISOString(),
@@ -59,6 +60,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         message: content,
         session_id: currentSessionId || "default",
         stream: true,
+        context: Object.keys(context).length > 0 ? context : undefined,
         ...(images.length > 0 && { images: images.map(img => ({
           type: "image",
           content: img.base64,
@@ -107,12 +109,106 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6))
+              console.log('[SSE] Event received:', data.type, data)
 
               switch (data.type) {
                 case "thinking_start":
+                  console.log('[SSE] thinking_start event')
                   setThinkingEvents((prev) => [
                     ...prev,
-                    { type: "thinking_start", timestamp: new Date().toISOString() },
+                    {
+                      type: "thinking_start",
+                      timestamp: new Date().toISOString(),
+                      mode: data.mode || 'simple'
+                    },
+                  ])
+                  break
+
+                // ToT events
+                case "tot_reasoning_start":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_reasoning_start",
+                      mode: "tot",
+                      max_depth: data.max_depth,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_thoughts_generated":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_thoughts_generated",
+                      depth: data.depth,
+                      count: data.count,
+                      thoughts: data.thoughts,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_thoughts_evaluated":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_thoughts_evaluated",
+                      best_path: data.best_path,
+                      best_score: data.best_score,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_tools_executed":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_tools_executed",
+                      thought_id: data.thought_id,
+                      content: data.content,
+                      tool_count: data.tool_count,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_tree_update":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_tree_update",
+                      tree: data.tree,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_termination":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_termination",
+                      reason: data.reason,
+                      score: data.score,
+                      depth: data.depth,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_reasoning_complete":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_reasoning_complete",
+                      final_answer: data.final_answer,
+                      best_path: data.best_path,
+                      total_thoughts: data.total_thoughts,
+                      timestamp: new Date().toISOString(),
+                    },
                   ])
                   break
 
@@ -132,29 +228,36 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   break
 
                 case "content_delta":
+                case "text_delta":  // Handle both types for compatibility
                   if (data.content) {
+                    console.log('[SSE]', data.type, 'received:', data.content.substring(0, 50))
                     assistantContent += data.content
                     setMessages((prev) => {
                       const lastMessage = prev[prev.length - 1]
 
                       if (lastMessage && lastMessage.role === "assistant") {
                         // Create new object to ensure React detects the change
-                        return [
+                        const newMessages = [
                           ...prev.slice(0, -1),
                           {
                             ...lastMessage,
                             content: assistantContent,
                           },
                         ]
+                        console.log('[SSE] Updating assistant message, total messages:', newMessages.length)
+                        return newMessages
                       } else {
-                        return [
+                        const newMessages = [
                           ...prev,
                           {
+                            id: `msg_${Date.now()}_assistant`,
                             role: "assistant",
                             content: assistantContent,
                             timestamp: new Date().toISOString(),
                           },
                         ]
+                        console.log('[SSE] Creating new assistant message, total messages:', newMessages.length)
+                        return newMessages
                       }
                     })
                   }
@@ -209,6 +312,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         setMessages((prev) => [
           ...prev,
           {
+            id: `msg_${Date.now()}_error`,
             role: "assistant",
             content: `Error: ${error.message}`,
             timestamp: new Date().toISOString(),

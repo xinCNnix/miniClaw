@@ -2,17 +2,24 @@
 
 import { MessageBubble } from "@/components/chat/MessageBubble"
 import { ThinkingChainDisplay } from "@/components/chat/ThinkingChainDisplay"
-import type { Message } from "@/types/chat"
+import { ThoughtTree } from "@/components/chat/thought-tree"
+import type { Message, ThinkingEvent } from "@/types/chat"
 import { useTranslation } from "@/hooks/use-translation.hook"
 
 interface MessageListProps {
   messages: Message[]
-  thinkingEvents?: unknown[]
+  thinkingEvents?: ThinkingEvent[]
   isLoading?: boolean
 }
 
 export function MessageList({ messages, thinkingEvents = [], isLoading = false }: MessageListProps) {
   const { t } = useTranslation()
+
+  // Debug logging to track renders
+  console.log('[MessageList] Render called with', messages.length, 'messages')
+
+  // Check if there are any ToT events
+  const hasToTEvents = thinkingEvents.some(event => event.type.startsWith('tot_'))
 
   if (messages.length === 0) {
     return (
@@ -35,19 +42,36 @@ export function MessageList({ messages, thinkingEvents = [], isLoading = false }
 
   return (
     <div className="space-y-4">
-      {messages.map((message, index) => (
-        <div key={index}>
-          {/* Show thinking chain before assistant messages */}
-          {message.role === "assistant" && thinkingEvents.length > 0 && (
-            <ThinkingChainDisplay
-              events={thinkingEvents as any[]}
-              isLoading={isLoading && index === messages.length - 1}
-            />
+      {messages.map((message, index) => {
+        // Generate a stable key using message.id or a combination of role and timestamp
+        const messageKey = message.id || `${message.role}-${message.timestamp}`
+
+        return (
+          <div key={messageKey}>
+            {/* Show thinking chain before assistant messages */}
+            {message.role === "assistant" && thinkingEvents.length > 0 && (
+            <>
+              {/* Show ToT thought tree if ToT mode */}
+              {hasToTEvents && (
+                <ThoughtTree
+                  events={thinkingEvents}
+                  maxHeight="300px"
+                  data-testid="tot-reasoning-step"
+                />
+              )}
+
+              {/* Show regular thinking chain */}
+              <ThinkingChainDisplay
+                events={thinkingEvents as any[]}
+                isLoading={isLoading && index === messages.length - 1}
+              />
+            </>
           )}
 
-          <MessageBubble message={message} />
-        </div>
-      ))}
+            <MessageBubble message={message} />
+          </div>
+        )
+      })}
     </div>
   )
 }

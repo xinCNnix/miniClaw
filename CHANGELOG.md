@@ -4,7 +4,117 @@
 
 ---
 
-## 2025-03-20 - 新增：Tree of Thoughts (ToT) 推理系统
+## 2026-03-27 - v0.2.0: 架构升级与流式优化
+
+本次更新为重大架构升级，引入模块化 Agent 组件、事件驱动流式架构、反思评估框架和自学习系统。
+
+### 架构重构
+
+**Agent 组件化拆分：**
+- 将 Agent 执行逻辑拆分为 6 个独立模块 (`backend/app/core/agent_components/`)
+  - `tool_assembler.py` - 工具调用组装，处理流式 JSON 增量合并
+  - `tool_execution.py` - 工具执行策略（串行/并行）
+  - `round_executor.py` - 单轮工具调用执行与事件生成
+  - `stream_coordinator.py` - LLM 流式响应协调
+  - `stopping_checker.py` - 智能停止机制
+  - `error_tracker.py` - 错误追踪与恢复建议
+
+**依赖注入容器：**
+- `backend/app/core/container.py` - 轻量级 DI 容器，支持延迟初始化和单例管理
+- `backend/app/core/interfaces.py` - Protocol 接口定义（LLMProvider, EmbeddingProvider, VectorStore 等）
+
+**结构化错误处理：**
+- `backend/app/core/exceptions.py` - 自定义异常层级（MiniClawError, AgentError, ToolExecutionError, LLMError 等）
+- `backend/app/core/error_context.py` - 结构化错误日志，含调用栈、局部变量、错误签名
+- `backend/app/core/callback_handler.py` - LangChain 回调处理器，轨迹追踪
+
+### 流式响应架构
+
+**事件驱动流式系统 (`backend/app/core/streaming/`)：**
+- `events.py` - 事件类型定义（StreamEventType 枚举）
+- `event_bus.py` - 异步事件总线（发布-订阅模式）
+- `chunk_parser.py` - LLM 响应分块解析
+- `response_aggregator.py` - 流式响应聚合
+- `error_handler.py` - 流式错误处理
+- `tool_executor.py` - 流式上下文中的工具执行
+- `stream_coordinator.py` - 流式操作协调器
+
+**调试支持：**
+- `backend/app/core/streaming_debug_logger.py` - 流式调试日志，含性能计时和分块分析
+
+### 反思评估系统
+
+**统一评估框架 (`backend/app/core/reflection/`)：**
+- `evaluator.py` - UnifiedEvaluator，区分微观评估（执行时）和宏观评估（执行后）
+- `trigger.py` - ReflectionTrigger，避免微观和宏观触发重叠
+
+### 自学习系统
+
+**模式提取与学习 (`backend/app/memory/auto_learning/`)：**
+- `extractor.py` - 从执行轨迹中提取模式
+- `nn.py` - PatternNN 神经网络
+- `memory.py` - 模式记忆存储与检索
+- `graph_builder.py` - LangGraph 模式学习流程构建
+- `nodes.py` - LangGraph 节点
+- `streaming.py` - 流式模式提取
+- `advanced/` - RL 强化学习模块（轨迹编码、策略头、奖励模型）
+- `reflection/` - 反思驱动学习（策略映射、奖励模型）
+
+**记忆模型：**
+- `backend/app/memory/models.py` - Pattern, Trajectory, TrainingMetrics, RLExperience 模型
+
+### ToT 缓存
+
+- `backend/app/core/tot/cache.py` - TTL 工具结果缓存（默认 5 分钟），避免重复调用
+- `backend/app/core/tracking_context.py` - 请求追踪上下文，关联同一请求的所有日志
+
+### 前端改进
+
+**公共组件 (`frontend/components/common/`)：**
+- `ErrorBoundary.tsx` - React 错误边界，含重试机制
+- `ToastContext.tsx` + `ToastProvider.tsx` - Toast 通知系统
+- `Providers.tsx` - 应用级 Provider 封装
+
+**Hook：**
+- `frontend/hooks/useToast.tsx` - Toast 通知 Hook，支持 success/error/info/warning 类型
+
+### 新增文件清单
+
+**后端核心 (18 个文件)：**
+- `backend/app/core/agent_components/` (6 个文件)
+- `backend/app/core/callback_handler.py`
+- `backend/app/core/container.py`
+- `backend/app/core/error_context.py`
+- `backend/app/core/exceptions.py`
+- `backend/app/core/interfaces.py`
+- `backend/app/core/reflection/` (3 个文件)
+- `backend/app/core/streaming/` (7 个文件)
+- `backend/app/core/streaming_debug_logger.py`
+- `backend/app/core/tot/cache.py`
+- `backend/app/core/tracking_context.py`
+
+**记忆模块 (17 个文件)：**
+- `backend/app/memory/models.py`
+- `backend/app/memory/auto_learning/` (16 个文件)
+
+**前端 (5 个文件)：**
+- `frontend/components/common/` (4 个文件)
+- `frontend/hooks/useToast.tsx`
+
+### 配置与工具
+
+- `backend/check_config.py` - 配置检查工具
+- `.env.example` - 环境变量模板
+
+### 向后兼容性
+
+- 所有新功能通过配置开关控制
+- 现有 API 端点保持不变
+- Agent 基础接口兼容，内部实现重构
+
+---
+
+## 2025-03-20 - v0.1.0: Tree of Thoughts (ToT) 推理系统
 
 ### 功能概述
 
@@ -1044,4 +1154,4 @@ print(f'处理完成：{len(list(Path('data').glob('*.txt')))} 个文件')
 
 ---
 
-*最后更新：2025-03-07*
+*最后更新：2026-03-27*

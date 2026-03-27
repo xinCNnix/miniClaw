@@ -82,7 +82,7 @@ export function Sidebar({
               <MessageSquare className="w-4 h-4 flex-shrink-0 text-gray-500" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">
-                  {session.metadata?.title || t('sidebar.new_conversation')}
+                  {(session.metadata?.title as string | undefined) || t('sidebar.new_conversation')}
                 </p>
                 <p className="text-xs text-gray-500">
                   {new Date(session.created_at).toLocaleDateString()}
