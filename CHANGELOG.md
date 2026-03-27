@@ -106,6 +106,28 @@
 - `backend/check_config.py` - 配置检查工具
 - `.env.example` - 环境变量模板
 
+### Skills 中文字体修复
+
+修复 3 个绘图技能在中文环境下标题/文字显示为方框的问题：
+
+**diagram-plotter：**
+- 根因：DOT 代码仅在 `node`/`edge` 上设置 `fontname`，图级别标题（`label`）使用 Graphviz 默认字体
+- 修复：新增 `detect_chinese_font()` 自动检测系统中文字体（Windows/macOS/Linux），图级别统一设置 `fontname`
+
+**chart-plotter：**
+- 根因：`plot_simple.py` 硬编码字体列表 `['SimHei', ...]`，无自动检测
+- 修复：新增 `_detect_chinese_font()` 扫描系统字体目录，通过 `fm.fontManager.addfont()` 注册
+
+**doc-creator：**
+- 根因：XLSX/PPTX 输出未设置 CJK 字体，中文内容可能显示异常
+- 修复：XLSX 标题和表头、PPTX 标题和内容页均使用 `_get_system_cjk_font()`
+
+### 修改文件
+
+- `backend/data/skills/diagram-plotter/scripts/diagram_plotter.py`
+- `backend/data/skills/chart-plotter/scripts/plot_simple.py`
+- `backend/data/skills/doc-creator/scripts/doc_creator.py`
+
 ### 向后兼容性
 
 - 所有新功能通过配置开关控制
