@@ -81,16 +81,26 @@ class UnifiedEvaluator:
     关键：通过评估类型（evaluation_type）区分层级
     """
 
-    def __init__(self, llm: BaseChatModel, cache_enabled: bool = True):
+    def __init__(
+        self,
+        llm: BaseChatModel,
+        cache_enabled: bool = True,
+        cache_ttl: int = 300,
+        cache_max_size: int = 1000,
+    ):
         """
         初始化统一评估器
 
         Args:
             llm: 基础LLM模型
             cache_enabled: 是否启用缓存
+            cache_ttl: 缓存TTL（秒）
+            cache_max_size: 缓存最大条目数
         """
         self.llm = llm
         self.cache_enabled = cache_enabled
+        self._cache_ttl = cache_ttl
+        self._cache_max_size = cache_max_size
         self._cache: dict[str, dict] = {}
 
         # 复用现有组件
@@ -328,10 +338,12 @@ class UnifiedEvaluator:
         try:
             # 使用 ReflectionEngine 进行完整反思
             engine = ReflectionEngine(llm=self.llm)
+            execution_time = context.get("execution_time", 0.0)
             reflection = await engine.reflect(
                 user_query=user_query,
                 agent_output=agent_output,
                 tool_calls=tool_calls,
+                execution_time=execution_time,
             )
 
             # 提取质量分数
@@ -400,10 +412,12 @@ class UnifiedEvaluator:
             if error_message:
                 output_with_error = f"{agent_output}\n\nError: {error_message}"
 
+            execution_time = context.get("execution_time", 0.0)
             reflection = await engine.reflect(
                 user_query=user_query,
                 agent_output=output_with_error,
                 tool_calls=tool_calls,
+                execution_time=execution_time,
             )
 
             # 失败情况下质量分数较低
@@ -439,7 +453,7 @@ class UnifiedEvaluator:
 
         if key in self._cache:
             entry = self._cache[key]
-            if time.time() - entry["timestamp"] < 300:  # 5分钟TTL
+            if time.time() - entry["timestamp"] < self._cache_ttl:
                 logger.debug(f"Cache hit: {evaluation_type}")
                 return entry["result"]
             else:
@@ -456,8 +470,8 @@ class UnifiedEvaluator:
         """缓存评估结果"""
         key = self._generate_cache_key(evaluation_type, context)
 
-        # LRU 淘汰（简单实现：超过1000个条目时删除最旧的）
-        if len(self._cache) >= 1000:
+        # LRU 淘汰（简单实现：超过最大条目数时删除最旧的）
+        if len(self._cache) >= self._cache_max_size:
             oldest_key = min(self._cache.keys(), key=lambda k: self._cache[k]["timestamp"])
             del self._cache[oldest_key]
 
@@ -506,8 +520,8 @@ class UnifiedEvaluator:
         # 简化统计：不区分hit/miss（需要在实际调用中跟踪）
         return {
             "total_entries": total,
-            "max_size": 1000,
-            "ttl_seconds": 300,
+            "max_size": self._cache_max_size,
+            "ttl_seconds": self._cache_ttl,
         }
 
     def clear_cache(self):
@@ -525,18 +539,15 @@ def get_unified_evaluator() -> UnifiedEvaluator:
     global _evaluator
     if _evaluator is None:
         from app.config import settings
-        from langchain_openai import ChatOpenAI
+        from app.core.llm import get_default_llm
 
-        # 使用配置的LLM
-        llm = ChatOpenAI(
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            api_key=settings.openai_api_key,
-        )
+        llm = get_default_llm()
 
         _evaluator = UnifiedEvaluator(
             llm=llm,
             cache_enabled=settings.evaluation_cache_enabled,
+            cache_ttl=settings.evaluation_cache_ttl,
+            cache_max_size=settings.evaluation_cache_max_size,
         )
 
     return _evaluator

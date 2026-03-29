@@ -23,6 +23,7 @@ from app.core.streaming.tool_executor import ToolExecutor
 from app.core.smart_stopping import (
     should_stop_before_execution,
     should_stop_after_execution,
+    SmartToolStopping,
 )
 from app.core.streaming.error_handler import ErrorHandler, FatalError
 from app.config import Settings
@@ -220,6 +221,10 @@ class StreamCoordinator:
         # Reflection callback support
         self._on_reflection_callback: Optional[Callable[[str], Awaitable[None]]] = None
         self._on_thought_complete_callback: Optional[Callable[[Dict], Awaitable[None]]] = None
+
+        # Tool call history for similarity-based redundancy detection
+        self._tool_call_history: list[dict] = []
+        self._stopper: Optional[SmartToolStopping] = None
 
     def set_reflection_callback(
         self,
@@ -575,16 +580,33 @@ class StreamCoordinator:
 
                 # === Smart stopping check (before execution) ===
                 if self.settings:
+                    # 首次创建共享的 stopper 实例（复用 _tool_call_history）
+                    if self._stopper is None:
+                        self._stopper = SmartToolStopping(
+                            evaluation_interval=self.settings.sufficiency_evaluation_interval,
+                            hard_limit=self.settings.max_tool_rounds,
+                            enable=True,
+                            similarity_threshold=getattr(self.settings, 'similarity_threshold', 0.8),
+                            similarity_block_threshold=getattr(self.settings, 'similarity_block_threshold', 0.95),
+                            similarity_check_limit=getattr(self.settings, 'similarity_check_limit', 3),
+                            recent_tool_calls=self._tool_call_history,
+                        )
+
                     for tool_call in tool_calls:
                         tool_name = tool_call.get('name', '')
                         tool_args = tool_call.get('args', {})
 
+                        # 记录工具调用到历史
+                        self._stopper.record_tool_call(tool_name, tool_args)
+
+                        # 基本智能停止检查（问候检测等）
                         should_stop, stop_reason = should_stop_before_execution(
                             settings=self.settings,
                             round_count=round_count,
                             tool_name=tool_name,
                             tool_args=tool_args,
-                            user_message=messages[-1].get('content', '') if messages else ''
+                            user_message=messages[-1].get('content', '') if messages else '',
+                            tool_call_history=self._tool_call_history,
                         )
 
                         if should_stop:
@@ -599,6 +621,27 @@ class StreamCoordinator:
                             except Exception as e:
                                 logger.error(f"Error emitting final response: {e}")
                             return
+
+                        # 内容相似度冗余检测
+                        should_block, reason, similarity = self._stopper.detect_redundant_tool_call(
+                            tool_name, tool_args
+                        )
+                        if should_block:
+                            yield {
+                                "type": "redundancy_blocked",
+                                "reason": reason,
+                                "similarity": similarity,
+                            }
+                            logger.warning(f"[REDUNDANCY] 已阻止重复工具调用: {reason}")
+                            return
+                        if reason:
+                            # 中高相似度：发出警告但不阻止
+                            yield {
+                                "type": "redundancy_warning",
+                                "reason": reason,
+                                "similarity": similarity,
+                            }
+                            logger.info(f"[REDUNDANCY] 相似度警告: {reason}")
 
                 # Add assistant message to conversation
                 lc_messages.append(llm_response)

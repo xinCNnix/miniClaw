@@ -129,6 +129,10 @@ class PatternNN(nn.Module):
                 enable_trajectory=True,
                 prioritized=False,
             )
+
+            # AgentModel wrapper for unified forward interface
+            from app.memory.auto_learning.advanced.agent_model import AgentModel
+            self.agent_model = AgentModel(self.trajectory_encoder, self.policy_value_head)
         else:
             # Simple buffer for basic mode (backward compatible)
             self.buffer: list[tuple[torch.Tensor, int]] = []
@@ -599,3 +603,38 @@ class PatternNN(nn.Module):
 
         self.training_mode = mode
         logger.info(f"Switched training mode to: {mode}")
+
+
+_pattern_nn_instance: "PatternNN | None" = None
+
+
+def get_pattern_nn(**kwargs) -> "PatternNN | None":
+    """Get PatternNN singleton (advanced mode) for RL pipeline.
+
+    Returns None if initialization fails.
+    """
+    global _pattern_nn_instance
+    if _pattern_nn_instance is None:
+        try:
+            from app.config import get_settings
+            settings = get_settings()
+            _pattern_nn_instance = PatternNN(
+                embed_dim=kwargs.pop("embed_dim", settings.pattern_nn_embed_dim),
+                num_patterns=kwargs.pop("num_patterns", settings.pattern_nn_num_patterns),
+                enable_advanced=True,
+                **kwargs,
+            )
+            from pathlib import Path
+            nn_path = Path(settings.data_dir) / "pattern_nn.pth"
+            if nn_path.exists():
+                _pattern_nn_instance.load(str(nn_path))
+        except Exception as e:
+            logger.warning(f"PatternNN init failed: {e}")
+            return None
+    return _pattern_nn_instance
+
+
+def reset_pattern_nn():
+    """Reset the PatternNN singleton."""
+    global _pattern_nn_instance
+    _pattern_nn_instance = None
