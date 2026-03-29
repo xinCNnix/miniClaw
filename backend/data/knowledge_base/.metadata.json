@@ -1,0 +1,65 @@
+{
+  "1b336dd396e2c62e": {
+    "id": "1b336dd396e2c62e",
+    "filename": "Llama 2_ Open Foundation and Fine-Tuned Chat Models.pdf",
+    "file_type": ".pdf",
+    "size": 13661300,
+    "upload_date": "2026-03-15T15:55:33.997822",
+    "chunk_count": 27322,
+    "file_path": "data\\knowledge_base\\Llama 2_ Open Foundation and Fine-Tuned Chat Models.pdf"
+  },
+  "933e17f862507551": {
+    "id": "933e17f862507551",
+    "filename": "Agent Quality.pdf",
+    "file_type": ".pdf",
+    "size": 8015821,
+    "upload_date": "2026-03-18T19:28:41.989555",
+    "chunk_count": 16031,
+    "file_path": "data\\knowledge_base\\Agent Quality.pdf"
+  },
+  "f7570da53b8e1ddf": {
+    "id": "f7570da53b8e1ddf",
+    "filename": "Agent Tools & Interoperability with Model Context Protocol (MCP).pdf",
+    "file_type": ".pdf",
+    "size": 6415321,
+    "upload_date": "2026-03-18T19:28:41.997078",
+    "chunk_count": 12830,
+    "file_path": "data\\knowledge_base\\Agent Tools & Interoperability with Model Context Protocol (MCP).pdf"
+  },
+  "c1f6031fe0013e45": {
+    "id": "c1f6031fe0013e45",
+    "filename": "Agent 自主进化与自我学习改进方案.md",
+    "file_type": ".md",
+    "size": 20788,
+    "upload_date": "2026-03-18T19:28:41.999081",
+    "chunk_count": 41,
+    "file_path": "data\\knowledge_base\\Agent 自主进化与自我学习改进方案.md"
+  },
+  "7c1bb5195e0a96b6": {
+    "id": "7c1bb5195e0a96b6",
+    "filename": "Context Engineering_ Sessions & Memory.pdf",
+    "file_type": ".pdf",
+    "size": 7682073,
+    "upload_date": "2026-03-18T19:28:42.005111",
+    "chunk_count": 15364,
+    "file_path": "data\\knowledge_base\\Context Engineering_ Sessions & Memory.pdf"
+  },
+  "c4d62aa718c6f663": {
+    "id": "c4d62aa718c6f663",
+    "filename": "Introduction to Agents.pdf",
+    "file_type": ".pdf",
+    "size": 9473606,
+    "upload_date": "2026-03-18T19:28:42.013618",
+    "chunk_count": 18947,
+    "file_path": "data\\knowledge_base\\Introduction to Agents.pdf"
+  },
+  "90ed487c37ef9bfe": {
+    "id": "90ed487c37ef9bfe",
+    "filename": "Prototype to Production.pdf",
+    "file_type": ".pdf",
+    "size": 8099704,
+    "upload_date": "2026-03-18T19:28:42.020617",
+    "chunk_count": 16199,
+    "file_path": "data\\knowledge_base\\Prototype to Production.pdf"
+  }
+}
