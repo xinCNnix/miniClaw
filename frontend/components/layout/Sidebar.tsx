@@ -69,7 +69,11 @@ export function Sidebar({
       {/* Sessions List */}
       <div className="flex-1 overflow-y-auto p-2">
         <div className="space-y-1">
-          {sessions.map((session) => (
+          {sessions
+            .filter((session, index, self) =>
+              self.findIndex((s) => s.session_id === session.session_id) === index
+            )
+            .map((session) => (
             <div
               key={session.session_id}
               className={cn(

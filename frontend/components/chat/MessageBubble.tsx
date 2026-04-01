@@ -4,10 +4,13 @@ import { clsx } from "clsx"
 import { User, Bot } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import remarkMath from "remark-math"
+import rehypeKatex from "rehype-katex"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import type { Message } from "@/types/chat"
 import { useState, useEffect } from "react"
+import "katex/dist/katex.min.css"
 
 interface MessageBubbleProps {
   message: Message
@@ -58,13 +61,19 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
       >
         {/* Images */}
         {message.images && message.images.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
+          <div className={clsx(
+            "flex flex-wrap gap-2 mb-2",
+            !isUser && "flex-col items-start"
+          )}>
             {message.images.map((img, idx) => (
               <img
                 key={idx}
                 src={`data:${img.mime_type};base64,${img.content}`}
-                alt={`Attachment ${idx + 1}`}
-                className="max-w-[200px] rounded-md border border-gray-300 dark:border-gray-600"
+                alt={isUser ? `Attachment ${idx + 1}` : `Generated figure ${idx + 1}`}
+                className={clsx(
+                  "rounded-md border border-gray-300 dark:border-gray-600",
+                  isUser ? "max-w-[200px]" : "max-w-full"
+                )}
               />
             ))}
           </div>
@@ -95,7 +104,8 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
               </div>
             )}
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
               components={{
                 code({ className, children, inline, ...props }: any) {
                   const match = /language-(\w+)/.exec(className || '')

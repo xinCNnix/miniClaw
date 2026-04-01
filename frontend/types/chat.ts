@@ -31,7 +31,7 @@ export interface ChatState {
 }
 
 export interface SSEEvent {
-  type: 'thinking_start' | 'tool_call' | 'content_delta' | 'tool_output' | 'error' | 'done';
+  type: 'thinking_start' | 'tool_call' | 'content_delta' | 'tool_output' | 'error' | 'done' | 'llm_retry' | 'llm_error';
   content?: string;
   tool_calls?: ToolCall[];
   error?: string;
@@ -118,5 +118,23 @@ export type ThinkingEvent =
       reason?: string
       score?: number
       depth?: number
+      timestamp: string
+    }
+  | {
+      type: 'llm_retry'
+      attempt: number
+      max_retries: number
+      delay: number
+      error_code: string
+      error_message: string
+      context?: string
+      timestamp: string
+    }
+  | {
+      type: 'llm_error'
+      error_code: string
+      error_message: string
+      exhausted: boolean
+      context?: string
       timestamp: string
     }

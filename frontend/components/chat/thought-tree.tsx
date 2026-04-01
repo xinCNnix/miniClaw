@@ -214,7 +214,7 @@ function ThoughtTreeNode({ node, level, bestPathIds, beamCandidates }: ThoughtTr
         </div>
 
         {/* Score */}
-        {node.score !== undefined && (
+        {node.score != null && (
           <div className={`text-sm font-bold ${
             node.score >= 7 ? 'text-green-700' :
             node.score >= 5 ? 'text-blue-700' :

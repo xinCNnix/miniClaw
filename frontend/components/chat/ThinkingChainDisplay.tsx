@@ -11,6 +11,13 @@ interface ThinkingEvent {
   output?: string | Record<string, unknown>
   status?: string
   timestamp?: string
+  error_code?: string
+  error_message?: string
+  attempt?: number
+  max_retries?: number
+  delay?: number
+  exhausted?: boolean
+  context?: string
 }
 
 interface ThinkingChainDisplayProps {
@@ -23,7 +30,7 @@ export function ThinkingChainDisplay({ events, isLoading = false }: ThinkingChai
 
   // Filter only relevant events
   const relevantEvents = events.filter(
-    (event) => event.type === "tool_use" || event.type === "tool_output"
+    (event) => event.type === "tool_use" || event.type === "tool_output" || event.type === "llm_retry" || event.type === "llm_error"
   )
 
   if (relevantEvents.length === 0 && !isLoading) {
@@ -74,7 +81,7 @@ export function ThinkingChainDisplay({ events, isLoading = false }: ThinkingChai
             {isLoading && <Loader2 className="w-3 h-3 ml-2 animate-spin inline" />}
           </span>
           <span className="text-gray-500">
-            ({relevantEvents.length} 个工具调用)
+            ({relevantEvents.filter(e => e.type === "tool_use" || e.type === "tool_output").length} 个工具调用{(() => { const retryCount = relevantEvents.filter(e => e.type === "llm_retry").length; const errorCount = relevantEvents.filter(e => e.type === "llm_error").length; const parts = []; if (retryCount > 0) parts.push(`${retryCount} 次重试`); if (errorCount > 0) parts.push(`${errorCount} 个错误`); return parts.length > 0 ? `，${parts.join('、')}` : ''; })()})
           </span>
         </div>
       </button>
@@ -130,6 +137,41 @@ export function ThinkingChainDisplay({ events, isLoading = false }: ThinkingChai
                           </span>
                         )}
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {event.type === "llm_retry" && (
+                  <div className="flex items-start gap-2 p-2 bg-amber-50 rounded border border-amber-200 ml-3">
+                    <div className="text-amber-500 mt-0.5 text-xs">
+                      ⟳
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-amber-700">
+                        LLM 请求失败 <span className="font-mono font-bold">[{event.error_code}]</span>，第 {event.attempt}/{event.max_retries} 次重试 ({event.delay?.toFixed(1)}s 后)...
+                      </div>
+                      {event.context && (
+                        <div className="text-xs text-amber-500 mt-0.5">上下文: {event.context}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {event.type === "llm_error" && (
+                  <div className="flex items-start gap-2 p-2 bg-red-50 rounded border border-red-200 ml-3">
+                    <div className="text-red-500 mt-0.5 text-xs">
+                      ✗
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-red-700 font-medium">
+                        LLM 请求失败 <span className="font-mono">[{event.error_code}]</span>，重试已耗尽
+                      </div>
+                      <div className="text-xs text-red-500 mt-0.5">
+                        {(event.error_message ?? "").length > 100 ? (event.error_message ?? "").slice(0, 100) + "..." : (event.error_message ?? "")}
+                      </div>
+                      {event.context && (
+                        <div className="text-xs text-red-400 mt-0.5">上下文: {event.context}</div>
+                      )}
                     </div>
                   </div>
                 )}
