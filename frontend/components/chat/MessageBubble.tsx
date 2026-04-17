@@ -6,11 +6,10 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
+import "katex/dist/katex.min.css"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
-import type { Message } from "@/types/chat"
-import { useState, useEffect } from "react"
-import "katex/dist/katex.min.css"
+import type { Message, GeneratedImage } from "@/types/chat"
 
 interface MessageBubbleProps {
   message: Message
@@ -21,22 +20,8 @@ interface MessageBubbleProps {
 export function MessageBubble({ message, className }: MessageBubbleProps) {
   const isUser = message.role === "user"
 
-  // Fix hydration error: only render time on client
-  const [time, setTime] = useState("")
-
-  useEffect(() => {
-    if (message.timestamp) {
-      setTime(new Date(message.timestamp).toLocaleTimeString())
-    }
-  }, [message.timestamp])
-
-  // Debug logging to track message renders
-  console.log('[MessageBubble] Render called for', message.role, 'message, content length:', message.content?.length || 0)
-
   return (
     <div
-      data-message-id={message.id}
-      data-testid={isUser ? "message-user" : "message-assistant"}
       className={clsx(
         "flex gap-3",
         isUser ? "justify-end" : "justify-start",
@@ -59,23 +44,19 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
             : "bg-white border border-gray-200 text-gray-900"
         )}
       >
-        {/* Images */}
+        {/* User-attached images */}
         {message.images && message.images.length > 0 && (
-          <div className={clsx(
-            "flex flex-wrap gap-2 mb-2",
-            !isUser && "flex-col items-start"
-          )}>
-            {message.images.map((img, idx) => (
-              <img
-                key={idx}
-                src={`data:${img.mime_type};base64,${img.content}`}
-                alt={isUser ? `Attachment ${idx + 1}` : `Generated figure ${idx + 1}`}
-                className={clsx(
-                  "rounded-md border border-gray-300 dark:border-gray-600",
-                  isUser ? "max-w-[200px]" : "max-w-full"
-                )}
-              />
-            ))}
+          <div className="flex flex-wrap gap-2 mb-2">
+            {message.images
+              .filter((img) => img.content && img.mime_type)
+              .map((img, idx) => (
+                <img
+                  key={idx}
+                  src={`data:${img.mime_type};base64,${img.content}`}
+                  alt={`Attachment ${idx + 1}`}
+                  className="max-w-[200px] rounded-md border border-gray-300 dark:border-gray-600"
+                />
+              ))}
           </div>
         )}
 
@@ -83,30 +64,24 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
           <p className="whitespace-pre-wrap">{message.content}</p>
         ) : (
           <div className="prose prose-sm max-w-none dark:prose-invert">
-            {/* Tool Calls */}
-            {message.tool_calls && message.tool_calls.length > 0 && (
-              <div className="mb-3 space-y-2">
-                {message.tool_calls.map((tool, idx) => (
-                  <div
-                    key={tool.id || idx}
-                    className="bg-blue-50 border border-blue-200 rounded-md p-3"
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm font-semibold text-blue-700">
-                        🔧 {tool.name}
-                      </span>
-                    </div>
-                    <pre className="text-xs bg-gray-100 rounded p-2 overflow-x-auto">
-                      {JSON.stringify(tool.args, null, 2)}
-                    </pre>
-                  </div>
-                ))}
-              </div>
-            )}
             <ReactMarkdown
               remarkPlugins={[remarkGfm, remarkMath]}
               rehypePlugins={[rehypeKatex]}
               components={{
+                img({ src, alt, ...props }: any) {
+                  if (!src || src.trim() === '') return null;
+                  return (
+                    <img
+                      src={src}
+                      alt={alt || 'Image'}
+                      className="max-w-full rounded-md border border-gray-200 my-2"
+                      loading="lazy"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                  );
+                },
                 code({ className, children, inline, ...props }: any) {
                   const match = /language-(\w+)/.exec(className || '')
                   return !inline && match ? (
@@ -185,15 +160,31 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
           </div>
         )}
 
+        {/* Generated images — native <img>, bypasses ReactMarkdown */}
+        {!isUser && message.generated_images && message.generated_images.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {message.generated_images.map((img: GeneratedImage, idx: number) => (
+              <img
+                key={img.media_id || idx}
+                src={img.api_url}
+                alt={img.name || `Generated ${idx + 1}`}
+                className="max-w-full rounded-md border border-gray-200 my-2"
+                loading="lazy"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+            ))}
+          </div>
+        )}
+
         {/* Timestamp */}
-        {time && (
+        {message.timestamp && (
           <p
             className={clsx(
               "text-xs mt-1",
               isUser ? "text-emerald-100" : "text-gray-400"
             )}
           >
-            {time}
+            {new Date(message.timestamp).toLocaleTimeString()}
           </p>
         )}
       </div>

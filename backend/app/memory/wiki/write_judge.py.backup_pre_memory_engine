@@ -1,0 +1,193 @@
+"""
+WikiWriteJudge — LLM-based write decision + anti-hallucination.
+
+Decides whether conversation content should be written to the Wiki,
+with evidence validation to prevent hallucinated facts.
+"""
+
+import json
+import logging
+from typing import Optional
+
+from app.memory.wiki.models import WikiPage, WikiWriteDecision, WikiPatchOp
+from app.memory.wiki.prompts import (
+    WIKI_WRITE_JUDGE_SYSTEM_PROMPT,
+    WIKI_WRITE_JUDGE_TEMPLATE,
+    WIKI_NEW_PAGE_TEMPLATE,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class WikiWriteJudge:
+    """LLM-based judge for Wiki write decisions."""
+
+    def __init__(self) -> None:
+        self._llm = None
+
+    def _get_llm(self):
+        """Lazy-load the LLM."""
+        if self._llm is None:
+            from app.core.llm import get_default_llm
+            self._llm = get_default_llm()
+        return self._llm
+
+    async def judge(
+        self,
+        conversation_text: str,
+        existing_pages_summary: str,
+    ) -> WikiWriteDecision:
+        """Judge whether to write conversation content to Wiki.
+
+        Args:
+            conversation_text: The conversation content to evaluate
+            existing_pages_summary: Summary of existing Wiki pages
+
+        Returns:
+            WikiWriteDecision with write instructions
+        """
+        try:
+            llm = self._get_llm()
+            prompt = WIKI_WRITE_JUDGE_TEMPLATE.format(
+                existing_pages=existing_pages_summary,
+                conversation=conversation_text[:3000],  # Limit input size
+            )
+
+            response = await llm.ainvoke(
+                [
+                    {"role": "system", "content": WIKI_WRITE_JUDGE_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+
+            return self._parse_decision(response.content)
+
+        except Exception as e:
+            logger.error(f"Wiki write judge failed: {e}", exc_info=True)
+            return WikiWriteDecision(should_write=False, confidence=0.0)
+
+    async def validate_evidence(
+        self,
+        decision: WikiWriteDecision,
+        conversation_text: str,
+    ) -> bool:
+        """Validate that the decision's facts are grounded in conversation.
+
+        Anti-hallucination check: if no evidence supports a fact,
+        it should not be written as fact.
+
+        Args:
+            decision: The write decision to validate
+            conversation_text: Original conversation for cross-checking
+
+        Returns:
+            True if the decision passes validation
+        """
+        if not decision.should_write:
+            return True
+
+        conv_lower = conversation_text.lower()
+
+        # Check each op's text against conversation
+        for op in decision.ops:
+            # Extract key phrases from the op text (first sentence of each bullet)
+            text_lower = op.text.lower()
+            # Simple heuristic: check if at least 50% of words appear in conversation
+            words = [w for w in text_lower.split() if len(w) > 3]
+            if not words:
+                continue
+
+            matching = sum(1 for w in words if w in conv_lower)
+            ratio = matching / len(words) if words else 0
+
+            if ratio < 0.3:
+                # Low evidence — flag as needing Open Questions section
+                logger.warning(
+                    f"Wiki write evidence check: low match ratio {ratio:.2f} "
+                    f"for section '{op.section}'"
+                )
+                # Convert fact to open question instead
+                if op.op in ("add_section", "append"):
+                    op.text = (
+                        f"**Needs verification**: {op.text}\n\n"
+                        f"*Source confidence: {decision.confidence:.2f}*"
+                    )
+
+        return True
+
+    def build_new_page_content(
+        self,
+        decision: WikiWriteDecision,
+    ) -> str:
+        """Build the MD content for a new page from a write decision.
+
+        Args:
+            decision: The write decision
+
+        Returns:
+            Markdown content for the new page
+        """
+        key_facts = []
+        evidence = []
+        details = []
+
+        for op in decision.ops:
+            if op.section.lower() in ("key facts", "facts"):
+                key_facts.append(op.text)
+            elif op.section.lower() in ("evidence", "sources"):
+                evidence.append(op.text)
+            else:
+                details.append(f"### {op.section}\n\n{op.text}")
+
+        return WIKI_NEW_PAGE_TEMPLATE.format(
+            title=decision.title,
+            summary=decision.summary,
+            key_facts="\n".join(f"- {f}" for f in key_facts) if key_facts else "To be filled",
+            evidence="\n".join(f"- {e}" for e in evidence) if evidence else "From conversation",
+            details="\n\n".join(details) if details else "To be expanded",
+        )
+
+    def _parse_decision(self, response_text: str) -> WikiWriteDecision:
+        """Parse LLM response into a WikiWriteDecision.
+
+        Args:
+            response_text: Raw LLM response text
+
+        Returns:
+            Parsed WikiWriteDecision
+        """
+        # Try to extract JSON from response
+        text = response_text.strip()
+
+        # Remove markdown code blocks if present
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse wiki judge response: {text[:200]}")
+            return WikiWriteDecision(should_write=False, confidence=0.0)
+
+        # Parse ops
+        ops = []
+        for op_data in data.get("ops", []):
+            ops.append(WikiPatchOp(
+                op=op_data.get("op", "add_section"),
+                section=op_data.get("section", "Details"),
+                text=op_data.get("text", ""),
+            ))
+
+        return WikiWriteDecision(
+            should_write=data.get("should_write", False),
+            page_id=data.get("page_id"),
+            title=data.get("title", ""),
+            is_new_page=data.get("is_new_page", True),
+            ops=ops,
+            confidence=data.get("confidence", 0.0),
+            summary=data.get("summary", ""),
+            tags=data.get("tags", []),
+            aliases=data.get("aliases", []),
+        )

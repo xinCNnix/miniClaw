@@ -15,7 +15,7 @@ import logging
 # IMPORTANT: Set HuggingFace environment variables BEFORE importing any HF libraries
 # This prevents connection timeouts when accessing HuggingFace from China
 project_root = Path(__file__).parent.parent.parent
-hf_cache_dir = project_root / "backup" / "data" / "models"
+hf_cache_dir = project_root / "data" / "models" / "embedding"
 os.environ['HF_HOME'] = str(hf_cache_dir)
 os.environ['HUGGINGFACE_HUB_CACHE'] = str(hf_cache_dir / "hub")
 os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'  # Disable telemetry
@@ -64,9 +64,9 @@ class RAGEngine:
         self.kb_dir.mkdir(parents=True, exist_ok=True)
         self.vector_store_dir.mkdir(parents=True, exist_ok=True)
 
-        # Set HuggingFace cache directory to backup/data/models/
+        # Set HuggingFace cache directory to data/models/embedding/
         project_root = Path(__file__).parent.parent.parent
-        hf_cache_dir = project_root / "backup" / "data" / "models"
+        hf_cache_dir = project_root / "data" / "models" / "embedding"
         hf_cache_dir.mkdir(parents=True, exist_ok=True)
         os.environ['HF_HOME'] = str(hf_cache_dir)
         os.environ['HUGGINGFACE_HUB_CACHE'] = str(hf_cache_dir / "hub")
@@ -223,9 +223,9 @@ class RAGEngine:
 
         model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
-        # Check if model is already cached locally (in backup/data/models)
+        # Check if model is already cached locally (in data/models/embedding)
         project_root = Path(__file__).parent.parent.parent
-        hf_cache = Path(os.environ.get('HF_HOME', project_root / "backup" / "data" / "models"))
+        hf_cache = Path(os.environ.get('HF_HOME', project_root / "data" / "models" / "embedding"))
         model_cache_dir = hf_cache / "hub" / "models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2"
 
         # Helper function to load with timeout
@@ -277,7 +277,7 @@ class RAGEngine:
             except Exception as e2:
                 logger.error(f"✗ Failed to load from official HuggingFace: {e2}")
                 logger.error("Embedding model unavailable - knowledge base search will be disabled")
-                logger.error("Please ensure the model is downloaded to backup/data/models/")
+                logger.error("Please ensure the model is downloaded to data/models/embedding/")
                 raise
 
     def _initialize_vector_store(self):
@@ -408,34 +408,15 @@ class RAGEngine:
         doc_info = self._documents[doc_id]
         logger.info(f"Deleting document: {doc_info['filename']} (id: {doc_id})")
 
-        # Try to delete from Chroma vector store by doc_id
-        try:
-            # Get the Chroma collection
-            chroma_client = chromadb.PersistentClient(path=str(self.vector_store_dir))
-            collection = chroma_client.get_collection("knowledge_base")
+        # Delete from vector store
+        # Note: Chroma doesn't support direct deletion by doc_id in the current version
+        # We'll need to rebuild the index without this document
 
-            # Delete all nodes with this doc_id in metadata
-            # Chroma stores metadata as JSON, so we query by doc_id
-            try:
-                # Try to delete by metadata filter (Chroma >= 0.4.0)
-                collection.delete(where={"doc_id": doc_id})
-                logger.info(f"Deleted vectors for document {doc_id} from Chroma")
-            except Exception as filter_error:
-                # If metadata filter doesn't work, invalidate index to force rebuild
-                logger.debug(f"Could not delete by metadata filter: {filter_error}")
-                logger.info("Will invalidate index to trigger rebuild on next search")
-        except Exception as e:
-            logger.warning(f"Failed to delete from vector store: {e}")
-            logger.info("Will invalidate index to trigger rebuild on next search")
-
-        # Remove from metadata
+        # For now, just remove from metadata
         del self._documents[doc_id]
         self._save_documents_metadata()
 
-        # Invalidate index to force rebuild on next search
-        # This ensures the deleted document won't appear in search results
-        self._index = None
-        logger.info(f"Index invalidated - will rebuild on next search without document {doc_id}")
+        # TODO: Rebuild index without deleted document
 
         logger.info(f"Document deleted: {doc_id}")
 

@@ -14,9 +14,9 @@ langchain-openai>=0.0.5
 langchain-community>=0.0.10
 langchain-experimental>=0.0.40
 
-# LangGraph for Tree of Thoughts reasoning
-langgraph>=0.0.20
-langgraph-checkpoint-sqlite>=0.0.1
+# LangGraph for Tree of Thoughts / PERV / Reflection StateGraph
+langgraph>=1.0.10
+langgraph-checkpoint-sqlite>=3.0.3
 
 # LlamaIndex (RAG)
 llama-index-core>=0.10.0
@@ -37,8 +37,6 @@ python-docx>=1.0.0
 docx2txt>=0.8
 openpyxl>=3.1.0  # XLSX (Excel 2007+) file support
 xlrd>=2.0.0  # XLS (Excel 97-2003) file support
-python-pptx>=0.6.0  # PPTX (PowerPoint 2007+) file support
-graphviz>=0.20.0  # Diagram generation (DOT language)
 sentence-transformers>=2.2.0
 
 # Data Processing & Validation

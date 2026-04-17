@@ -1,9 +1,7 @@
 """
-智能停止功能 - 简化版
+智能停止功能 - 紧急修复
 
-这个模块实现智能工具停止机制：
-1. 简单的基本检查（简单问候、硬编码上限）
-2. 每隔 N 轮让 LLM 评估是否应该停止
+这个模块实现智能工具停止机制，防止无限制的工具调用循环
 """
 
 import logging
@@ -14,41 +12,86 @@ logger = logging.getLogger(__name__)
 
 class SmartToolStopping:
     """
-    智能工具停止机制（简化版）
+    智能工具停止机制
 
     功能：
-    1. 检测简单问候（不应该调用工具）
-    2. LLM 评估信息充分性（每隔几轮）
-    3. 硬编码上限防止死循环
+    1. 检测冗余工具调用（同样的工具重复调用）
+    2. 评估信息充分性（是否已经有足够信息回答）
+    3. 强制停止不必要的工具调用
     """
+
+    # 类变量：在所有实例间共享工具调用历史
+    # 存储 (tool_name, signature) 元组，signature 基于关键参数生成
+    _shared_tool_history: List[tuple] = []
 
     def __init__(
         self,
-        evaluation_interval: int = 5,
-        hard_limit: int = 60,
+        redundancy_window: int = 3,
+        sufficiency_interval: int = 2,
         enable: bool = True
     ):
         """
         初始化智能停止机制
 
         Args:
-            evaluation_interval: 每隔几轮让 LLM 评估一次
-            hard_limit: 硬编码上限，防止死循环
+            redundancy_window: 检测冗余的窗口大小
+            sufficiency_interval: 评估充分性的间隔
             enable: 是否启用
         """
-        self.evaluation_interval = evaluation_interval
-        self.hard_limit = hard_limit
+        self.redundancy_window = redundancy_window
+        self.sufficiency_interval = sufficiency_interval
         self.enable = enable
 
-    def should_stop_before_execution(
+    @property
+    def tool_history(self) -> List[tuple]:
+        """获取工具调用历史（使用类变量）"""
+        return SmartToolStopping._shared_tool_history
+
+    def reset_history(self):
+        """重置工具调用历史（在开始新对话时调用）"""
+        SmartToolStopping._shared_tool_history.clear()
+        logger.debug("[SMART_STOP] 工具调用历史已重置")
+
+    @staticmethod
+    def _make_signature(tool_name: str, tool_args: Dict) -> str:
+        """根据工具名和关键参数生成调用签名，用于区分不同的调用"""
+        if not tool_args:
+            return tool_name
+
+        # read_file: 用 file_path 区分不同文件读取
+        if tool_name == "read_file":
+            return f"read_file:{tool_args.get('file_path', tool_args.get('path', ''))}"
+
+        # terminal: 用 command 区分不同命令
+        if tool_name == "terminal":
+            return f"terminal:{tool_args.get('command', '')}"
+
+        # python_repl: 用 code/query 区分不同代码
+        if tool_name == "python_repl":
+            code = tool_args.get('code', tool_args.get('query', ''))
+            return f"python_repl:{code[:100]}"
+
+        # search_kb: 用 query 区分不同搜索
+        if tool_name == "search_kb":
+            return f"search_kb:{tool_args.get('query', '')}"
+
+        # write_file: 用 file_path 区分
+        if tool_name == "write_file":
+            return f"write_file:{tool_args.get('file_path', tool_args.get('path', ''))}"
+
+        # 其他工具：使用工具名
+        return tool_name
+
+    def should_stop_tool_calling(
         self,
         round_count: int,
         tool_name: str,
         tool_args: Dict,
-        user_message: str
+        user_message: str,
+        current_round_time: float
     ) -> tuple[bool, str]:
         """
-        在工具执行前检查是否应该停止
+        判断是否应该停止工具调用
 
         Returns:
             (should_stop, reason)
@@ -61,185 +104,116 @@ class SmartToolStopping:
             if round_count == 0 and tool_name:
                 return True, "简单问候不需要工具调用"
 
-        return False, ""
+        # 检查 2: 检测冗余工具调用
+        if self._is_redundant_tool_call(tool_name, tool_args):
+            return True, f"工具 {tool_name} 重复调用（最近 {self.redundancy_window} 轮内已使用）"
 
-    async def should_stop_after_execution(
-        self,
-        round_count: int,
-        user_message: str,
-        conversation_messages: List,
-        llm
-    ) -> tuple[bool, str]:
-        """
-        在工具执行后检查是否应该停止
+        # 检查 3: 评估信息充分性
+        if round_count >= self.sufficiency_interval:
+            logger.debug(f"[SMART_STOP] 检查信息充分性：round_count={round_count}, interval={self.sufficiency_interval}, tool={tool_name}")
+            if self._has_sufficient_info(round_count, tool_name):
+                return True, f"已执行 {round_count} 轮，信息已充分，应该生成回答"
 
-        Args:
-            round_count: 当前轮数
-            user_message: 用户原始消息
-            conversation_messages: 对话历史（包含工具调用结果）
-            llm: LLM 实例（用于评估）
-
-        Returns:
-            (should_stop, reason)
-        """
-        if not self.enable:
-            return False, ""
-
-        # 检查 1: 硬编码上限
-        if round_count >= self.hard_limit:
-            return True, f"已达到硬编码上限 {self.hard_limit} 轮"
-
-        # 检查 2: 每隔 N 轮让 LLM 评估
-        if round_count > 0 and round_count % self.evaluation_interval == 0:
-            logger.info(f"[SMART_STOP] 第 {round_count} 轮，让 LLM 评估信息充分性")
-            should_stop = await self._llm_evaluate_sufficiency(
-                user_message,
-                conversation_messages,
-                llm
-            )
-            if should_stop:
-                return True, f"LLM 评估认为已有足够信息回答用户问题"
+        # 检查 4: 避免无限探索
+        if round_count >= 15:
+            return True, f"已达到 {round_count} 轮工具调用，避免过度探索"
 
         return False, ""
 
     def _is_simple_greeting(self, message: str) -> bool:
-        """检测是否为简单问候（整个消息只是问候语，不是包含问候语）"""
-        import re
+        """检测是否为简单问候"""
         message_lower = message.lower().strip()
 
-        # 先检查是否包含请求关键词（有请求就不是简单问候）
+        # 简单问候关键词
+        greetings = [
+            "你好", "hi", "hello", "嗨", "早上好", "下午好", "晚上好",
+            "在吗", "在不在", "你是谁", "what's up", "sup"
+        ]
+
+        # 检查是否包含问候语
+        has_greeting = any(greeting in message_lower for greeting in greetings)
+
+        # 如果没有问候语，肯定不是简单问候
+        if not has_greeting:
+            return False
+
+        # ✅ 修复：检查是否包含请求关键词（如果有，则不是简单问候）
         request_keywords = [
-            "请", "帮我", "搜索", "检索", "查找", "分析", "写", "生成", "能不能", "可不可以",
-            "please", "help", "search", "find", "analyze", "write", "generate", "can you",
-            "arxiv", "论文", "资料", "最新", "recent", "paper", "?", "？"
+            "请", "帮我", "搜索", "检索", "查找", "分析", "写", "生成",
+            "please", "help", "search", "find", "analyze", "write", "generate",
+            "arxiv", "论文", "资料", "最新", "recent", "paper"
         ]
 
         has_request = any(keyword in message_lower for keyword in request_keywords)
+
+        # 如果有请求关键词，不是简单问候
         if has_request:
+            logger.debug(f"[SMART_STOP] 消息包含请求关键词，不是简单问候: {message_lower[:50]}")
             return False
 
-        # 检查消息长度（超过 15 个字符肯定不是简单问候）
+        # ✅ 修复：检查消息长度（简单问候应该很短）
+        # 去除空格和标点后的纯文本
+        import re
         clean_message = re.sub(r'[^\w\u4e00-\u9fff]', '', message_lower)
-        if len(clean_message) > 15:
+
+        # 如果消息很长（>20个字符），不是简单问候
+        if len(clean_message) > 20:
+            logger.debug(f"[SMART_STOP] 消息过长({len(clean_message)}字符)，不是简单问候")
             return False
 
-        # 简单问候列表（完整匹配）
-        simple_greetings = [
-            "你好", "hi", "hello", "嗨", "早上好", "下午好", "晚上好",
-            "在吗", "在不在", "你是谁", "what's up", "sup", "hey"
-        ]
+        # 通过所有检查，确认为简单问候
+        logger.debug(f"[SMART_STOP] 检测到简单问候: {message_lower[:30]}")
+        return True
 
-        # 检查消息是否就是简单的问候语（去除空格和标点后完全匹配）
-        for greeting in simple_greetings:
-            if clean_message == greeting.lower():
+    def _is_redundant_tool_call(self, tool_name: str, tool_args: Dict) -> bool:
+        """检测冗余工具调用（基于工具名+关键参数签名，而非仅工具名）"""
+        signature = self._make_signature(tool_name, tool_args)
+
+        # 添加签名到历史
+        self.tool_history.append((tool_name, signature))
+
+        # 检查窗口内是否有相同的签名重复（同工具+同参数 = 真正冗余）
+        recent = self.tool_history[-self.redundancy_window:]
+        signature_count = sum(1 for _, sig in recent if sig == signature)
+
+        # 同一个签名在窗口内使用超过 2 次 → 真正的冗余
+        if signature_count > 2:
+            logger.warning(f"[SMART_STOP] 检测到冗余工具调用: {tool_name} (signature={signature})")
+            return True
+
+        # 额外检查：同一工具名（不同参数）连续超过 5 次 → 可能陷入了工具循环
+        name_count = sum(1 for name, _ in recent if name == tool_name)
+        extended_window = self.tool_history[-(self.redundancy_window * 2):]
+        extended_name_count = sum(1 for name, _ in extended_window if name == tool_name)
+
+        if extended_name_count > 5:
+            logger.warning(f"[SMART_STOP] 工具 {tool_name} 连续调用 {extended_name_count} 次（不同参数），可能陷入循环")
+            return True
+
+        return False
+
+    def _has_sufficient_info(self, round_count: int, current_tool: str) -> bool:
+        """评估是否已有足够信息"""
+        # 如果已经执行了 10 轮以上的工具调用
+        if round_count >= 10:
+            # 如果当前还在"探索类"工具（terminal, read_file）
+            exploring_tools = ["terminal", "read_file", "search_kb"]
+            if current_tool in exploring_tools:
+                logger.warning(f"[SMART_STOP] 过度探索：第 {round_count} 轮仍在使用探索类工具")
+                return True
+
+        # ✅ 新增：如果已经执行了超过配置的间隔轮数，且仍在探索
+        # 避免无限探索，但允许合理的多轮工具调用
+        if round_count >= self.sufficiency_interval * 2:  # 至少是配置间隔的 2 倍
+            exploring_tools = ["terminal", "read_file", "search_kb"]
+            if current_tool in exploring_tools:
+                logger.warning(f"[SMART_STOP] 已探索 {round_count} 轮，仍在使用探索类工具 {current_tool}")
                 return True
 
         return False
 
-    async def _llm_evaluate_sufficiency(
-        self,
-        user_message: str,
-        conversation_messages: List,
-        llm
-    ) -> bool:
-        """
-        让 LLM 评估当前信息是否充分
-
-        Args:
-            user_message: 用户原始消息
-            conversation_messages: 对话历史
-            llm: LLM 实例
-
-        Returns:
-            True if LLM 认为信息充分，False otherwise
-        """
-        # 构建评估提示
-        evaluation_prompt = f"""你是一个智能助手。请评估当前情况：
-
-用户问题：{user_message}
-
-到目前为止，助手已经执行了多轮工具调用。请评估：
-
-1. 当前的工具调用结果是否已经包含足够的信息来回答用户问题？
-2. 继续调用工具是否可能获得更有价值的信息？
-
-如果已经获得足够信息，回答 "YES"。
-如果还需要更多信息，回答 "NO"。
-
-只回答 YES 或 NO，不要其他内容。"""
-
-        try:
-            from langchain_core.messages import HumanMessage
-
-            response = await llm.ainvoke([HumanMessage(content=evaluation_prompt)])
-            response_text = response.content.lower().strip() if hasattr(response, 'content') else str(response).lower().strip()
-
-            logger.info(f"[SMART_STOP] LLM 评估结果: {response_text}")
-
-            # 检查是否包含 "yes"
-            if "yes" in response_text:
-                logger.info("[SMART_STOP] LLM 认为信息已充分，建议停止")
-                return True
-            else:
-                logger.debug("[SMART_STOP] LLM 认为还需要更多信息")
-                return False
-
-        except Exception as e:
-            logger.error(f"[SMART_STOP] LLM 评估失败: {e}")
-            # 评估失败时不停止，继续执行
-            return False
-
 
 # 便捷函数
-def should_stop_before_execution(
-    settings,
-    round_count: int,
-    tool_name: str,
-    tool_args: Dict,
-    user_message: str
-) -> tuple[bool, str]:
-    """
-    工具执行前检查是否应该停止
-    """
-    if not settings.enable_smart_stopping:
-        return False, ""
-
-    stopper = SmartToolStopping(
-        evaluation_interval=settings.sufficiency_evaluation_interval,
-        hard_limit=settings.max_tool_rounds,
-        enable=True
-    )
-
-    return stopper.should_stop_before_execution(
-        round_count, tool_name, tool_args, user_message
-    )
-
-
-async def should_stop_after_execution(
-    settings,
-    round_count: int,
-    user_message: str,
-    conversation_messages: List,
-    llm
-) -> tuple[bool, str]:
-    """
-    工具执行后检查是否应该停止
-    """
-    if not settings.enable_smart_stopping:
-        return False, ""
-
-    stopper = SmartToolStopping(
-        evaluation_interval=settings.sufficiency_evaluation_interval,
-        hard_limit=settings.max_tool_rounds,
-        enable=True
-    )
-
-    return await stopper.should_stop_after_execution(
-        round_count, user_message, conversation_messages, llm
-    )
-
-
-# 向后兼容的旧函数（保留以便其他地方调用）
 def should_stop_tool_calling(
     settings,
     round_count: int,
@@ -249,8 +223,43 @@ def should_stop_tool_calling(
     current_round_time: float
 ) -> tuple[bool, str]:
     """
-    向后兼容：包装函数，调用 before_execution 版本
+    包装函数，便于在 agent.py 中调用
     """
-    return should_stop_before_execution(
-        settings, round_count, tool_name, tool_args, user_message
+    if not settings.enable_smart_stopping:
+        return False, ""
+
+    stopper = SmartToolStopping(
+        redundancy_window=settings.redundancy_detection_window,
+        sufficiency_interval=settings.sufficiency_evaluation_interval,
+        enable=True
+    )
+
+    return stopper.should_stop_tool_calling(
+        round_count, tool_name, tool_args, user_message, current_round_time
+    )
+
+
+# ── Backward-compatible aliases ──────────────────────────────────────
+
+# should_stop_before_execution was renamed to should_stop_tool_calling
+should_stop_before_execution = should_stop_tool_calling
+
+
+async def should_stop_after_execution(
+    settings,
+    round_count: int,
+    tool_name: str,
+    tool_args: Dict,
+    user_message: str,
+    current_round_time: float,
+    execution_result: Any = None,
+) -> tuple[bool, str]:
+    """Async version of should_stop for post-execution checks.
+
+    Currently delegates to the sync version. Reserved for future
+    post-execution heuristics (e.g., result quality analysis).
+    """
+    return should_stop_tool_calling(
+        settings, round_count, tool_name, tool_args,
+        user_message, current_round_time,
     )

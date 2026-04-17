@@ -262,3 +262,14 @@ def ensure_database(settings: Optional[Settings] = None) -> None:
         logger.info("Database created and initialized")
     else:
         logger.info("Database already exists, skipping initialization")
+
+
+def reset_engine() -> None:
+    """Reset the global engine and session factory.
+
+    Used by tests to ensure clean state between test runs.
+    """
+    global _engine, _session_factory
+    _engine = None
+    _session_factory = None
+    logger.debug("Database engine and session factory reset")

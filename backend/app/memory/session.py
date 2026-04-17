@@ -5,12 +5,15 @@ This module handles storage and retrieval of conversation sessions.
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class SessionManager:
@@ -152,6 +155,7 @@ class SessionManager:
         content: str,
         tool_calls: Optional[List[Dict]] = None,
         images: Optional[List[Dict]] = None,
+        generated_images: Optional[List[Dict]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Add a message to a session.
@@ -190,6 +194,9 @@ class SessionManager:
 
         if images:
             message["images"] = images
+
+        if generated_images:
+            message["generated_images"] = generated_images
 
         session["messages"].append(message)
 
@@ -283,9 +290,25 @@ class SessionManager:
             >>> success = manager.delete_session("some-id")
             >>> print(f"Deleted: {success}")
         """
-        session_file = self.sessions_dir / f"{session_id}.json"
+        # 查找包含该 session_id 的文件（文件名格式为 session-{timestamp}.json）
+        session_file = None
+        for f in self.sessions_dir.glob("session-*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                if data.get("session_id") == session_id:
+                    session_file = f
+                    break
+            except Exception:
+                continue
 
-        if not session_file.exists():
+        # 也尝试直接文件名匹配（兼容旧格式）
+        if session_file is None:
+            direct_path = self.sessions_dir / f"{session_id}.json"
+            if direct_path.exists():
+                session_file = direct_path
+
+        if session_file is None:
+            logger.debug(f"Session file not found for id: {session_id}")
             return False
 
         try:
@@ -333,7 +356,7 @@ class SessionManager:
 
 def get_session_manager() -> SessionManager:
     """
-    Get the global session manager instance.
+    Get the global session manager instance (singleton).
 
     Returns:
         SessionManager instance
@@ -343,4 +366,48 @@ def get_session_manager() -> SessionManager:
         >>> manager = get_session_manager()
         >>> sessions = manager.list_sessions()
     """
-    return SessionManager()
+    global _session_manager_instance
+    if _session_manager_instance is None:
+        _session_manager_instance = SessionManager()
+    return _session_manager_instance
+
+
+async def trigger_pattern_learning(
+    session_id: str,
+    user_query: str,
+    agent_output: str,
+    tool_calls: list[dict] | None = None,
+) -> None:
+    """Trigger pattern learning after a conversation turn completes.
+
+    This is non-critical and will never raise — errors are logged and swallowed.
+
+    Args:
+        session_id: Session identifier
+        user_query: The user's query text
+        agent_output: The agent's response text
+        tool_calls: List of tool call dicts with name/success/duration
+    """
+    try:
+        settings = get_settings()
+        if not getattr(settings, "enable_rl_training", False):
+            return
+
+        from app.memory.auto_learning.reflection.learner import get_pattern_learner
+        learner = get_pattern_learner()
+        if learner is None:
+            return
+
+        await learner.learn_from_execution(
+            session_id=session_id,
+            user_query=user_query,
+            agent_output=agent_output,
+            tool_calls=tool_calls or [],
+        )
+        logger.info(f"[pattern_learning] Triggered for session {session_id}")
+    except Exception as e:
+        logger.debug(f"[pattern_learning] Failed (non-critical): {e}")
+
+
+# Module-level singleton
+_session_manager_instance: Optional[SessionManager] = None

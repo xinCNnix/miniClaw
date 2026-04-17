@@ -133,8 +133,18 @@ PRODUCT_DESIGN_PROFILE = DomainProfile(
         "   - Key features with priority\n"
         "   - Technical feasibility assessment\n"
         "   - Cost/effort estimate\n"
-        "   - Risks and mitigations"
+        "   - Risks and mitigations\n"
+        "\n"
+        "6. TOOL & SKILL USAGE (mandatory for applicable tasks):\n"
+        "   - When the task requires visual output (architecture diagrams, flowcharts, "
+        "charts, wireframes), you MUST call the appropriate tool — do NOT describe "
+        "them in text.\n"
+        "   - Check the Skills list above for relevant capabilities (diagrams, charts, etc.).\n"
+        "   - To activate: read_file(path=\"data/skills/<skill-name>/SKILL.md\"). "
+        "Do NOT reimplement skill logic with python_repl/terminal.\n"
+        "   - When the task is pure analysis (no visual/output needed), text-only is fine.\n"
     ),
+    required_tools=["read_file"],  # Skill 调用依赖 read_file
     evaluator_instruction=(
         "Additional evaluation rules for product design:\n"
         "\n"
@@ -158,6 +168,16 @@ PRODUCT_DESIGN_PROFILE = DomainProfile(
         "- Final answer must include: problem statement, personas, functional\n"
         "  requirements, non-functional requirements, MVP scope, success\n"
         "  metrics, rollout plan"
+    ),
+    synthesis_instruction=(
+        "You are composing the final product design document from completed analysis.\n"
+        "\n"
+        "RULES:\n"
+        "1. The reasoning steps and tool results are ALREADY provided below.\n"
+        "2. Do NOT reference any tools or write code.\n"
+        "3. Organize into structured sections: Overview, Requirements, User Stories, MVP Scope, Risks.\n"
+        "4. Preserve key metrics and data from tool results.\n"
+        "5. Output in the same language as the user query."
     ),
     preferred_output_schema={
         "type": "object",

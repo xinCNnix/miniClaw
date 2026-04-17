@@ -15,9 +15,6 @@ interface MessageListProps {
 export function MessageList({ messages, thinkingEvents = [], isLoading = false }: MessageListProps) {
   const { t } = useTranslation()
 
-  // Debug logging to track renders
-  console.log('[MessageList] Render called with', messages.length, 'messages')
-
   // Check if there are any ToT events
   const hasToTEvents = thinkingEvents.some(event => event.type.startsWith('tot_'))
 
@@ -40,38 +37,53 @@ export function MessageList({ messages, thinkingEvents = [], isLoading = false }
     )
   }
 
+  // 旧代码：每个 assistant 消息前都渲染思维树，历史消息多时导致卡顿
+  // 新代码：只为当前最后一条消息显示思维过程，避免历史消息重复渲染导致卡顿
+  const lastMsgIndex = messages.length - 1
+
   return (
     <div className="space-y-4">
-      {messages.map((message, index) => {
-        // Generate a stable key using message.id or a combination of role and timestamp
-        const messageKey = message.id || `${message.role}-${message.timestamp}`
-
-        return (
-          <div key={messageKey}>
-            {/* Show thinking chain before assistant messages */}
-            {message.role === "assistant" && thinkingEvents.length > 0 && (
+      {messages.map((message, index) => (
+        <div key={index}>
+          {/* 旧代码：每条 assistant 消息前都显示 ThinkingChainDisplay + ThoughtTree */}
+          {/* {message.role === "assistant" && thinkingEvents.length > 0 && (
             <>
-              {/* Show ToT thought tree if ToT mode */}
               {hasToTEvents && (
-                <ThoughtTree
-                  events={thinkingEvents}
-                  maxHeight="300px"
-                  data-testid="tot-reasoning-step"
-                />
+                <ThoughtTree events={thinkingEvents} maxHeight="300px" data-testid="tot-reasoning-step" />
               )}
+              <ThinkingChainDisplay events={thinkingEvents as any[]} isLoading={isLoading && index === messages.length - 1} />
+            </>
+          )} */}
 
-              {/* Show regular thinking chain */}
+          <MessageBubble message={message} />
+
+          {/* 旧代码：推理期间在 user 消息下方单独显示思维树 */}
+          {/* {message.role === "user" && index === messages.length - 1 && thinkingEvents.length > 0 && isLoading && (
+            <>
+              {hasToTEvents && (
+                <ThoughtTree events={thinkingEvents} maxHeight="300px" data-testid="tot-reasoning-step-inline" />
+              )}
+              <ThinkingChainDisplay events={thinkingEvents as any[]} isLoading={true} />
+            </>
+          )} */}
+
+          {/* ToT 模式：只显示思维树卡片（含想法+工具+评分）；普通模式：显示工具调用链 */}
+          {index === lastMsgIndex && thinkingEvents.length > 0 && (
+            hasToTEvents ? (
+              <ThoughtTree
+                events={thinkingEvents}
+                maxHeight="300px"
+                data-testid="tot-reasoning-step"
+              />
+            ) : (
               <ThinkingChainDisplay
                 events={thinkingEvents as any[]}
-                isLoading={isLoading && index === messages.length - 1}
+                isLoading={isLoading}
               />
-            </>
+            )
           )}
-
-            <MessageBubble message={message} />
-          </div>
-        )
-      })}
+        </div>
+      ))}
     </div>
   )
 }

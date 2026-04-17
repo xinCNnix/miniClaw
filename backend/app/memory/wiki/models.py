@@ -1,0 +1,58 @@
+"""
+Wiki data models for LLM Wiki long-term memory system.
+
+Defines WikiPage, WikiWriteDecision, WikiPatchOp, and WikiRetrievalResult.
+"""
+
+from typing import Any, Dict, List, Literal, Optional, Union
+
+from pydantic import BaseModel, Field
+
+
+class WikiPage(BaseModel):
+    """A Wiki page — the authoritative knowledge unit."""
+
+    page_id: str
+    title: str
+    aliases: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+    summary: str = ""
+    content: str = ""
+    content_hash: str = ""
+    # evidence supports both legacy List[str] and new structured MemoryEvidence (dict)
+    evidence: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
+    confidence: float = 0.7
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    access_count: int = 0
+
+
+class WikiPatchOp(BaseModel):
+    """A single patch operation on a Wiki page."""
+
+    op: Literal["append", "replace_section", "add_section"]
+    section: str
+    text: str
+
+
+class WikiWriteDecision(BaseModel):
+    """LLM decision about whether and how to write to Wiki."""
+
+    should_write: bool = False
+    page_id: Optional[str] = None
+    title: str = ""
+    is_new_page: bool = True
+    ops: List[WikiPatchOp] = Field(default_factory=list)
+    confidence: float = 0.0
+    summary: str = ""
+    tags: List[str] = Field(default_factory=list)
+    aliases: List[str] = Field(default_factory=list)
+
+
+class WikiRetrievalResult(BaseModel):
+    """Result of a Wiki retrieval operation."""
+
+    page_ids: List[str] = Field(default_factory=list)
+    wiki_context: str = ""
+    confidence_scores: Dict[str, float] = Field(default_factory=dict)
+    source: Literal["wiki", "none"] = "none"

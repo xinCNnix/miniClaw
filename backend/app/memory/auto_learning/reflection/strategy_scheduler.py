@@ -500,6 +500,65 @@ class StrategyScheduler:
             "continuous_samples": len(self.continuous_rewards),
         }
 
+    def get_meta_policy_advice(
+        self,
+        nn_model,
+        state_vec,
+        trajectory,
+        tool_index_map: dict | None = None,
+        skill_index_map: dict | None = None,
+    ) -> dict:
+        """Get meta-policy advice from the strategy scheduler.
+
+        Wraps get_strategy() and formats the result as MetaPolicyAdvice.
+
+        Args:
+            nn_model: Neural network model for prediction
+            state_vec: State embedding tensor
+            trajectory: Action trajectory tensor
+            tool_index_map: Optional mapping of tool names to indices
+            skill_index_map: Optional mapping of skill names to indices
+
+        Returns:
+            Dictionary with MetaPolicyAdvice fields:
+                - strategy_type: str
+                - action_id: int | None
+                - prompt_text: str
+                - confidence: float
+                - stage: str
+                - tool_suggestion: str | None
+                - skill_suggestion: str | None
+        """
+        strategy = self.get_strategy(nn_model, state_vec, trajectory)
+
+        # Map action_id back to tool/skill suggestions if maps provided
+        tool_suggestion = None
+        skill_suggestion = None
+        action_id = strategy.get("action_id")
+
+        if action_id is not None and tool_index_map:
+            # Reverse lookup: find tool name from index
+            for name, idx in tool_index_map.items():
+                if idx == action_id:
+                    tool_suggestion = name
+                    break
+
+        if action_id is not None and skill_index_map:
+            for name, idx in skill_index_map.items():
+                if idx == action_id:
+                    skill_suggestion = name
+                    break
+
+        return {
+            "strategy_type": strategy["strategy_type"],
+            "action_id": action_id,
+            "prompt_text": strategy.get("prompt_text", ""),
+            "confidence": strategy.get("confidence", 0.0),
+            "stage": strategy.get("stage", self.current_stage),
+            "tool_suggestion": tool_suggestion,
+            "skill_suggestion": skill_suggestion,
+        }
+
 
 # Singleton instance
 _strategy_scheduler_instance: StrategyScheduler | None = None

@@ -4,7 +4,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from auto_learning.nodes import PatternState
+from app.memory.auto_learning.nodes import PatternState
 
 logger = logging.getLogger(__name__)
 

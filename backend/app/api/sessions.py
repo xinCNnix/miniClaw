@@ -56,9 +56,25 @@ async def list_sessions() -> SessionListResponse:
         session_manager = get_session_manager()
         sessions = session_manager.list_sessions()
 
+        # Deduplicate by session_id (keep the one with most recent updated_at)
+        seen: dict[str, int] = {}
+        deduped: list = []
+        for i, s in enumerate(sessions):
+            sid = s["session_id"] if isinstance(s, dict) else s.session_id
+            if sid in seen:
+                prev_idx = seen[sid]
+                prev = deduped[prev_idx]
+                prev_time = (prev.get("updated_at", "") or "") if isinstance(prev, dict) else (getattr(prev, "updated_at", "") or "")
+                curr_time = (s.get("updated_at", "") or "") if isinstance(s, dict) else (getattr(s, "updated_at", "") or "")
+                if curr_time > prev_time:
+                    deduped[prev_idx] = s
+            else:
+                seen[sid] = len(deduped)
+                deduped.append(s)
+
         return SessionListResponse(
-            sessions=sessions,
-            total=len(sessions),
+            sessions=deduped,
+            total=len(deduped),
         )
 
     except Exception as e:

@@ -82,9 +82,33 @@ GENERIC_PROFILE = DomainProfile(
     generator_instruction=(
         "Follow systematic reasoning: decompose into subtasks, generate "
         "multiple candidates, evaluate tradeoffs, propose verification steps. "
-        "Make assumptions explicit. Avoid handwaving."
+        "Make assumptions explicit. Avoid handwaving.\n"
+        "\n"
+        "TOOL & SKILL USAGE (mandatory for applicable tasks):\n"
+        "1. When the task requires output you cannot produce directly in text "
+        "(visualizations, images, diagrams, code execution results, file operations, "
+        "web content retrieval), you MUST call the appropriate tool.\n"
+        "2. Check the Available Tools and Skills listed above. Match the task need "
+        "to the tool/skill capability — do NOT skip tools and describe output in text.\n"
+        "3. To activate a Skill: read_file(path=\"data/skills/<skill-name>/SKILL.md\"). "
+        "The system auto-executes the skill. Do NOT reimplement skill logic with other tools.\n"
+        "4. DO NOT generate inline URLs, base64 data, or pseudo-code to simulate "
+        "tool output. If a tool exists for the job, USE IT.\n"
+        "5. When no tool/Skill is needed (pure reasoning/analysis), text-only thoughts are fine.\n"
     ),
+    # required_tools is set below via required_tools parameter
+    required_tools=["read_file"],  # Skill 调用依赖 read_file
     evaluator_instruction="",
     termination_instruction="",
+    synthesis_instruction=(
+        "You are composing the final answer from completed reasoning steps.\n"
+        "\n"
+        "RULES:\n"
+        "1. The reasoning steps and tool results are ALREADY provided below.\n"
+        "2. If tool results contain images (markdown format), include them directly.\n"
+        "3. Do NOT write any code or reference any tools.\n"
+        "4. Provide a clear, comprehensive answer based on the reasoning process.\n"
+        "5. Output in the same language as the user query."
+    ),
     preferred_output_schema={},
 )

@@ -17,35 +17,6 @@ from app.memory.auto_learning.reflection.strategy_mapper import StrategyMapper
 
 logger = logging.getLogger(__name__)
 
-# Action ID mapping: deterministic keyword matching for suggestion → strategy ID
-_ACTION_KEYWORDS: dict[int, list[str]] = {
-    0: ["简洁", "直接", "concise", "direct"],
-    1: ["详细", "步骤", "step", "detail"],
-    2: ["工具", "收集信息", "tool", "gather"],
-    3: ["分析", "深入", "analyze"],
-    4: ["多种", "方案", "alternatives", "solution"],
-    5: ["验证", "确认", "verify", "caution"],
-    6: ["代码", "示例", "code", "example"],
-    7: ["实用", "可执行", "practical", "actionable"],
-    8: ["边缘", "异常", "edge case"],
-    9: ["历史", "背景", "history", "background"],
-    10: ["类比", "比喻", "analogy"],
-    15: ["结构化", "格式", "structured", "format"],
-    17: ["注意", "关键", "important"],
-    19: ["最佳实践", "陷阱", "best practice", "pitfall"],
-}
-
-
-def _map_suggestion_to_action(suggestions: list[str]) -> int:
-    """Map reflection suggestions to a deterministic action ID (0-19)."""
-    if not suggestions:
-        return 0
-    text = suggestions[0].lower()
-    for action_id, keywords in _ACTION_KEYWORDS.items():
-        if any(kw in text for kw in keywords):
-            return action_id
-    return 0
-
 
 class PatternLearner:
     """Main coordinator for reflection-driven pattern learning.
@@ -71,7 +42,7 @@ class PatternLearner:
         reflection_engine: ReflectionEngine | None = None,
         reward_model: RewardModel | None = None,
         pattern_extractor: PatternExtractor | None = None,
-        buffer = None,  # ReplayBuffer instance
+        buffer = None,  # EnhancedReplayBuffer instance
         rl_trainer = None,  # RLTrainer instance
         enable_rl: bool = False,
     ) -> None:
@@ -111,7 +82,6 @@ class PatternLearner:
         agent_output: str,
         tool_calls: list[dict],
         execution_time: float = 0.0,
-        pre_computed_reflection: ReflectionResult | None = None,
     ) -> LearningResult:
         """Learn from agent execution.
 
@@ -143,17 +113,13 @@ class PatternLearner:
 
         try:
             # Step 1: Reflect on execution
-            if pre_computed_reflection is not None:
-                logger.debug("Step 1: Using pre-computed reflection result")
-                reflection = pre_computed_reflection
-            else:
-                logger.debug("Step 1: Running reflection analysis")
-                reflection = await self.reflection_engine.reflect(
-                    user_query=user_query,
-                    agent_output=agent_output,
-                    tool_calls=tool_calls,
-                    execution_time=execution_time,
-                )
+            logger.debug("Step 1: Running reflection analysis")
+            reflection = await self.reflection_engine.reflect(
+                user_query=user_query,
+                agent_output=agent_output,
+                tool_calls=tool_calls,
+                execution_time=execution_time,
+            )
 
             # Step 2: Compute reward
             logger.debug("Step 2: Computing reward")
@@ -201,32 +167,25 @@ class PatternLearner:
                     import torch
 
                     from app.memory.auto_learning.nn import get_pattern_nn
-                    from app.memory.auto_learning.advanced.tool_tokenizer import tokenize_tool_calls
                     from app.memory.auto_learning.reflection.strategy_scheduler import (
                         get_strategy_scheduler,
                     )
-                    from app.memory.auto_learning.utils import get_embedder
 
-                    # Step 4a: Real trajectory tokens from tool calls
-                    trajectory_tokens = tokenize_tool_calls(tool_calls)
+                    # Create trajectory tokens (simplified version)
+                    # In production, this should be derived from actual tool call sequence
+                    trajectory_tokens = torch.zeros(128, dtype=torch.long)  # Placeholder
 
-                    # Step 4b: Real state embedding from user query
-                    try:
-                        embedder = get_embedder()
-                        embedding_array = embedder.encode(user_query)
-                        state_embedding = torch.tensor(embedding_array, dtype=torch.float32)
-                    except Exception as emb_err:
-                        logger.warning(f"Embedder not available, skipping RL training: {emb_err}")
-                        return LearningResult(
-                            reflection=reflection,
-                            reward=reward,
-                            pattern_extracted=pattern_extracted,
-                            pattern_id=pattern_id,
-                            training_triggered=False,
-                        )
+                    # Encode state from user query
+                    # Use simple hash-based encoding for now (production should use embedding manager)
+                    state_embedding = torch.randn(256)  # Placeholder for actual embedding
 
-                    # Step 4c: Deterministic action ID mapping
-                    action_id = _map_suggestion_to_action(reflection.suggestions)
+                    # Map suggestion to action ID
+                    if reflection.suggestions:
+                        # Use first suggestion to determine action
+                        suggestion_text = reflection.suggestions[0]
+                        action_id = hash(suggestion_text) % 20  # Map to 0-19
+                    else:
+                        action_id = 0  # Default action
 
                     # Add to buffer
                     self.buffer.add(
@@ -259,7 +218,7 @@ class PatternLearner:
                         scheduler.update_episode_count(len(self.buffer.get_all_episode_ids()))
 
                         # Report performance to scheduler
-                        strategy_type = "nn_prediction"
+                        strategy_type = "nn_prediction"  # Simplified
                         scheduler.report_performance(
                             strategy_type=strategy_type,
                             reward=reward.total_reward,
@@ -353,6 +312,9 @@ _pattern_learner_instance: PatternLearner | None = None
 def get_pattern_learner() -> PatternLearner:
     """Get the global pattern learner instance.
 
+    Reads RL training configuration from Settings to determine
+    whether to enable RL-based learning.
+
     Returns:
         PatternLearner: Global pattern learner instance
 
@@ -363,7 +325,37 @@ def get_pattern_learner() -> PatternLearner:
     global _pattern_learner_instance
 
     if _pattern_learner_instance is None:
-        _pattern_learner_instance = PatternLearner()
+        from app.config import get_settings
+        settings = get_settings()
+        enable_rl = getattr(settings, "enable_rl_training", False)
+
+        buffer = None
+        rl_trainer = None
+        if enable_rl:
+            try:
+                from app.memory.auto_learning.advanced.buffer import EnhancedReplayBuffer
+                from app.memory.auto_learning.advanced.rl_trainer import RLTrainer
+                from app.memory.auto_learning.nn import get_pattern_nn
+                nn_model = get_pattern_nn()
+                buffer = EnhancedReplayBuffer(
+                    capacity=getattr(settings, "rl_batch_size", 32),
+                    enable_trajectory=True,
+                    prioritized=True,
+                )
+                rl_trainer = RLTrainer(model=nn_model)
+            except ImportError as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"[auto_learning] RL components not available, disabling RL: {e}"
+                )
+                enable_rl = False
+
+        _pattern_learner_instance = PatternLearner(
+            buffer=buffer,
+            rl_trainer=rl_trainer,
+            enable_rl=enable_rl,
+        )
+        logger.info(f"[auto_learning] PatternLearner initialized with enable_rl={enable_rl}")
 
     return _pattern_learner_instance
 

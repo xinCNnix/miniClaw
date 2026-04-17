@@ -4,6 +4,9 @@ FastAPI Application Entry Point
 This is the main entry point for the miniClaw backend API.
 """
 
+import sys
+sys.dont_write_bytecode = True
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +20,7 @@ from typing import Callable
 
 from app.config import get_settings
 from app.logging_config import setup_logging
-from app.api import chat_router, files_router, sessions_router, debug_config
+from app.api import chat_router, files_router, sessions_router
 from app.api import config as config_api
 from app.api import python_repl as python_repl_api
 from app.api import knowledge_base
@@ -26,6 +29,8 @@ from app.api import memory as memory_api
 from app.api import websocket as websocket_api
 from app.api import memory_sync as memory_sync_api
 from app.api import embedding as embedding_api
+from app.api import media as media_api
+from app.api import wiki as wiki_api
 
 
 # Configure logging
@@ -122,17 +127,6 @@ async def startup_event():
     logger.info(f"LLM Provider: {settings.llm_provider}")
     logger.info(f"CORS Origins: {settings.cors_origins}")
 
-    # Initialize DI container
-    try:
-        from app.core.container import setup_container
-
-        container = setup_container()
-        logger.info("Service container initialized successfully")
-        logger.info("Registered services: LLMProvider, EmbeddingProvider, VectorStore, MessageHistoryStore, AgentManager")
-    except Exception as e:
-        logger.error(f"Failed to initialize service container: {e}", exc_info=True)
-        logger.warning("Application will continue with direct instantiation")
-
     # Create necessary directories
     import os
     from pathlib import Path
@@ -162,6 +156,15 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Failed to generate SKILLS_SNAPSHOT.md: {e}")
 
+    # Recover MediaRegistry from existing output files
+    try:
+        from app.core.media import get_registry
+        registry = get_registry()
+        recovered = registry.register_existing_files()
+        logger.info(f"MediaRegistry recovery: {recovered} files re-registered")
+    except Exception as e:
+        logger.warning(f"MediaRegistry recovery failed: {e}")
+
     # Initialize agent (warmup)
     try:
         from app.tools import CORE_TOOLS
@@ -190,6 +193,21 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Failed to start embedding warmup: {e}")
 
+    # Start MemoryJanitor for periodic decay/cleanup (红线4)
+    try:
+        if getattr(settings, "memory_decay_cron_hours", 0) > 0:
+            from app.memory.engine.cron import get_memory_janitor
+            janitor = get_memory_janitor()
+            interval = settings.memory_decay_cron_hours * 3600
+            asyncio.create_task(janitor.run_periodically(interval))
+            logger.info(
+                f"MemoryJanitor started (interval={settings.memory_decay_cron_hours}h)"
+            )
+        else:
+            logger.info("MemoryJanitor disabled (memory_decay_cron_hours=0)")
+    except Exception as e:
+        logger.warning(f"Failed to start MemoryJanitor: {e}")
+
 
 async def _warmup_embedding_model(embedding_manager, timeout: int):
     """
@@ -217,16 +235,6 @@ async def _warmup_embedding_model(embedding_manager, timeout: int):
 async def shutdown_event():
     """Run application shutdown tasks."""
     logger.info(f"Shutting down {settings.app_name}")
-
-    # Reset DI container
-    try:
-        from app.core.container import get_container
-
-        container = get_container()
-        container.reset()
-        logger.info("Service container reset successfully")
-    except Exception as e:
-        logger.warning(f"Failed to reset service container: {e}")
 
 
 # Root endpoint
@@ -299,7 +307,8 @@ app.include_router(memory_api.router, prefix="/api")
 app.include_router(memory_sync_api.router)
 app.include_router(websocket_api.router, prefix="/api")
 app.include_router(embedding_api.router, prefix="/api/embedding")
-app.include_router(debug_config.router, prefix="/api")  # Debug endpoint
+app.include_router(media_api.router, prefix="/api/media")
+app.include_router(wiki_api.router, prefix="/api")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ This module provides the main chat endpoint with SSE streaming support.
 """
 
 import json
+import re
 import asyncio
 import logging
 import time
@@ -18,7 +19,11 @@ from app.core.tools import get_registered_tools
 from app.memory.prompts import build_system_prompt
 from app.memory.session import get_session_manager
 from app.skills.bootstrap import bootstrap_skills
-from app.logging_config import AgentExecutionLogger, get_agent_logger
+# from app.logging_config import AgentExecutionLogger, get_agent_logger
+from app.core.trajectory import AgentExecutionLogger
+from app.logging_config import get_agent_logger
+from app.core.tot.router import ToTOrchestrator
+from app.core.perv.orchestrator import get_orchestrator as get_perv_orchestrator
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -116,6 +121,20 @@ def reset_agent_manager() -> None:
         reset_memory_manager()
     except Exception as e:
         logger.warning(f"Failed to reset memory manager: {e}")
+
+    # 重置 memory retriever（持有 RAG 引擎引用）
+    try:
+        from app.memory.retriever_factory import reset_memory_retriever
+        reset_memory_retriever()
+    except Exception as e:
+        logger.warning(f"Failed to reset memory retriever: {e}")
+
+    # 重置统一评估器（缓存了 LLM 实例）
+    try:
+        from app.core.reflection.evaluator import reset_unified_evaluator
+        reset_unified_evaluator()
+    except Exception as e:
+        logger.warning(f"Failed to reset unified evaluator: {e}")
 
 
 def format_sse_event(event: ChatEvent) -> str:
@@ -261,10 +280,7 @@ async def chat_stream_generator(
         SSE formatted strings
     """
     # Start execution logging
-    with AgentExecutionLogger(
-        f"chat_{request.session_id}",
-        session_id=request.session_id,
-    ) as exec_logger:
+    with AgentExecutionLogger(f"chat_{request.session_id}") as exec_logger:
         try:
             logger.info(f"New chat request - Session: {request.session_id}")
             logger.info(f"User message: {request.message[:200]}...")
@@ -380,8 +396,9 @@ async def chat_stream_generator(
             event_count = 0
             tool_call_count = 0
             assistant_message_parts = []  # Collect assistant response for saving
-            tool_call_timestamps: dict[str, float] = {}  # Track start time per tool name
+            collected_images = []  # Collect generated_images from tool outputs
 
+            # ── 直接流式输出（无自动 PERV 重路由）──
             async for event in agent.astream(
                 messages=messages,
                 system_prompt=system_prompt,
@@ -395,11 +412,9 @@ async def chat_stream_generator(
                 if event_type == "tool_call":
                     tool_call_count += 1
                     tool_calls = event.get("tool_calls", [])
-                    import time as _time
                     for tc in tool_calls:
                         tc_name = tc.get("name", "unknown")
                         tc_args = tc.get("arguments", {})
-                        tool_call_timestamps[tc_name] = _time.time()
                         exec_logger.log_tool_call(tc_name, tc_args)
                         logger.info(f"Tool call: {tc_name}")
 
@@ -408,25 +423,25 @@ async def chat_stream_generator(
                     output = event.get("output", "")
                     status = event.get("status", "unknown")
                     success = status == "success"
-                    # Calculate duration from tool_call event
-                    import time as _time
-                    start_ts = tool_call_timestamps.pop(tool_name, None)
-                    duration = (_time.time() - start_ts) if start_ts else None
-                    exec_logger.log_tool_result(tool_name, output, success, duration=duration)
+                    exec_logger.log_tool_result(tool_name, output, success)
                     logger.info(f"Tool output: {tool_name} - {status}")
+                    # Collect structured generated_images from v2 pipeline
+                    gen_images = event.get("generated_images")
+                    if gen_images:
+                        collected_images.extend(gen_images)
+                    # Legacy compat: collect base64-embedded images
+                    if output and "data:image/" in output:
+                        assistant_message_parts.append(f"\n\n{output}\n\n")
 
                 elif event_type == "content_delta":
                     content = event.get("content", "")
                     logger.debug(f"Content delta: {len(content)} chars")
-                    # Collect assistant response for saving
-                    assistant_message_parts.append(content)
-                    logger.debug(f"Content delta: {len(content)} chars")
+                    if content:
+                        assistant_message_parts.append(content)
 
-                yield format_sse_event(
-                    ChatEvent(**event)
-                )
+                yield format_sse_event(ChatEvent(**event))
 
-            logger.info(f"Agent stream completed. Total events: {event_count}, Tool calls: {tool_call_count}")
+            logger.info(f"[Chat] Stream: {tool_call_count} tool_calls, {len(collected_images)} images collected")
 
             # Save user message to session
             session_manager.add_message(
@@ -439,12 +454,49 @@ async def chat_stream_generator(
             # Save assistant response to session (if any)
             if assistant_message_parts:
                 assistant_full_response = "".join(assistant_message_parts)
+                # Resolve any remaining media path references
+                try:
+                    from app.core.media import resolve_media
+                    from app.core.media.watcher import scan_and_register
+                    scan_and_register(max_age_seconds=120)
+                    if collected_images:
+                        # Images already tracked via generated_images pipeline;
+                        # just register files without re-resolving text paths
+                        logger.info("[Media] Skipping resolve_media (images via generated_images pipeline)")
+                    else:
+                        assistant_full_response = resolve_media(
+                            assistant_full_response,
+                            session_id=request.session_id or ""
+                        )
+                        logger.info("[Media] Resolved media in assistant response")
+                except Exception as e:
+                    logger.warning(f"[Media] resolve_media failed: {e}")
+                # Strip base64 data URIs before saving to session
+                save_content = re.sub(
+                    r'data:image/[a-zA-Z+]+;base64,[A-Za-z0-9+/=\n]+',
+                    '[图片已生成]',
+                    assistant_full_response,
+                )
+                save_content = re.sub(
+                    r'!\[[^\]]*\]\(data:image/[^)]{100,}\)',
+                    '[图片已生成]',
+                    save_content,
+                )
+                # Build session message with generated_images
+                session_msg = {
+                    "role": "assistant",
+                    "content": save_content,
+                }
+                if collected_images:
+                    session_msg["generated_images"] = collected_images
                 session_manager.add_message(
                     session_id=request.session_id,
-                    role="assistant",
-                    content=assistant_full_response,
+                    **session_msg,
                 )
-                logger.info(f"Saved assistant response: {len(assistant_full_response)} chars")
+                logger.info(
+                    "[Chat] Session saved: %d images, content %d→%d chars",
+                    len(collected_images), len(assistant_full_response), len(save_content),
+                )
             else:
                 logger.warning("No assistant response to save")
 
@@ -461,31 +513,6 @@ async def chat_stream_generator(
                 import logging
                 logging.warning(f"Failed to trigger memory extraction: {e}")
 
-            # Save trajectory to file (if enabled)
-            try:
-                from app.config import get_settings
-                from pathlib import Path
-                import time
-
-                settings = get_settings()
-
-                if settings.enable_agent_trajectory and settings.save_trajectory_to_file:
-                    # Create trajectory directory
-                    trajectory_dir = Path(settings.trajectory_log_dir)
-                    trajectory_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Generate filename with timestamp
-                    timestamp = time.strftime("%Y%m%d-%H%M%S")
-                    filename = f"trajectory_{request.session_id}_{timestamp}.json"
-                    filepath = trajectory_dir / filename
-
-                    # Save trajectory
-                    exec_logger.save_trajectory(str(filepath))
-                    logger.info(f"Saved trajectory to {filepath}")
-            except Exception as e:
-                import logging
-                logging.warning(f"Failed to save trajectory: {e}")
-
             # Send done event
             yield format_sse_event(
                 ChatEvent(type="done")
@@ -499,6 +526,86 @@ async def chat_stream_generator(
                     error=str(e),
                 )
             )
+
+
+async def tot_stream_generator(
+    request: ChatRequest,
+    orchestrator: ToTOrchestrator,
+    system_prompt: str,
+) -> AsyncIterator[str]:
+    """Tier 1: ToT 流生成器。enable_tot=True 强制走 ToT。"""
+    assistant_parts = []
+    collected_images = []
+
+    try:
+        async for event in orchestrator.process_request(
+            messages=[{"role": "user", "content": request.message}],
+            system_prompt=system_prompt,
+            enable_tot=True,
+        ):
+            event_type = event.get("type", "unknown")
+
+            if event_type == "content_delta":
+                assistant_parts.append(event.get("content", ""))
+            # elif event_type == "tool_output":
+            #     # [DEPRECATED] ToT 模式下 tool_output 事件极少触发，图片通过 tot_tools_executed 独立传输
+            #     # 保留此路径可能导致图片重复（同时出现在 assistantContent 和 collected_images）
+            #     gen_images = event.get("generated_images")
+            #     if gen_images:
+            #         collected_images.extend(gen_images)
+            #     output = event.get("output", "")
+            #     if output and "data:image/" in output:
+            #         assistant_parts.append(f"\n\n{output}\n\n")
+            # BUG FIX: tot_tools_executed 事件也可能包含 generated_images（skill 生成的图片）
+            elif event_type == "tot_tools_executed":
+                gen_images = event.get("generated_images")
+                if gen_images:
+                    collected_images.extend(gen_images)
+                    logger.info("[ToT] Collected %d image(s) from tot_tools_executed", len(gen_images))
+
+            yield format_sse_event(ChatEvent(**event))
+
+    except Exception as e:
+        logger.error("[ToT] Stream error: %s", e, exc_info=True)
+        yield format_sse_event(ChatEvent(type="error", error=str(e)))
+
+    # Session 保存（复用图片管线逻辑）
+    session_manager = get_session_manager()
+    session_manager.add_message(
+        session_id=request.session_id, role="user",
+        content=request.message, images=request.images,
+    )
+    if assistant_parts:
+        assistant_full_response = "".join(assistant_parts)
+        try:
+            from app.core.media import resolve_media
+            from app.core.media.watcher import scan_and_register
+            scan_and_register(max_age_seconds=120)
+            if not collected_images:
+                assistant_full_response = resolve_media(
+                    assistant_full_response,
+                    session_id=request.session_id or ""
+                )
+        except Exception as e:
+            logger.warning(f"[Media] resolve_media failed: {e}")
+        save_content = re.sub(
+            r'data:image/[a-zA-Z+]+;base64,[A-Za-z0-9+/=\n]+',
+            '[图片已生成]', assistant_full_response,
+        )
+        save_content = re.sub(
+            r'!\[[^\]]*\]\(data:image/[^)]{100,}\)',
+            '[图片已生成]', save_content,
+        )
+        session_msg = {"role": "assistant", "content": save_content}
+        if collected_images:
+            session_msg["generated_images"] = collected_images
+        session_manager.add_message(session_id=request.session_id, **session_msg)
+    # Memory extraction
+    try:
+        if get_settings().enable_memory_extraction:
+            asyncio.create_task(_background_memory_extraction(request.session_id))
+    except Exception:
+        pass
 
 
 @router.post("")
@@ -591,6 +698,9 @@ async def chat(request: ChatRequest):
     Raises:
         HTTPException: If agent initialization fails
     """
+    # 请求入口日志（即使后续操作阻塞也能记录）
+    logger.info("[Chat] Request received: session=%s, message=%s", request.session_id, request.message[:100])
+
     # Ensure skills are loaded
     bootstrap_skills()
 
@@ -675,10 +785,50 @@ async def chat(request: ChatRequest):
 
     # Build system prompt
     try:
+        # Wiki retrieval (if enabled)
+        wiki_memory_context = ""
+        settings = get_settings()
+
+        # --- Memory Engine retrieval path (Phase 5) ---
+        if getattr(settings, "enable_memory_engine", False):
+            try:
+                from app.memory.engine.graph import get_memory_engine
+                engine = get_memory_engine()
+                # Use retrieval chain
+                result = await engine["retrieve"].ainvoke({
+                    "query": request.message,
+                    "session_id": request.session_id or "",
+                    "user_id": "",
+                })
+                wiki_memory_context = result.get("memory_context", "")
+                logger.info(
+                    f"[MemoryEngine] Retrieval complete, context_len={len(wiki_memory_context)}"
+                )
+            except Exception as e:
+                logger.warning(f"MemoryEngine retrieval failed, falling back: {e}")
+                # Fall through to standard retrieval below
+                if settings.enable_wiki:
+                    try:
+                        from app.memory.wiki.retriever import get_wiki_retriever
+                        wiki_retriever = get_wiki_retriever()
+                        wiki_memory_context = await wiki_retriever.retrieve_with_fallback(request.message)
+                    except Exception as e2:
+                        logging.warning(f"Wiki retrieval fallback failed: {e2}")
+        elif settings.enable_wiki:
+            try:
+                from app.memory.wiki.retriever import get_wiki_retriever
+                wiki_retriever = get_wiki_retriever()
+                wiki_memory_context = await wiki_retriever.retrieve_with_fallback(request.message)
+            except Exception as e:
+                import logging
+                logging.warning(f"Wiki retrieval failed: {e}")
+
         system_prompt = build_system_prompt(
             session_data={
                 "user_context": request.context,
-                "recent_history": recent_history,
+                "conversation_context": recent_history,      # prompts.py 期望的 key
+                "semantic_history": recent_history,           # prompts.py 期望的 key
+                "wiki_memory_context": wiki_memory_context,   # Wiki 长期记忆
             }
         )
     except Exception as e:
@@ -689,15 +839,122 @@ async def chat(request: ChatRequest):
 
     # Get agent manager
     agent = get_agent_manager()
+    settings = get_settings()
+    user_context = request.context or {}
+    logger.info("[Routing] Request received: message=%s, context=%s", request.message[:50], user_context)
+    research_mode = user_context.get("research_mode")
+    deep_planning = user_context.get("deep_planning", False)
 
-    # Return SSE stream
+    # ── Tier 1: ToT（深度研究模式 → 100% ToT）──
+    if research_mode and research_mode in settings.thinking_modes:
+        try:
+            tc = settings.thinking_modes[research_mode]
+            tot_depth = tc.get("depth", settings.tot_max_depth)
+            tot_branching = tc.get("branching", settings.tot_branching_factor)
+            custom_branching = user_context.get("branching_factor")
+            if custom_branching:
+                tot_branching = int(custom_branching)
+            custom_depth = user_context.get("depth")
+            if custom_depth:
+                tot_depth = int(custom_depth)
+
+            logger.info("[Routing] Tier 1: ToT (research=%s, depth=%d, branching=%d)",
+                        research_mode, tot_depth, tot_branching)
+
+            orchestrator = ToTOrchestrator(
+                agent_manager=agent,
+                max_depth=tot_depth,
+                branching_factor=tot_branching,
+            )
+            return StreamingResponse(
+                tot_stream_generator(request, orchestrator, system_prompt),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
+        except Exception as e:
+            logger.error("[Routing] ToT failed, falling to Tier 3: %s", e, exc_info=True)
+            # 异常 → 直接降级到 Tier 3
+
+    # ── Tier 2: PERV（深度规划模式，用户手动触发）──
+    elif deep_planning:
+        try:
+            perv_orch = get_perv_orchestrator(
+                agent_manager=agent,
+                session_id=request.session_id or "default",
+            )
+            logger.info("[Routing] Tier 2: PERV Deep Planning (user-triggered)")
+
+            async def _perv_stream():
+                """PERV 深度规划模式流（用户主动触发，不自动降级）。"""
+                assistant_parts = []
+                collected_images = []
+
+                async for event in perv_orch.process_request(
+                    [{"role": "user", "content": request.message}],
+                    system_prompt,
+                    force_mode="plan_execute",
+                ):
+                    et = event.get("type", "")
+                    if et == "content_delta":
+                        assistant_parts.append(event.get("content", ""))
+                    elif et == "tool_output":
+                        gi = event.get("generated_images")
+                        if gi:
+                            collected_images.extend(gi)
+                        out = event.get("output", "")
+                        if out and "data:image/" in out:
+                            assistant_parts.append(f"\n\n{out}\n\n")
+
+                    yield format_sse_event(ChatEvent(**event))
+
+                # PERV 完成 → 保存 session
+                session_manager = get_session_manager()
+                session_manager.add_message(
+                    session_id=request.session_id, role="user",
+                    content=request.message, images=request.images,
+                )
+                if assistant_parts:
+                    full_resp = "".join(assistant_parts)
+                    try:
+                        from app.core.media import resolve_media
+                        from app.core.media.watcher import scan_and_register
+                        scan_and_register(max_age_seconds=120)
+                        if not collected_images:
+                            full_resp = resolve_media(full_resp, session_id=request.session_id or "")
+                    except Exception as e:
+                        logger.warning(f"[Media] resolve_media failed: {e}")
+                    save_content = re.sub(
+                        r'data:image/[a-zA-Z+]+;base64,[A-Za-z0-9+/=\n]+',
+                        '[图片已生成]', full_resp,
+                    )
+                    save_content = re.sub(
+                        r'!\[[^\]]*\]\(data:image/[^)]{100,}\)',
+                        '[图片已生成]', save_content,
+                    )
+                    session_msg = {"role": "assistant", "content": save_content}
+                    if collected_images:
+                        session_msg["generated_images"] = collected_images
+                    session_manager.add_message(session_id=request.session_id, **session_msg)
+                try:
+                    if get_settings().enable_memory_extraction:
+                        asyncio.create_task(_background_memory_extraction(request.session_id))
+                except Exception:
+                    pass
+
+            return StreamingResponse(
+                _perv_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
+        except Exception as e:
+            logger.error("[Routing] PERV Deep Planning failed, falling to Tier 3: %s", e, exc_info=True)
+
+    # ── Tier 3: 普通 Agent（兜底）──
+    logger.info("[Routing] Tier 3: Normal agent")
     return StreamingResponse(
         chat_stream_generator(request, agent, system_prompt),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
 
@@ -768,6 +1025,47 @@ async def _background_memory_extraction(session_id: str) -> None:
                 f"Background memory extraction completed for {session_id}: "
                 f"{len(result.memories)} memories extracted"
             )
+
+        # Memory Engine ingest path (Phase 5)
+        from app.config import get_settings
+        settings = get_settings()
+        if getattr(settings, "enable_memory_engine", False):
+            try:
+                from app.memory.engine.graph import get_memory_engine
+                import hashlib
+                import json
+                import time
+
+                engine = get_memory_engine()
+
+                # Build events from session messages
+                from app.memory.session import get_session_manager
+                session_mgr = get_session_manager()
+                session_data = session_mgr.load_session(session_id)
+                messages = session_data.get("messages", []) if session_data else []
+
+                events = []
+                for msg in messages[-20:]:  # Last 20 messages
+                    payload = {
+                        "role": msg.get("role", "unknown"),
+                        "content": msg.get("content", "")[:500],
+                    }
+                    events.append({
+                        "event_type": msg.get("role", "unknown"),
+                        "source_type": "conversation",
+                        "payload": payload,
+                        "ts": msg.get("timestamp", time.time()),
+                    })
+
+                if events:
+                    await engine["ingest"].ainvoke({
+                        "session_id": session_id,
+                        "new_events": events,
+                    })
+                    logger.info(f"[MemoryEngine] Ingested {len(events)} events for session {session_id}")
+
+            except Exception as e:
+                logger.warning(f"MemoryEngine ingest failed for {session_id}: {e}")
 
     except Exception as e:
         logger.error(f"Background memory extraction failed for {session_id}: {e}", exc_info=True)

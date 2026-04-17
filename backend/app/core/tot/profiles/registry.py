@@ -1,12 +1,18 @@
 """
 Domain Profile Registry and Task Type Detection.
 
-Provides a registry of all available domain profiles and a keyword-based
-task type detector for automatic profile selection.
+Provides a registry of all available domain profiles, a keyword-based
+task type detector, and an LLM-based classifier for automatic profile
+selection.
 """
 
+import json
 import logging
-from typing import Dict, List, Tuple
+import re
+from typing import Any, Dict, List, Tuple
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from .base import DomainProfile
 from .generic import GENERIC_PROFILE
@@ -27,6 +33,7 @@ PROFILE_REGISTRY: Dict[str, DomainProfile] = {
 
 TASK_KEYWORDS: Dict[str, List[str]] = {
     "math_proof": [
+        # 英文
         "prove",
         "proof",
         "derive",
@@ -41,8 +48,29 @@ TASK_KEYWORDS: Dict[str, List[str]] = {
         "quantifier",
         "formal logic",
         "axiom",
+        # 中文
+        "证明",
+        "推导",
+        "定理",
+        "引理",
+        "推论",
+        "命题",
+        "归纳",
+        "反证",
+        "公理",
+        "数学归纳",
+        "充分必要",
+        "充要条件",
+        "当且仅当",
+        "恒等式",
+        "不等式证明",
+        "勾股定理",
+        "费马",
+        "欧拉",
+        "黎曼",
     ],
     "research_writing": [
+        # 英文
         "research report",
         "literature review",
         "survey",
@@ -50,8 +78,19 @@ TASK_KEYWORDS: Dict[str, List[str]] = {
         "meta-analysis",
         "state of the art",
         "comparative study",
+        # 中文
+        "研究报告",
+        "文献综述",
+        "综述报告",
+        "系统性综述",
+        "调研报告",
+        "比较研究",
+        "前沿综述",
+        "现状分析",
+        "综述性",
     ],
     "coding_debug": [
+        # 英文
         "debug",
         "bug",
         "error",
@@ -63,8 +102,23 @@ TASK_KEYWORDS: Dict[str, List[str]] = {
         "regression",
         "segmentation fault",
         "null pointer",
+        # 中文
+        "调试",
+        "报错",
+        "报错信息",
+        "异常",
+        "修复",
+        "崩溃",
+        "空指针",
+        "段错误",
+        "回溯",
+        "堆栈",
+        "堆栈跟踪",
+        "代码报错",
+        "运行报错",
     ],
     "product_design": [
+        # 英文
         "PRD",
         "product design",
         "requirements document",
@@ -73,6 +127,17 @@ TASK_KEYWORDS: Dict[str, List[str]] = {
         "product proposal",
         "feature specification",
         "product roadmap",
+        # 中文
+        "需求文档",
+        "产品需求",
+        "用户故事",
+        "产品提案",
+        "功能规格",
+        "产品路线",
+        "最小可行",
+        "产品设计",
+        "需求规格",
+        "功能设计",
     ],
 }
 
@@ -144,3 +209,121 @@ def get_profile(task_type: str) -> DomainProfile:
         The matching DomainProfile, or GENERIC_PROFILE if not found.
     """
     return PROFILE_REGISTRY.get(task_type, GENERIC_PROFILE)
+
+
+# ---------------------------------------------------------------------------
+# LLM-based task classification
+# ---------------------------------------------------------------------------
+
+_TASK_CLASSIFICATION_SYSTEM_PROMPT = """\
+You are a task-type classifier for an AI reasoning system.  Classify the user \
+query into exactly ONE of these categories:
+
+- "research"         -- deep research, comprehensive investigation, literature review, \
+systematic analysis requiring evidence gathering and source citation
+- "math_proof"       -- mathematical proofs, derivations, theorems, formal logic
+- "research_writing" -- research reports, literature reviews, surveys, analysis
+- "coding_debug"     -- debugging, error diagnosis, code fixing, stack traces
+- "product_design"   -- PRDs, product proposals, feature specs, user stories
+
+If the query does not clearly fit any category, respond with "generic".
+
+IMPORTANT: Use "research" when the query asks for deep investigation, systematic \
+review, or evidence-based analysis. Use "research_writing" only for writing-focused \
+research output tasks.
+
+Return ONLY a JSON object with exactly these keys:
+{
+  "task_type": "<one of: research, math_proof, research_writing, coding_debug, product_design, generic>",
+  "confidence": <float between 0.0 and 1.0>,
+  "rationale": "<one-sentence explanation>"
+}
+
+Do not include any text outside the JSON object."""
+
+_VALID_TASK_TYPES = set(PROFILE_REGISTRY.keys()) | {"research"}
+
+
+def _parse_json_output(text: str) -> dict:
+    """Extract JSON object from LLM text output."""
+    # Try direct parse first
+    text = text.strip()
+    if text.startswith("```"):
+        # Strip code fences
+        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+        text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Try to find JSON object in text
+    match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+async def detect_task_type_llm(
+    query: str,
+    llm: BaseChatModel,
+) -> Tuple[str, Dict[str, Any]]:
+    """Classify a user query into a domain profile using the LLM.
+
+    Sends a single-shot classification request to the LLM and parses the
+    JSON response.  On any failure (LLM error, parse error, unknown
+    category) falls back to the keyword-based :func:`detect_task_type`.
+
+    Args:
+        query: The user query text to classify (any language).
+        llm: A LangChain ``BaseChatModel`` instance used for classification.
+
+    Returns:
+        Tuple of ``(profile_name, match_details)`` with the same shape as
+        :func:`detect_task_type`.
+    """
+    try:
+        messages = [
+            SystemMessage(content=_TASK_CLASSIFICATION_SYSTEM_PROMPT),
+            HumanMessage(content=f"Query: {query}"),
+        ]
+        response = await llm.ainvoke(messages)
+        raw_text = response.content if hasattr(response, "content") else str(response)
+
+        parsed = _parse_json_output(raw_text)
+        task_type = parsed.get("task_type", "")
+        confidence = float(parsed.get("confidence", 0.0))
+        rationale = parsed.get("rationale", "")
+
+        if task_type in _VALID_TASK_TYPES:
+            match_details: Dict[str, Any] = {
+                "selected": task_type,
+                "confidence": confidence,
+                "rationale": (
+                    f"[LLM] {rationale} (confidence={confidence:.2f})"
+                    if rationale
+                    else f"[LLM] Classified as '{task_type}' (confidence={confidence:.2f})"
+                ),
+                "method": "llm_classification",
+            }
+            logger.info(f"[ToT] LLM profile detection: {match_details['rationale']}")
+            return task_type, match_details
+
+        logger.warning(
+            f"[ToT] LLM returned unknown task_type '{task_type}', "
+            f"falling back to keyword detection"
+        )
+
+    except Exception as exc:
+        logger.warning(
+            f"[ToT] LLM task classification failed, falling back to "
+            f"keyword detection: {exc}"
+        )
+
+    # Fallback: use the existing keyword-based detector.
+    task_type, match_details = detect_task_type(query)
+    match_details["method"] = "keyword_fallback"
+    return task_type, match_details

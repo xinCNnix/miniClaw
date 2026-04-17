@@ -11,6 +11,7 @@ from .registry import (
     PROFILE_REGISTRY,
     TASK_KEYWORDS,
     detect_task_type,
+    detect_task_type_llm,
     get_profile,
 )
 from .generic import GENERIC_PROFILE
@@ -24,6 +25,7 @@ __all__ = [
     "PROFILE_REGISTRY",
     "TASK_KEYWORDS",
     "detect_task_type",
+    "detect_task_type_llm",
     "get_profile",
     "GENERIC_PROFILE",
     "MATH_PROOF_PROFILE",

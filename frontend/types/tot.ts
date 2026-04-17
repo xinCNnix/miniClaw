@@ -76,7 +76,8 @@ export interface ToTTreeUpdateEvent extends BaseSSEEvent {
 
 export interface ToTReasoningCompleteEvent extends BaseSSEEvent {
   type: 'tot_reasoning_complete'
-  final_answer: string
+  final_answer_length: number
+  final_answer_preview: string
   best_path: string[]
   total_thoughts: number
 }

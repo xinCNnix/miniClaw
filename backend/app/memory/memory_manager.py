@@ -100,6 +100,16 @@ class MemoryManager:
                 await self.update_long_term_memory(extraction_result.memories)
                 logger.info(f"Updated long-term memory from session {session_id}")
 
+            # Step 5: Write to Wiki (if enabled)
+            if self.settings.enable_wiki and extraction_result.memories:
+                await self.write_to_wiki(session_id, extraction_result)
+                logger.info(f"Wrote to Wiki from session {session_id}")
+
+            # Step 6: Write to KG (if enabled)
+            if self.settings.enable_kg and extraction_result.memories:
+                await self.write_to_kg(session_id, extraction_result)
+                logger.info(f"Wrote to KG from session {session_id}")
+
             return extraction_result
 
         except Exception as e:
@@ -242,6 +252,122 @@ class MemoryManager:
 
         updater = LongTermMemoryUpdater()
         await updater.update_from_memories(long_term_memories)
+
+    async def write_to_wiki(self, session_id: str, extraction_result) -> None:
+        """Write conversation content to LLM Wiki if appropriate.
+
+        Args:
+            session_id: Session ID
+            extraction_result: MemoryExtractionResult from extractor
+        """
+        try:
+            from app.memory.wiki.store import get_wiki_store
+            from app.memory.wiki.write_judge import WikiWriteJudge
+
+            wiki_store = get_wiki_store()
+            await wiki_store.initialize()
+
+            # Load conversation text
+            session = self.session_manager.load_session(session_id)
+            if not session:
+                return
+
+            messages = session.get("messages", [])
+            conversation_text = "\n".join(
+                f"{m.get('role', 'user')}: {m.get('content', '')}"
+                for m in messages[-20:]  # Last 20 messages
+            )
+
+            if not conversation_text.strip():
+                return
+
+            # Get existing pages summary
+            existing_pages_summary = await wiki_store.get_pages_summary()
+
+            # Judge whether to write
+            judge = WikiWriteJudge()
+            decision = await judge.judge(conversation_text, existing_pages_summary)
+
+            if not decision.should_write:
+                logger.info(f"Wiki judge decided not to write for session {session_id}")
+                return
+
+            if decision.confidence < self.settings.wiki_write_threshold:
+                logger.info(
+                    f"Wiki write confidence {decision.confidence:.2f} "
+                    f"below threshold {self.settings.wiki_write_threshold}"
+                )
+                return
+
+            # Anti-hallucination validation
+            if self.settings.wiki_evidence_required:
+                await judge.validate_evidence(decision, conversation_text)
+
+            if decision.is_new_page:
+                # Create new page
+                content = judge.build_new_page_content(decision)
+                from app.memory.wiki.models import WikiPage
+
+                page = WikiPage(
+                    title=decision.title,
+                    summary=decision.summary,
+                    content=content,
+                    tags=decision.tags,
+                    aliases=decision.aliases,
+                    confidence=decision.confidence,
+                )
+                await wiki_store.create_page(page)
+                logger.info(f"Wiki page created: {decision.title}")
+            else:
+                # Update existing page
+                if decision.page_id:
+                    await wiki_store.update_page(decision.page_id, decision.ops)
+                    # Check if consolidation needed
+                    await wiki_store.consolidate_page(decision.page_id)
+                    logger.info(f"Wiki page updated: {decision.page_id}")
+
+        except Exception as e:
+            logger.error(f"Wiki write failed for session {session_id}: {e}", exc_info=True)
+
+    async def write_to_kg(self, session_id: str, extraction_result) -> None:
+        """Write conversation content to Knowledge Graph.
+
+        Uses the existing KGWritePipeline which orchestrates:
+        extractor → entity_resolver → conflict_resolver → store.
+
+        Args:
+            session_id: Session ID
+            extraction_result: MemoryExtractionResult from extractor
+        """
+        try:
+            from app.memory.kg.write_pipeline import KGWritePipeline
+            from app.memory.kg import get_kg_store
+
+            kg_store = get_kg_store()
+            if kg_store is None:
+                logger.warning("KG store not available, skipping KG write")
+                return
+
+            # Build conversation text from session
+            session = self.session_manager.load_session(session_id)
+            if not session:
+                return
+
+            messages = session.get("messages", [])
+            conversation_text = "\n".join(
+                f"{m.get('role', 'user')}: {m.get('content', '')}"
+                for m in messages[-20:]
+            )
+
+            if not conversation_text.strip():
+                return
+
+            pipeline = KGWritePipeline()
+            await pipeline.process_conversation(conversation_text, session_id)
+            logger.info(f"KG write pipeline completed for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"KG write failed for session {session_id}: {e}", exc_info=True)
 
 
 # Singleton instance

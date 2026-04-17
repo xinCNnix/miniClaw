@@ -8,18 +8,12 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner"
 import { cn } from "@/lib/utils"
 import type { Message, ThinkingEvent } from "@/types/chat"
 
-interface ImageAttachment {
-  file: File
-  preview: string
-  base64?: string
-}
-
 interface ChatAreaProps {
   className?: string
   messages: Message[]
   thinkingEvents: ThinkingEvent[]
   isLoading: boolean
-  onSendMessage: (content: string, images?: ImageAttachment[], context?: Record<string, unknown>) => Promise<void>
+  onSendMessage: (content: string, images?: unknown[], context?: Record<string, any>) => void
   onStopGeneration?: () => void
 }
 
@@ -35,27 +29,51 @@ export function ChatArea({
   const [researchMode, setResearchMode] = useState<'chat' | 'research'>('chat')
   const [thinkingMode, setThinkingMode] = useState<'heuristic' | 'analytical' | 'exhaustive'>('heuristic')
   const [branchingFactor, setBranchingFactor] = useState<number>(3)
+  const [searchDepth, setSearchDepth] = useState<number>(3)
+  const [deepPlanning, setDeepPlanning] = useState<boolean>(false)
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, thinkingEvents])
 
-  const handleSendMessage = async (content: string, images?: unknown[]) => {
-    // Pass research mode context if enabled
-    const context = researchMode === 'research'
-      ? {
-          research_mode: thinkingMode,
-          branching_factor: branchingFactor
-        }
-      : undefined
-    await onSendMessage(content, images as ImageAttachment[], context)
+  const handleSendMessage = (content: string, images?: unknown[]) => {
+    // Build context based on active mode
+    const context: Record<string, any> = {}
+    if (researchMode === 'research') {
+      context.research_mode = thinkingMode
+      context.branching_factor = branchingFactor
+      context.depth = searchDepth
+    }
+    if (deepPlanning) {
+      context.deep_planning = true
+    }
+    onSendMessage(content, images, Object.keys(context).length > 0 ? context : undefined)
   }
 
-  const handleThinkingModeChange = (mode: 'heuristic' | 'analytical' | 'exhaustive', branching?: number) => {
+  const handleThinkingModeChange = (mode: 'heuristic' | 'analytical' | 'exhaustive', branching?: number, depth?: number) => {
     setThinkingMode(mode)
     if (branching !== undefined) {
       setBranchingFactor(branching)
+    }
+    if (depth !== undefined) {
+      setSearchDepth(depth)
+    }
+  }
+
+  const handleResearchModeChange = (mode: 'chat' | 'research') => {
+    setResearchMode(mode)
+    // 互斥：开启深度研究时关闭深度规划
+    if (mode === 'research' && deepPlanning) {
+      setDeepPlanning(false)
+    }
+  }
+
+  const handleDeepPlanningChange = (enabled: boolean) => {
+    setDeepPlanning(enabled)
+    // 互斥：开启深度规划时关闭深度研究
+    if (enabled && researchMode === 'research') {
+      setResearchMode('chat')
     }
   }
 
@@ -70,8 +88,9 @@ export function ChatArea({
       <div className="border-b border-gray-200 bg-white bg-opacity-50">
         <div className="max-w-3xl mx-auto p-2">
           <ResearchModeToggle
-            onModeChange={setResearchMode}
+            onModeChange={handleResearchModeChange}
             onThinkingModeChange={handleThinkingModeChange}
+            onDeepPlanningChange={handleDeepPlanningChange}
             disabled={isLoading}
           />
         </div>

@@ -9,10 +9,7 @@ from typing import List, Dict, Any, Literal, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
-import logging
 from dataclasses import dataclass
-
-logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -66,7 +63,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "miniClaw"
-    app_version: str = "0.2.0"
+    app_version: str = "0.1.0"
     debug: bool = False
 
     # Server
@@ -141,12 +138,7 @@ class Settings(BaseSettings):
     # Tool Security
     terminal_root_dir: str = "."  # Restrict terminal commands to this directory
     terminal_blocked_commands: list[str] = [
-        # 🔧 Enhanced security - Block all dangerous deletion commands
-        "rm -rf",  # Block ALL rm -rf commands regardless of path
-        "rm -r",   # Block recursive rm
-        "rm -f",   # Block force rm
-
-        # Original root-level protections
+        # Unix/Linux dangerous commands
         "rm -rf /",
         "rm -rf /.*",
         "rm -rf /*",
@@ -164,16 +156,6 @@ class Settings(BaseSettings):
         "chmod -r 777 /etc",
         "chmod -r 777 /etc/shadow",
         "chown -r root:root",
-
-        # Malicious download commands
-        "curl http://evil.com",
-        "curl http://malware.com",
-        "curl http://hack.com",
-        "wget http://evil.com",
-        "wget http://malware.com",
-        "curl https://evil.com",
-        "curl https://malware.com",
-        "curl https://hack.com",
 
         # Windows dangerous commands
         "format",  # Format disk
@@ -244,57 +226,26 @@ class Settings(BaseSettings):
     ]
     tot_checkpoint_path: str = "data/tot_checkpoints.db"
 
-    # ========== ToT Tool Call Validation (Phase 1) ==========
-    tot_enable_tool_validation: bool = True
-    tot_max_tool_retries: int = 2
-
-    # ========== ToT Smart Stopping (Phase 2 - Relaxed for Research) ==========
-    # NOTE: In ToT mode, each depth level has branching_factor thoughts
-    # Total nodes can be: 1 + BF + BF^2 + BF^3 + ... = (BF^(depth+1) - 1) / (BF - 1)
-    # Example: BF=3, depth=4 → 1+3+9+27+81 = 121 nodes
-    # Each node may have 1-2 tool calls, so total can be 100-300+ calls!
-    tot_enable_smart_stopping: bool = True
-    tot_min_successful_tools: int = 50  # Relaxed: 50 successful tools (not 10)
-    tot_redundancy_window: int = 15  # Increased: 15-tool window (not 5)
-    tot_score_plateau_threshold: float = 0.3  # More sensitive plateau detection
-    tot_enable_llm_evaluation: bool = True  # Can be disabled to save cost
-    tot_llm_eval_interval: int = 3  # Evaluate every N depths (not rounds)
-    tot_max_depth_multiplier: float = 2.0  # Allow exceeding max_depth by this factor
-
-    # ========== ToT Path Selection (Phase 3 - Beam Search + Backtracking) ==========
-    tot_enable_beam_search: bool = True  # Enable Beam Search (vs greedy)
-    tot_beam_width: int = 3  # Number of candidate paths to maintain
-    tot_path_score_weights: dict = {
-        "eval_score": 0.5,  # Average evaluation score
-        "tool_success": 0.3,  # Tool execution success rate
-        "diversity": 0.15,  # Information diversity
-        "length_penalty": 0.05  # Shorter paths preferred
-    }
-    tot_enable_backtracking: bool = True  # Enable backtracking on failures
-    tot_backtrack_failure_threshold: float = 0.5  # Failure rate to trigger backtrack
-    tot_backtrack_plateau_threshold: float = 0.3  # Score improvement to trigger backtrack
-
-    # ========== ToT Tool Result Cache (Phase 4) ==========
-    tot_enable_cache: bool = True  # Enable tool result caching
-    tot_cache_ttl: int = 300  # Cache TTL in seconds (5 minutes)
-
     # Deep Research Configuration
     enable_deep_research: bool = True
     research_mode: Literal["heuristic", "analytical", "exhaustive"] = "heuristic"
 
     # Thinking Mode Configurations
-    # heuristic (启发式推理): 2层深度 × 3层宽度 = 最多9个思维节点，快速启发式探索
-    # analytical (分析式推理): 4层深度 × 4层宽度 = 最多256个思维节点，系统性分析
-    # exhaustive (穷尽式推理): 7层深度 × 6层宽度 = 最多279,936个思维节点，极限穷尽
+    # heuristic (启发式推理): 3层深度 × 3层宽度 = 约18个节点，兼顾覆盖和深度
+    # analytical (分析式推理): 4层深度 × 4层宽度 = 约48个节点，系统性分析
+    # exhaustive (穷尽式推理): 8层深度 × 4层宽度 = 约90个节点，深度优先搜索
+    # 注：深度比宽度更能逼近最优解，宽度超过3后冗余分支增多、收益递减
     thinking_modes: dict = {
         "heuristic": {
-            "depth": 2,
+            "depth": 3,  # 原 2 → 3: 增加 1 层深度，成本仅增 50%
             "branching": 3,
-            "timeout": 180,
+            "timeout": 240,  # 原 180 → 240: 配合深度增加适当延长
             "name": "启发式推理 (Heuristic Reasoning)",
             "name_en": "Heuristic Reasoning",
             "description": "快速探索问题核心，适用于时间敏感的查询",
-            "icon": "⚡"
+            "icon": "⚡",
+            "beam_search": True,  # Global Beam 束搜索，False 退回贪心模式
+            "max_tool_steps_per_node": 5,  # 执行节点局部循环最大步数
         },
         "analytical": {
             "depth": 4,
@@ -303,16 +254,20 @@ class Settings(BaseSettings):
             "name": "分析式推理 (Analytical Reasoning)",
             "name_en": "Analytical Reasoning",
             "description": "平衡深度与广度，适用于复杂问题分析",
-            "icon": "🔬"
+            "icon": "🔬",
+            "beam_search": True,
+            "max_tool_steps_per_node": 5,
         },
         "exhaustive": {
-            "depth": 7,
-            "branching": 6,
+            "depth": 8,  # 原 7 → 8: 更深的搜索
+            "branching": 4,  # 原 6 → 4: 降低宽度减少冗余分支，省下 token 投入深度
             "timeout": 36000,
             "name": "穷尽式推理 (Exhaustive Reasoning)",
             "name_en": "Exhaustive Reasoning",
-            "description": "极限探索所有可能性，适用于深度研究",
-            "icon": "🌌"
+            "description": "深度优先穷尽搜索，适用于深度研究",
+            "icon": "🌌",
+            "beam_search": True,
+            "max_tool_steps_per_node": 5,
         }
     }
 
@@ -365,10 +320,14 @@ class Settings(BaseSettings):
     max_prompt_length: int = 20000  # characters
     truncation_marker: str = "...[truncated]"
 
+    # LLM Request Timeout
+    llm_request_timeout: int = 120  # 单次 LLM API 调用超时（秒），防止 API 无响应时永久挂起
+
     # Agent Execution
-    max_tool_rounds: int = 60  # Maximum rounds of tool calling (hard limit to prevent infinite loops)
-    enable_smart_stopping: bool = True  # Enable intelligent tool stopping
-    sufficiency_evaluation_interval: int = 5  # Let LLM evaluate every N rounds
+    max_tool_rounds: int = 50  # Maximum rounds of tool calling (prevents infinite loops)
+    enable_smart_stopping: bool = True  # Enable intelligent tool stopping (redundancy detection + sufficiency evaluation)
+    redundancy_detection_window: int = 3  # Window size for detecting redundant tool calls
+    sufficiency_evaluation_interval: int = 5  # Evaluate information sufficiency every N rounds (increased from 2)
 
     # Performance Optimization: Caching
     enable_semantic_search_cache: bool = True
@@ -393,6 +352,7 @@ class Settings(BaseSettings):
     prompt_token_budget: dict = {
         "SKILLS_SNAPSHOT": 2000,
         "AGENTS": 1500,
+        "WIKI_MEMORY": 1500,
         "CONVERSATION_CONTEXT": 3000,
         "SEMANTIC_HISTORY": 2000,
         "USER": 1000,
@@ -426,7 +386,7 @@ class Settings(BaseSettings):
     # SQLite Database Storage
     memory_db_path: str = "data/memory.db"  # SQLite database file path
     use_sqlite: bool = True  # Use SQLite for memory storage
-    dual_write_mode: bool = False  # Write to both SQLite and JSON (transition period)
+    dual_write_mode: bool = True  # Write to both SQLite and JSON (transition period)
 
     # Markdown File Control
     md_user_max_items: int = 30  # Max items in USER.md
@@ -449,125 +409,95 @@ class Settings(BaseSettings):
     log_to_console: bool = True  # Enable console logging
     log_max_bytes: int = 10 * 1024 * 1024  # Max log file size (10MB)
     log_backup_count: int = 5  # Number of backup files to keep
-    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Log format (without request_id)
-    log_format_with_tracking: str = "%(asctime)s - [RID:%(request_id)s] - %(name)s - %(levelname)s - %(message)s"  # Log format with request tracking
+    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Log format
     debug_agent: bool = True  # Enable detailed agent execution logging
 
-    # ========== Logging System Enhancement Configuration ==========
-
-    # Structured Logging
-    enable_json_logs: bool = False
-    json_log_file: str = "backend.json.log"
-
-    # Agent Execution Trajectory
-    enable_agent_trajectory: bool = True  # Enable Agent trajectory tracking
-    trajectory_log_dir: str = "logs/trajectories"  # Trajectory log directory
-    save_trajectory_to_file: bool = True  # Save trajectory to file
-    max_trajectory_size: int = 10000  # Maximum trajectory records
-
-    # ========== LangChain Callback Configuration ==========
-    # LangChain callback handler for trajectory capture
-    enable_langchain_callbacks: bool = True  # Enable LangChain callback mechanism
-    callback_capture_thoughts: bool = True  # Capture LLM output as thought
-    callback_capture_actions: bool = True  # Capture agent actions
-    callback_capture_results: bool = True  # Capture tool results
-
-    # Sensitive Information Sanitization
-    enable_log_sanitization: bool = True
-    sanitize_user_input: bool = False  # Sanitize user input (may over-sanitize)
-    sanitize_file_paths: bool = True  # Partially sanitize file paths
-
-    # Error Tracking
-    enable_error_context: bool = True
-    capture_locals_in_errors: bool = False  # Capture local variables (use with caution)
-    max_local_vars_to_capture: int = 10  # Maximum local variables to capture
-
-    # Business Metrics
-    enable_business_metrics: bool = True
-    metrics_log_file: str = "metrics.log"
-    metrics_aggregation_interval: int = 60  # Metrics aggregation interval (seconds)
-
-    # Error Aggregation and Alerting
-    enable_error_aggregation: bool = True
-    error_alert_threshold: int = 10  # Errors per time window
-    error_alert_window: int = 60  # Time window in seconds
-
-    # ============================================================
-    # Layered Reflection Trigger Configuration
-    # ============================================================
-
-    # Agent macro-reflection
+    # === Reflection System ===
     enable_agent_reflection: bool = True
-    agent_reflection_quality_threshold: float = 6.0  # Trigger reflection if quality below this
+    agent_reflection_quality_threshold: float = 6.0
+    evaluation_cache_enabled: bool = True
+    enable_reflection_learning: bool = True
 
-    # LLM micro-evaluation
-    tot_llm_eval_interval: int = 3  # Evaluate every N depths
+    # === PERV Enhancement ===
+    perv_router_enabled: bool = True
+    perv_enable_post_learning: bool = True
+    perv_enable_pattern_retrieval: bool = True
+    perv_enable_strategy_injection: bool = True
+    perv_enable_semantic_history: bool = True
 
-    # ============================================================
-    # Structured Reflection Output Configuration
-    # ============================================================
+    # === Meta Policy & TCA ===
+    enable_meta_policy: bool = True
+    enable_tca: bool = True
 
-    # ReflectionResult fields
-    reflection_require_failure_type: bool = True
-    reflection_require_root_cause: bool = True
-    reflection_require_reusable_pattern: bool = False  # Optional
+    # TCA model architecture
+    tca_embed_dim: int = 384
+    tca_hidden_dim: int = 256
+    tca_num_heads: int = 4
+    tca_num_layers: int = 4
+    tca_max_subtasks: int = 5
+    tca_learning_rate: float = 5e-4
+    tca_training_data_dir: str = "data/complexity_training"
+    tca_decompose_threshold: float = 0.5
+    tca_model_path: str = "data/complexity_training/tca_model.pth"
 
-    # Reward calculation
-    reward_quality_weight: float = 0.7  # Quality score weight
-    reward_shaping_weight: float = 0.3  # Shaping reward weight
-
-    # ============================================================
-    # Pattern Memory Configuration
-    # ============================================================
-
-    # Pattern Memory Settings
-    enable_pattern_memory: bool = True
-    pattern_storage_path: str = "data/patterns.json"
-    pattern_nn_path: str = "data/pattern_nn.pth"
-
-    # Embedder Settings
+    # === Auto Learning ===
     pattern_embedder_model_name: str = "all-MiniLM-L6-v2"
-
-    # NN Settings
-    pattern_nn_embed_dim: int = 384
-    pattern_nn_hidden1: int = 256
-    pattern_nn_hidden2: int = 128
-    pattern_nn_num_patterns: int = 64
-    pattern_nn_learning_rate: float = 1e-3
-    pattern_nn_dropout: float = 0.1
-
-    # ============================================================
-    # Event-Driven Streaming Configuration (Phase 4)
-    # ============================================================
-    enable_event_driven_streaming: bool = True  # Enable event-driven streaming architecture
-
-    # ============================================================
-    # Reflection Learning Configuration
-    # ============================================================
-    enable_reflection_learning: bool = False
-    reflection_trigger_threshold: float = 0.5
-    reflection_min_execution_time: float = 1.0
-
-    # ============================================================
-    # RL Training Configuration
-    # ============================================================
-    enable_rl_training: bool = False
+    pattern_storage_path: str = "data/patterns"
+    enable_rl_training: bool = True
     rl_target_update_freq: int = 100
     rl_tau: float = 0.005
     rl_transformer_lr: float = 1e-4
-    rl_mlp_lr: float = 1e-3
-    rl_kl_coef: float = 0.01
+    rl_mlp_lr: float = 3e-4
+    rl_kl_coef: float = 0.1
     rl_prompt_consistency_coef: float = 0.05
     rl_batch_size: int = 32
     rl_gradient_clip: float = 1.0
-
-    # ============================================================
-    # Neural Strategy Configuration
-    # ============================================================
-    enable_neural_strategy: bool = False
+    enable_neural_strategy: bool = True
     neural_strategy_auto_transition: bool = True
-    neural_strategy_performance_threshold: float = 0.7
-    neural_strategy_rollback_on_degradation: bool = True
+
+    # === Memory Retriever ===
+    enable_kg: bool = True
+    # kg_store_backend: Literal["memory", "neo4j"] = "memory"  # BUG: get_kg_store() checks "sqlite"
+    kg_store_backend: Literal["sqlite", "neo4j"] = "sqlite"   # FIXED: match get_kg_store() logic
+    kg_max_triples_per_turn: int = 10
+    kg_confidence_threshold: float = 0.5
+    similarity_threshold: float = 0.7
+    similarity_block_threshold: float = 0.95
+
+    # === LLM Wiki ===
+    enable_wiki: bool = True
+    wiki_pages_dir: str = "data/wiki/pages"
+    wiki_max_page_size: int = 5000
+    wiki_evidence_required: bool = True
+    wiki_write_threshold: float = 0.7
+
+    # === Memory Engine (Phase 2) ===
+    enable_memory_engine: bool = False  # Master switch: use LangGraph engine path
+
+    # === EventLog (Phase 2 — 红线1) ===
+    enable_event_log: bool = False
+    event_log_max_payload_size: int = 10000  # Max payload JSON size in bytes
+
+    # === EntityProfile (Phase 3) ===
+    enable_entity_profile: bool = False
+
+    # === Case Memory (Phase 3) ===
+    enable_case_memory: bool = False
+    case_memory_min_success_score: float = 0.5
+    case_memory_max_cases: int = 1000
+
+    # === Procedural Memory (Phase 3) ===
+    enable_procedural_memory: bool = False
+
+    # === Decay & Cleanup (Phase 4 — 红线4) ===
+    memory_ttl_default_days: int = 90          # Default TTL for memories
+    memory_decay_cron_hours: int = 24           # Decay cycle interval
+    memory_decay_factor: float = 0.01           # exp(-factor * days_old)
+    memory_prune_threshold: float = 0.1         # Vectors below this score get pruned
+
+    # === Session Retention (Phase 4 — 红线4 Session cleanup) ===
+    session_retention_days: int = 30            # Session file retention period
+    session_archive_on_delete: bool = True      # Archive to EventLog before deletion
 
 
 def _load_obfuscated_config() -> None:
@@ -635,10 +565,8 @@ def _load_obfuscated_config() -> None:
                 provider = credentials["_current_provider"]
                 os.environ["LLM_PROVIDER"] = provider
 
-    except Exception as e:
+    except Exception:
         # Silently fail - allows fallback to environment variables
-        # Log at debug level to avoid cluttering normal startup
-        logger.debug(f"Failed to load obfuscated config: {e}. Using environment variables.")
         pass
 
 
@@ -648,8 +576,17 @@ def get_settings() -> Settings:
 
     每次调用都重新加载配置，确保前端设置与后端使用一致。
     """
+    import logging
     _load_obfuscated_config()
-    return Settings()
+    s = Settings()
+    logger = logging.getLogger(__name__)
+    logger.info(
+        f"[config] Features: reflection={s.enable_agent_reflection}, "
+        f"perv_router={s.perv_router_enabled}, meta_policy={s.enable_meta_policy}, "
+        f"tca={s.enable_tca}, rl_training={s.enable_rl_training}, "
+        f"neural_strategy={s.enable_neural_strategy}, kg={s.enable_kg}"
+    )
+    return s
 
 
 def get_available_providers() -> List[Dict[str, Any]]:

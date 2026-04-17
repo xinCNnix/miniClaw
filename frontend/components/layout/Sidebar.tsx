@@ -69,13 +69,9 @@ export function Sidebar({
       {/* Sessions List */}
       <div className="flex-1 overflow-y-auto p-2">
         <div className="space-y-1">
-          {sessions
-            .filter((session, index, self) =>
-              self.findIndex((s) => s.session_id === session.session_id) === index
-            )
-            .map((session) => (
+          {sessions.map((session, index) => (
             <div
-              key={session.session_id}
+              key={`${session.session_id}-${index}`}
               className={cn(
                 "group flex items-center gap-2 p-3 rounded-md cursor-pointer transition-colors",
                 "hover:bg-gray-100",
@@ -86,7 +82,7 @@ export function Sidebar({
               <MessageSquare className="w-4 h-4 flex-shrink-0 text-gray-500" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">
-                  {(session.metadata?.title as string | undefined) || t('sidebar.new_conversation')}
+                  {session.metadata?.title || t('sidebar.new_conversation')}
                 </p>
                 <p className="text-xs text-gray-500">
                   {new Date(session.created_at).toLocaleDateString()}

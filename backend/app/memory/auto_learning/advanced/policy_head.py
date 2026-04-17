@@ -39,6 +39,10 @@ class PolicyValueHead(nn.Module):
         hidden_dim: int = 256,
         num_actions: int = 64,
         dropout: float = 0.1,
+        # Meta policy extensions
+        enable_meta_policy: bool = False,
+        max_tool_slots: int = 20,
+        max_skill_slots: int = 30,
     ) -> None:
         """Initialize PolicyValueHead.
 
@@ -48,6 +52,9 @@ class PolicyValueHead(nn.Module):
             hidden_dim: Hidden layer dimension
             num_actions: Number of discrete action outputs
             dropout: Dropout rate for regularization
+            enable_meta_policy: Enable tool/skill selection heads
+            max_tool_slots: Maximum tool slots (current 6 + 14 reserved)
+            max_skill_slots: Maximum skill slots (current 14 + 16 reserved)
         """
         super().__init__()
 
@@ -55,6 +62,7 @@ class PolicyValueHead(nn.Module):
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
         self.num_actions = num_actions
+        self.enable_meta_policy = enable_meta_policy
 
         # Input dimension = state_dim + latent_dim
         input_dim = state_dim + latent_dim
@@ -75,10 +83,17 @@ class PolicyValueHead(nn.Module):
         # Value head - outputs scalar value estimate
         self.value_head = nn.Linear(hidden_dim, 1)
 
+        # === Meta policy heads (tool/skill selection) ===
+        if enable_meta_policy:
+            self.tool_head = nn.Linear(hidden_dim, max_tool_slots)
+            self.skill_head = nn.Linear(hidden_dim, max_skill_slots)
+            self._max_tool_slots = max_tool_slots
+            self._max_skill_slots = max_skill_slots
+
         logger.info(
             f"Initialized PolicyValueHead: state_dim={state_dim}, "
             f"latent_dim={latent_dim}, hidden_dim={hidden_dim}, "
-            f"num_actions={num_actions}"
+            f"num_actions={num_actions}, enable_meta_policy={enable_meta_policy}"
         )
 
     def forward(
@@ -136,10 +151,22 @@ class PolicyValueHead(nn.Module):
             action_logits = action_logits.squeeze(0)
             value = value.squeeze(0)
 
-        return {
+        output = {
             "action_logits": action_logits,
             "value": value,
         }
+
+        # Meta policy heads: tool and skill selection
+        if self.enable_meta_policy:
+            tool_logits = self.tool_head(h)  # [B, max_tool_slots]
+            skill_logits = self.skill_head(h)  # [B, max_skill_slots]
+            if batch_size == 1:
+                tool_logits = tool_logits.squeeze(0)
+                skill_logits = skill_logits.squeeze(0)
+            output["tool_logits"] = tool_logits
+            output["skill_logits"] = skill_logits
+
+        return output
 
     def get_action_probs(
         self,

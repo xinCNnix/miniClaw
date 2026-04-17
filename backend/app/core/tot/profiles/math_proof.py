@@ -117,6 +117,7 @@ MATH_PROOF_PROFILE = DomainProfile(
             "adjustment": "boost by 0.15 per verified condition",
         },
     ],
+    required_tools=["read_file"],
     output_requirements=[
         "numbered_proof_steps",
         "explicit_justification_per_step",
@@ -156,7 +157,15 @@ MATH_PROOF_PROFILE = DomainProfile(
         "   - Probabilistic language for strict derivation\n"
         "   - Using any theorem without verifying its preconditions\n"
         "\n"
-        "5. ALWAYS state whether you are doing syntactic proof or semantic proof."
+        "5. ALWAYS state whether you are doing syntactic proof or semantic proof.\n"
+        "\n"
+        "6. TOOL & SKILL USAGE (mandatory for applicable tasks):\n"
+        "   - 涉及几何图示/示意图 → 必须 read_file(path=\"data/skills/geometry-plotter/SKILL.md\")\n"
+        "   - 涉及数据图表 → 必须 read_file(path=\"data/skills/chart-plotter/SKILL.md\")\n"
+        "   - 涉及流程图/架构图 → 必须 read_file(path=\"data/skills/diagram-plotter/SKILL.md\")\n"
+        "   - 当任务要求附带示意图时，每个 approach 必须包含对应的 read_file tool_call\n"
+        "   - 证明推理部分用纯文本，但可视化部分必须触发 skill 执行\n"
+        "   - 严禁用 python_repl/terminal 画图，必须通过 skill"
     ),
     evaluator_instruction=(
         "Additional evaluation rules for mathematical proofs:\n"
@@ -184,6 +193,18 @@ MATH_PROOF_PROFILE = DomainProfile(
         "- Do NOT stop on partial proofs without explicit gap analysis\n"
         "- Final answer must include: numbered steps, explicit justification\n"
         "  per step, statement of assumptions, QED conclusion"
+    ),
+    synthesis_instruction=(
+        "You are composing the final mathematical answer from completed reasoning steps.\n"
+        "\n"
+        "RULES:\n"
+        "1. The reasoning steps and tool results are ALREADY provided below.\n"
+        "2. Tool results may contain images in markdown format (![plot_N](data:image/png;base64,...)).\n"
+        "   These images are ALREADY generated — include them directly in your output.\n"
+        "3. Do NOT write any code. Do NOT reference any tools.\n"
+        "4. Organize the proof steps clearly with numbered steps and justification.\n"
+        "5. If images exist, place them at appropriate positions in the answer.\n"
+        "6. Output in the same language as the user query."
     ),
     preferred_output_schema={
         "type": "object",

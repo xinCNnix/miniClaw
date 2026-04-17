@@ -65,6 +65,7 @@ class PatternNN(nn.Module):
         learning_rate: float = 1e-3,
         dropout: float = 0.1,
         enable_advanced: bool = False,
+        enable_meta_policy: bool = False,
     ) -> None:
         """Initialize PatternNN neural network.
 
@@ -76,6 +77,7 @@ class PatternNN(nn.Module):
             learning_rate: Learning rate for Adam optimizer
             dropout: Dropout rate for regularization
             enable_advanced: Enable advanced RL mode (default: False for backward compatibility)
+            enable_meta_policy: Enable meta policy tool/skill heads (requires enable_advanced)
         """
         super().__init__()
 
@@ -84,6 +86,7 @@ class PatternNN(nn.Module):
         self.buffer_size = buffer_size
         self.batch_size = batch_size
         self.enable_advanced = enable_advanced
+        self.enable_meta_policy = enable_meta_policy and enable_advanced
         self.training_mode = "basic" if not enable_advanced else "advanced"
 
         # === Basic mode network (always present for backward compatibility) ===
@@ -114,13 +117,14 @@ class PatternNN(nn.Module):
                 dropout=dropout,
             )
 
-            # Policy-value dual-head network
+            # Policy-value dual-head network (with optional meta policy heads)
             self.policy_value_head = PolicyValueHead(
                 state_dim=embed_dim,
                 latent_dim=128,
                 hidden_dim=256,
                 num_actions=num_patterns,
                 dropout=dropout,
+                enable_meta_policy=self.enable_meta_policy,
             )
 
             # Enhanced replay buffer for advanced mode
@@ -129,10 +133,6 @@ class PatternNN(nn.Module):
                 enable_trajectory=True,
                 prioritized=False,
             )
-
-            # AgentModel wrapper for unified forward interface
-            from app.memory.auto_learning.advanced.agent_model import AgentModel
-            self.agent_model = AgentModel(self.trajectory_encoder, self.policy_value_head)
         else:
             # Simple buffer for basic mode (backward compatible)
             self.buffer: list[tuple[torch.Tensor, int]] = []
@@ -144,7 +144,8 @@ class PatternNN(nn.Module):
         logger.info(
             f"Initialized PatternNN: embed_dim={embed_dim}, "
             f"num_patterns={num_patterns}, buffer_size={buffer_size}, "
-            f"batch_size={batch_size}, enable_advanced={enable_advanced}"
+            f"batch_size={batch_size}, enable_advanced={enable_advanced}, "
+            f"enable_meta_policy={self.enable_meta_policy}"
         )
 
     def forward(
@@ -289,6 +290,7 @@ class PatternNN(nn.Module):
         state: torch.Tensor,
         action: int,
         reward: float,
+        **kwargs,
     ) -> float:
         """Execute one RL training step.
 
@@ -297,6 +299,7 @@ class PatternNN(nn.Module):
             state: Current state
             action: Action taken
             reward: Reward received
+            **kwargs: Optional meta policy targets (target_tool, target_skill, is_call_tool, is_call_skill)
 
         Returns:
             Total loss
@@ -340,6 +343,23 @@ class PatternNN(nn.Module):
             + reinforce_loss * 0.1  # reinforce_coef
             - entropy * 0.01  # entropy_coef
         )
+
+        # === Meta policy losses (tool/skill) ===
+        if self.enable_meta_policy and "tool_logits" in output:
+            target_tool = kwargs.get("target_tool")
+            target_skill = kwargs.get("target_skill")
+            is_call_tool = kwargs.get("is_call_tool", False)
+            is_call_skill = kwargs.get("is_call_skill", False)
+
+            if is_call_tool and target_tool is not None:
+                tool_target = torch.tensor([target_tool], dtype=torch.long, device=state.device)
+                tool_loss = F.cross_entropy(output["tool_logits"].unsqueeze(0), tool_target)
+                total_loss = total_loss + tool_loss * 0.5
+
+            if is_call_skill and target_skill is not None:
+                skill_target = torch.tensor([target_skill], dtype=torch.long, device=state.device)
+                skill_loss = F.cross_entropy(output["skill_logits"].unsqueeze(0), skill_target)
+                total_loss = total_loss + skill_loss * 0.5
 
         # Backward pass
         self.optimizer.zero_grad()
@@ -409,6 +429,7 @@ class PatternNN(nn.Module):
                 "embed_dim": self.embed_dim,
                 "num_patterns": self.num_patterns,
                 "enable_advanced": self.enable_advanced,
+                "enable_meta_policy": self.enable_meta_policy,
                 "training_mode": self.training_mode,
             }
 
@@ -604,37 +625,93 @@ class PatternNN(nn.Module):
         self.training_mode = mode
         logger.info(f"Switched training mode to: {mode}")
 
+    def predict_tool_skill(
+        self,
+        state_vec: torch.Tensor,
+        latent_z: torch.Tensor | None = None,
+        tool_index_map: dict[int, str] | None = None,
+        skill_index_map: dict[int, str] | None = None,
+    ) -> dict:
+        """Predict action type + tool/skill recommendation (meta policy).
 
-_pattern_nn_instance: "PatternNN | None" = None
+        Requires enable_advanced=True and enable_meta_policy=True.
+
+        Args:
+            state_vec: Task embedding [embed_dim]
+            latent_z: Trajectory encoding [hidden_dim] or None (uses zeros)
+            tool_index_map: {slot_index: tool_name} active tool mapping
+            skill_index_map: {slot_index: skill_name} active skill mapping
+
+        Returns:
+            Dict with action_logits, tool_logits, skill_logits, value,
+            recommended_tool (str|None), recommended_skill (str|None)
+
+        Raises:
+            RuntimeError: If meta policy is not enabled
+        """
+        if not self.enable_meta_policy:
+            raise RuntimeError("predict_tool_skill requires enable_meta_policy=True")
+
+        self.eval()
+        with torch.no_grad():
+            if latent_z is None:
+                latent_z = torch.zeros(1, self.trajectory_encoder.hidden_dim, device=state_vec.device)
+
+            output = self.policy_value_head(state_vec, latent_z)
+
+        result = {
+            "action_logits": output["action_logits"],
+            "tool_logits": output.get("tool_logits"),
+            "skill_logits": output.get("skill_logits"),
+            "value": output["value"],
+            "recommended_tool": None,
+            "recommended_skill": None,
+        }
+
+        # Resolve tool recommendation from active slots
+        if tool_index_map and result["tool_logits"] is not None:
+            tool_probs = torch.softmax(result["tool_logits"], dim=-1)
+            # Only consider active slots
+            active_slots = list(tool_index_map.keys())
+            if active_slots:
+                active_probs = tool_probs[active_slots]
+                best_idx = active_slots[active_probs.argmax().item()]
+                result["recommended_tool"] = tool_index_map[best_idx]
+
+        # Resolve skill recommendation from active slots
+        if skill_index_map and result["skill_logits"] is not None:
+            skill_probs = torch.softmax(result["skill_logits"], dim=-1)
+            active_slots = list(skill_index_map.keys())
+            if active_slots:
+                active_probs = skill_probs[active_slots]
+                best_idx = active_slots[active_probs.argmax().item()]
+                result["recommended_skill"] = skill_index_map[best_idx]
+
+        return result
 
 
-def get_pattern_nn(**kwargs) -> "PatternNN | None":
-    """Get PatternNN singleton (advanced mode) for RL pipeline.
+# ── Singleton management ──────────────────────────────────────────────
 
-    Returns None if initialization fails.
+_pattern_nn_instance: PatternNN | None = None
+
+
+def get_pattern_nn(**kwargs) -> PatternNN:
+    """获取 PatternNN 单例。
+
+    Args:
+        **kwargs: 传递给 PatternNN 构造函数的参数（仅首次创建时有效）。
+
+    Returns:
+        PatternNN: 全局单例实例。
     """
     global _pattern_nn_instance
     if _pattern_nn_instance is None:
-        try:
-            from app.config import get_settings
-            settings = get_settings()
-            _pattern_nn_instance = PatternNN(
-                embed_dim=kwargs.pop("embed_dim", settings.pattern_nn_embed_dim),
-                num_patterns=kwargs.pop("num_patterns", settings.pattern_nn_num_patterns),
-                enable_advanced=True,
-                **kwargs,
-            )
-            from pathlib import Path
-            nn_path = Path(settings.data_dir) / "pattern_nn.pth"
-            if nn_path.exists():
-                _pattern_nn_instance.load(str(nn_path))
-        except Exception as e:
-            logger.warning(f"PatternNN init failed: {e}")
-            return None
+        _pattern_nn_instance = PatternNN(**kwargs)
+        logger.info(f"[auto_learning] PatternNN singleton created, embed_dim={_pattern_nn_instance.embed_dim}")
     return _pattern_nn_instance
 
 
-def reset_pattern_nn():
-    """Reset the PatternNN singleton."""
+def reset_pattern_nn() -> None:
+    """重置 PatternNN 单例。"""
     global _pattern_nn_instance
     _pattern_nn_instance = None

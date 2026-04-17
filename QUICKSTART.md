@@ -41,6 +41,22 @@ git --version
 # macOS: xcode-select --install
 ```
 
+#### 4. MiKTeX / LaTeX (Optional - for math plot rendering)
+```bash
+# Check if LaTeX is installed
+latex --version
+
+# If not installed (optional, for full LaTeX rendering in plots):
+# Windows:
+winget install MiKTeX.MiKTeX
+# Linux:
+sudo apt install texlive-full
+# macOS:
+brew install --cask mactex
+```
+
+> **Note**: LaTeX is optional. Without it, plots still work but use matplotlib's built-in mathtext renderer (limited LaTeX support). With LaTeX installed, plots support full LaTeX syntax including `\begin{cases}`, `\text{}`, `\boxed{}`, etc.
+
 **Note**: The startup scripts will verify these tools and guide you if any are missing.
 
 ---
@@ -258,7 +274,7 @@ npm run dev
 
 ## 📚 Core Features Preview
 
-### 6 Core Tools
+### 5 Core Tools
 
 | Tool | Function | Example |
 |------|----------|---------|
@@ -266,7 +282,6 @@ npm run dev
 | **python_repl** | Run Python code | "Calculate Fibonacci sequence" |
 | **fetch_url** | Fetch web content | "Get GitHub trending page" |
 | **read_file** | Read local files | "Read README.md" |
-| **write_file** | Write local files | "Generate a report" |
 | **search_kb** | Knowledge base search | "Search for relevant info" |
 
 ### Built-in Skills

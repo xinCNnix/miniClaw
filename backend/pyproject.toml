@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mini-openclaw"
-version = "0.2.0"
+version = "0.1.0"
 description = "A lightweight, transparent AI Agent system"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -100,20 +100,15 @@ markers = [
     "unit: Unit tests",
     "integration: Integration tests",
     "e2e: End-to-end tests",
+    "adversarial: Adversarial tests",
+    "regression: Regression tests",
     "slow: Slow running tests",
     "security: Security tests",
-    "performance: Performance tests",
-    # 5-Layer Testing Architecture markers
-    "layer1: Layer 1 - Node-level tests (individual decisions and actions)",
-    "layer2: Layer 2 - Trajectory tests (execution paths and flow)",
-    "layer3: Layer 3 - Integration tests (component interaction)",
-    "layer4: Layer 4 - Adversarial tests (security and robustness)",
-    "layer5: Layer 5 - Regression tests (preventing breakage)",
-    # Testing behavior markers
-    "behavior: Tests behavior (not answers)",
-    "trajectory: Tests execution trajectory",
-    "adversarial: Tests adversarial inputs",
-    "regression: Tests regression prevention",
+    "layer1: Layer 1 prompt/node-level tests",
+    "layer2: Layer 2 trajectory tests",
+    "trajectory: Trajectory/execution path tests",
+    "layer4: Layer 4 adversarial tests",
+    "layer5: Layer 5 regression tests",
 ]
 
 [tool.coverage.run]

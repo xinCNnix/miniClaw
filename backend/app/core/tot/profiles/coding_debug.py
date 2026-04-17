@@ -128,7 +128,21 @@ CODING_DEBUG_PROFILE = DomainProfile(
         "   - Specific root cause explanation\n"
         "   - Evidence from code/logs supporting it\n"
         "   - Minimal fix approach\n"
-        "   - Test case to verify the fix"
+        "   - Test case to verify the fix\n"
+        "\n"
+        "6. TOOL & SKILL USAGE (mandatory for applicable tasks):\n"
+        "   - When the task can benefit from existing Skills (e.g., code search, "
+        "dependency analysis, testing frameworks), check the Available Skills list "
+        "and activate via read_file(path=\"data/skills/<skill-name>/SKILL.md\").\n"
+        "   - DO NOT reimplement skill logic with terminal/python_repl when a "
+        "relevant Skill already exists.\n"
+        "   - Use python_repl/terminal for tasks specific to the current debugging "
+        "context (reproducing bugs, running tests, applying patches) — not to "
+        "replace Skill capabilities.\n"
+        "   - read_file is mandatory: for examining source code AND for activating "
+        "Skills.\n"
+        "   - When debugging pure logic errors (no tool output needed), text-only "
+        "reasoning is fine."
     ),
     evaluator_instruction=(
         "Additional evaluation rules for debugging:\n"
@@ -153,6 +167,17 @@ CODING_DEBUG_PROFILE = DomainProfile(
         "- Final answer must include: root cause explanation, fix diff,\n"
         "  test cases, regression check results"
     ),
+    synthesis_instruction=(
+        "You are composing the final debugging report from completed analysis steps.\n"
+        "\n"
+        "RULES:\n"
+        "1. The reasoning steps and tool results are ALREADY provided below.\n"
+        "2. Tool results contain terminal output, file contents, and execution logs.\n"
+        "3. Do NOT write any new code to execute. Do NOT reference any tools.\n"
+        "4. Organize into: Root Cause → Fix (minimal diff) → Verification.\n"
+        "5. Quote relevant evidence from tool results.\n"
+        "6. Output in the same language as the user query."
+    ),
     preferred_output_schema={
         "type": "object",
         "required": ["root_cause", "fix"],
@@ -164,4 +189,5 @@ CODING_DEBUG_PROFILE = DomainProfile(
             "risk_notes": {"type": "array", "items": {"type": "string"}},
         },
     },
+    required_tools=["terminal", "read_file", "write_file", "python_repl", "fetch_url", "search_kb"],
 )

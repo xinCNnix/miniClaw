@@ -1,244 +1,450 @@
 """
 Thought Executor Node
 
-Executes tool calls for selected thoughts in the best path.
-
-Phase 4 Enhancement: Integrated tool result caching
+Executes tool calls for selected thoughts.
+Phase 4: Beam-aware execution — all active beams, sequential tool plan,
+         dead-end pruning, image deferral.
 """
 
 import asyncio
 import logging
-from typing import List, Dict, Any
+import re
+import time
+from typing import Any, Dict, List
 
 from langchain_core.tools import BaseTool
-from langchain_core.messages import ToolMessage
 
-from app.core.tot.state import ToTState, Thought
+from app.core.tot.state import ToTState, Thought, get_thought_map
+
+# Skill orchestrator integration (optional — graceful fallback)
+try:
+    from app.core.tot.skill_orchestrator import is_skill_file, extract_skill_name, execute_skill_from_skillmd
+    _SKILL_ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    _SKILL_ORCHESTRATOR_AVAILABLE = False
+
+# Image embedding for tool output (graceful fallback)
+try:
+    from app.core.streaming.image_embedder import embed_output_images_v2
+except ImportError:
+    def embed_output_images_v2(x: str, max_age_seconds: int = 60) -> tuple[str, list[dict]]: return x, []
 
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Phase 4: 依赖型工具集 — 前序失败时跳过
+# ---------------------------------------------------------------------------
+
+_DEPENDENT_TOOLS = {
+    "python_repl",    # 依赖搜索/读取的结果来分析
+    "write_file",     # 依赖前序产生的数据来写入
+    "terminal",       # 可能依赖前序产生的数据
+}
+
+
+def _should_skip_due_to_prior_failure(tool_name: str, results_so_far: List[Dict]) -> bool:
+    """判断当前步骤是否应因前序失败而跳过。"""
+    if not results_so_far:
+        return False
+    has_failure = any(
+        r.get("status") in ("error", "skipped")
+        for r in results_so_far
+    )
+    if not has_failure:
+        return False
+    return tool_name in _DEPENDENT_TOOLS
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: 死路剪枝 — 在 executor 内部执行完工具后调用
+# ---------------------------------------------------------------------------
+
+def _dead_end_prune_executed(thought: Thought) -> bool:
+    """判断执行完工具后的 thought 是否为死路。"""
+    # 检查 tool_results: 是否全部 error
+    if thought.tool_results:
+        all_failed = all(
+            r.get("status") in ("error", "skipped") for r in thought.tool_results
+        )
+        if all_failed:
+            return True
+    # 检查局部循环: error_count >= 2 且无任何 artifact
+    if thought.local_error_count >= 2 and not thought.artifacts:
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: 主执行节点
+# ---------------------------------------------------------------------------
+
 async def thought_executor_node(state: ToTState) -> ToTState:
     """
-    Execute tools for thoughts on the best path.
+    Execute tool calls for thoughts.
 
-    This node:
-    1. Identifies thoughts on the best path that haven't been executed
-    2. Executes their tool calls in parallel where possible (with cache lookup)
-    3. Stores results for use in subsequent reasoning
-    4. Adds execution events to reasoning trace for streaming
+    Phase 4 增强:
+    - beam_width 设置时执行所有活跃束上的 pending thoughts
+    - 按 tool_calls 列表顺序依次执行（多步计划），带依赖跳过
+    - 执行完后进行死路剪枝
+    - beam 模式下延迟图片嵌入（仅提取路径，最终 synthesize 时嵌入）
 
-    Phase 4: Enhanced with tool result caching
-
-    Args:
-        state: Current ToT state
-
-    Returns:
-        Updated state with tool execution results
+    当 beam_width 未设置时，退化为原有 best_path 执行。
     """
     tools = state["tools"]
-    best_path_ids = state["best_path"]
     all_thoughts = state["thoughts"]
+    user_query = state.get("user_query", "")
+    beam_width = state.get("beam_width")
 
-    # Get cache config
-    enable_cache = state.get("tot_enable_cache", True)
-    cache_ttl = state.get("tot_cache_ttl", 300)
-
-    # Get or create cache
-    cache = None
-    if enable_cache:
-        from app.core.tot.cache import get_global_cache
-        cache = get_global_cache(ttl=cache_ttl, enabled=True)
-
-    # Get thoughts on best path that need execution
-    best_thoughts = [t for t in all_thoughts if t.id in best_path_ids]
-    pending_execution = [
-        t for t in best_thoughts
-        if t.tool_calls and not t.tool_results
-    ]
+    # ---- 收集待执行的 thoughts ----
+    if beam_width:
+        # Phase 4: 收集所有活跃束上的 pending thoughts
+        active_beams = state.get("active_beams", [])
+        all_beam_ids = set(tid for beam in active_beams for tid in beam)
+        thought_map = get_thought_map(all_thoughts)
+        pending_execution = [
+            thought_map[tid] for tid in all_beam_ids
+            if tid in thought_map
+            and thought_map[tid].tool_calls
+            and not thought_map[tid].tool_results
+            and thought_map[tid].status in ("pending", "evaluated")
+        ] if active_beams else [
+            t for t in all_thoughts
+            if t.tool_calls and not t.tool_results
+            and t.status in ("pending", "evaluated")
+        ]
+    else:
+        # 原有: 只执行 best_path 上的 thoughts
+        best_path_ids = set(state["best_path"])
+        thought_map = get_thought_map(all_thoughts)
+        best_thoughts = [thought_map[tid] for tid in best_path_ids if tid in thought_map]
+        pending_execution = [
+            t for t in best_thoughts
+            if t.tool_calls and not t.tool_results
+        ]
 
     if not pending_execution:
         logger.info("No tools to execute")
         return state
 
-    logger.info(f"Executing tools for {len(pending_execution)} thoughts (cache: {enable_cache})")
+    logger.info(f"Executing tool plans for {len(pending_execution)} thoughts (beam_mode={'on' if beam_width else 'off'})")
 
-    # Execute tools for each thought
+    exec_start = time.time()
+    tool_records = []
+    max_time_per_node = state.get("max_time_per_node", 30.0)
+
     for thought in pending_execution:
-        try:
-            if thought.tool_calls:
-                # Execute tool calls with cache
-                results = await _execute_tools_with_cache(
-                    thought.tool_calls,
-                    tools,
-                    cache
+        thought.status = "executing"
+        node_start = time.time()
+        results = []
+
+        # ---- 按序执行 tool_calls（多步计划） ----
+        if beam_width and len(thought.tool_calls) > 1:
+            # Phase 4: 顺序执行（带依赖跳过 + 超时）
+            results = await _execute_tool_plan_sequential(
+                thought, tools, user_query, max_time_per_node, node_start
+            )
+        else:
+            # 原有: 并行执行所有 tool_calls
+            try:
+                results = await _execute_tools_concurrent(
+                    thought.tool_calls, tools, user_query,
                 )
+            except Exception as e:
+                logger.error(f"Error executing tools for thought {thought.id}: {e}")
+                results = [{"error": str(e), "status": "error"}]
 
-                # Store results
-                thought.tool_results = results
+        # ---- 存储结果 ----
+        thought.tool_results = results
+        thought.local_done = True
+        thought.local_step_count = len([r for r in results if r.get("status") != "skipped"])
+        thought.local_error_count = len([r for r in results if r.get("status") == "error"])
 
-                logger.info(
-                    f"Executed {len(thought.tool_calls)} tools for thought {thought.id}"
-                )
+        # ---- 收集 artifacts ----
+        _collect_artifacts(thought, results)
 
-                # Add to reasoning trace
-                state["reasoning_trace"].append({
-                    "type": "thought_execution",
-                    "thought_id": thought.id,
-                    "content": thought.content,
-                    "tool_count": len(thought.tool_calls),
-                    "results": results
-                })
+        # ---- 死路剪枝 ----
+        if _dead_end_prune_executed(thought):
+            thought.status = "pruned"
+            logger.info(f"[Prune-DeadEnd] Thought {thought.id} marked as dead-end")
+        else:
+            thought.status = "done"
 
-        except Exception as e:
-            logger.error(f"Error executing tools for thought {thought.id}: {e}")
-            thought.tool_results = [{
-                "error": str(e),
-                "status": "failed"
-            }]
+        # ---- 图片延迟嵌入 ----
+        if beam_width:
+            _extract_and_defer_images(thought, state)
+        else:
+            # 原有: 直接嵌入图片
+            pass  # _execute_single_tool 中已调用 embed_output_images_v2
 
-    # Log cache stats if enabled
-    if cache and enable_cache:
-        stats = cache.get_stats()
+        # ---- Research mode: 同步到 raw_sources ----
+        if state.get("task_mode") == "research":
+            raw_sources = list(state.get("raw_sources") or [])
+            for r in results:
+                if r.get("status") == "success":
+                    raw_sources.append({
+                        "source_id": f"tool_{thought.id}",
+                        "source_text": str(r.get("result", "")),
+                        "source_type": "tool_output",
+                    })
+            state["raw_sources"] = raw_sources
+
+        # ---- reasoning trace ----
+        state["reasoning_trace"].append({
+            "type": "thought_execution",
+            "thought_id": thought.id,
+            "content": thought.content,
+            "total_steps": len(thought.tool_calls),
+            "executed_steps": thought.local_step_count,
+            "errors": thought.local_error_count,
+        })
+
+        # ---- tool_records for tot_logger ----
+        for tc in (thought.tool_calls or []):
+            tool_records.append({
+                "tool_name": tc.get("name", "unknown"),
+                "args_summary": str(tc.get("args", {}))[:200],
+                "cached": False,
+                "duration_ms": int((time.time() - node_start) * 1000),
+                "success": thought.status != "pruned",
+                "error": None,
+            })
+
         logger.info(
-            f"[CACHE_STATS] Hits: {stats['hits']}, "
-            f"Misses: {stats['misses']}, "
-            f"Hit Rate: {stats['hit_rate']:.1%}, "
-            f"Size: {stats['size']}"
+            f"[Executor] Thought {thought.id}: "
+            f"{thought.local_step_count}/{len(thought.tool_calls)} steps, "
+            f"{thought.local_error_count} errors, status={thought.status}"
+        )
+
+    # ---- tot_logger ----
+    if "tot_logger" in state and tool_records:
+        state["tot_logger"].log_execution(
+            depth=state.get("current_depth", 0),
+            tool_calls=tool_records,
+            cache_hits=0,
+            cache_misses=len(tool_records),
+            duration=time.time() - exec_start,
         )
 
     return state
 
 
-async def _execute_tools_with_cache(
-    tool_calls: List[Dict[str, Any]],
+# ---------------------------------------------------------------------------
+# Phase 4: 按序执行多步工具计划
+# ---------------------------------------------------------------------------
+
+async def _execute_tool_plan_sequential(
+    thought: Thought,
     tools: List[BaseTool],
-    cache: Any = None
+    user_query: str,
+    max_time_per_node: float,
+    node_start: float,
 ) -> List[Dict[str, Any]]:
-    """
-    Execute multiple tool calls with caching support (Phase 4).
-
-    Checks cache before executing each tool call:
-    1. If cached result exists and is fresh → use cache
-    2. Otherwise → execute tool and cache result
-
-    Args:
-        tool_calls: List of tool call dicts with 'name' and 'args'
-        tools: List of available BaseTool instances
-        cache: Optional ToolResultCache instance
-
-    Returns:
-        List of result dicts
-    """
-    # Build tool lookup dict
+    """按序执行 thought.tool_calls 中的多步工具计划。"""
+    results = []
     tool_map = {tool.name: tool for tool in tools}
 
-    # Separate cached and uncached calls
-    cached_results = []
-    execution_tasks = []
-    execution_indices = []  # Track original indices for proper ordering
+    for step_idx, tool_call in enumerate(thought.tool_calls):
+        # 超时检查
+        elapsed = time.time() - node_start
+        if elapsed > max_time_per_node:
+            logger.warning(
+                f"[Executor] Thought {thought.id}: timeout at step "
+                f"{step_idx}/{len(thought.tool_calls)} ({elapsed:.1f}s)"
+            )
+            results.append({
+                "tool": tool_call.get("name", "unknown"),
+                "error": f"Timeout after {elapsed:.1f}s",
+                "status": "error",
+            })
+            break
 
-    for idx, tool_call in enumerate(tool_calls):
-        tool_name = tool_call.get("name")
+        tool_name = tool_call.get("name", "")
         tool_args = tool_call.get("args", {})
 
-        # Check cache first
-        if cache:
-            cached_result = cache.get(tool_name, tool_args)
-            if cached_result is not None:
-                # Cache hit
-                cached_results.append((idx, cached_result))
+        # 依赖检查
+        if _should_skip_due_to_prior_failure(tool_name, results):
+            logger.info(
+                f"[Executor] Thought {thought.id}: skipping step {step_idx} "
+                f"({tool_name}) due to prior failure"
+            )
+            results.append({
+                "tool": tool_name,
+                "error": "Skipped: prior step failed",
+                "status": "skipped",
+            })
+            continue
+
+        # 执行工具
+        try:
+            if tool_name not in tool_map:
+                results.append({"tool": tool_name, "error": f"Tool not found: {tool_name}", "status": "error"})
                 continue
 
-        # Cache miss or no cache
-        if tool_name in tool_map:
-            task = _execute_single_tool(tool_map[tool_name], tool_args)
-            execution_tasks.append((idx, tool_name, task))
-        else:
-            # Tool not found
-            cached_results.append((
-                idx,
-                {
-                    "tool": tool_name,
-                    "error": f"Tool not found: {tool_name}",
-                    "status": "error"
-                }
-            ))
+            tool = tool_map[tool_name]
+            result_str, gen_images = await _execute_single_tool(tool, tool_args, user_query)
 
-    # Execute uncached tools in parallel
-    executed_results = []
+            entry = {"tool": tool_name, "result": result_str, "status": "success"}
+            if gen_images:
+                entry["generated_images"] = gen_images
+            results.append(entry)
 
-    if execution_tasks:
-        completed = await asyncio.gather(
-            *[task for _, _, task in execution_tasks],
-            return_exceptions=True
-        )
+        except Exception as e:
+            logger.error(f"[Executor] Thought {thought.id} step {step_idx} ({tool_name}): {e}")
+            results.append({"tool": tool_name, "error": str(e), "status": "error"})
 
-        for (idx, tool_name, _), result in zip(execution_tasks, completed):
-            if isinstance(result, Exception):
-                result_dict = {
-                    "tool": tool_name,
-                    "error": str(result),
-                    "status": "error"
-                }
-            else:
-                result_dict = {
-                    "tool": tool_name,
-                    "result": result,
-                    "status": "success"
-                }
+    return results
 
-            # Cache the result
-            if cache and result_dict.get("status") == "success":
-                cache.set(tool_name, tool_args, result_dict)
 
-            executed_results.append((idx, result_dict))
+# ---------------------------------------------------------------------------
+# Phase 4: 辅助函数
+# ---------------------------------------------------------------------------
 
-    # Merge cached and executed results in original order
-    all_results = cached_results + executed_results
-    all_results.sort(key=lambda x: x[0])  # Sort by original index
+def _collect_artifacts(thought: Thought, results: List[Dict]) -> None:
+    """从工具执行结果中收集有价值的产物。"""
+    for r in results:
+        if r.get("status") == "success" and r.get("result"):
+            thought.artifacts.append({
+                "tool": r.get("tool", "unknown"),
+                "content": str(r["result"])[:500],
+            })
 
-    return [result for _, result in all_results]
 
+def _extract_and_defer_images(thought: Thought, state: ToTState) -> None:
+    """探索阶段: 提取图片路径但不嵌入。"""
+    for r in (thought.tool_results or []):
+        result_text = str(r.get("result", ""))
+        paths = re.findall(r'(?:outputs/|data/outputs/)\S+\.(?:png|jpg|jpeg|svg)', result_text)
+        if paths:
+            state.setdefault("deferred_image_paths", []).extend(paths)
+
+
+# ---------------------------------------------------------------------------
+# 原有工具执行函数（保持不变）
+# ---------------------------------------------------------------------------
 
 async def _execute_tools_concurrent(
     tool_calls: List[Dict[str, Any]],
-    tools: List[BaseTool]
+    tools: List[BaseTool],
+    user_query: str = "",
 ) -> List[Dict[str, Any]]:
     """
-    Execute multiple tool calls in parallel (legacy, without cache).
-
-    Args:
-        tool_calls: List of tool call dicts with 'name' and 'args'
-        tools: List of available BaseTool instances
-
-    Returns:
-        List of result dicts
+    Execute multiple tool calls in parallel.
     """
-    return await _execute_tools_with_cache(tool_calls, tools, cache=None)
+    tool_map = {tool.name: tool for tool in tools}
+
+    tasks = []
+    errors = []
+
+    for tool_call in tool_calls:
+        tool_name = tool_call.get("name")
+        tool_args = tool_call.get("args", {})
+
+        if tool_name in tool_map:
+            task = _execute_single_tool(tool_map[tool_name], tool_args, user_query)
+            tasks.append((tool_name, task))
+        else:
+            logger.warning(f"Tool not found: {tool_name}")
+            errors.append({
+                "tool": tool_name,
+                "error": f"Tool not found: {tool_name}",
+                "status": "error"
+            })
+
+    results = errors.copy()
+
+    if tasks:
+        completed = await asyncio.gather(
+            *[task for _, task in tasks],
+            return_exceptions=True
+        )
+
+        for (tool_name, _), outcome in zip(tasks, completed):
+            if isinstance(outcome, Exception):
+                results.append({
+                    "tool": tool_name,
+                    "error": str(outcome),
+                    "status": "error"
+                })
+            else:
+                result_str, gen_images = outcome
+                entry: Dict[str, Any] = {
+                    "tool": tool_name,
+                    "result": result_str,
+                    "status": "success",
+                }
+                if gen_images:
+                    entry["generated_images"] = gen_images
+                results.append(entry)
+
+    return results
 
 
-async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any]) -> Any:
+async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query: str = "") -> tuple[Any, list[dict]]:
     """
     Execute a single tool with error handling.
 
-    Args:
-        tool: BaseTool instance
-        args: Tool arguments
-
-    Returns:
-        Tool execution result
+    If read_file reads a SKILL.md, auto-detect and execute the skill via skill_orchestrator.
     """
+    # Check cache before execution
     try:
-        # Use tool's invoke method
+        from app.core.tot.cache import get_global_cache
+        cache = get_global_cache()
+        cached = cache.get(tool.name, args)
+        if cached is not None:
+            logger.info(f"[CACHE_HIT] {tool.name} with args={list(args.keys())}")
+            return cached.get("result", ""), cached.get("generated_images", [])
+    except Exception:
+        pass
+
+    # Skill auto-detection
+    if _SKILL_ORCHESTRATOR_AVAILABLE and tool.name == "read_file":
+        path = args.get("path", "")
+        if is_skill_file(path):
+            skill_name = extract_skill_name(path)
+            if skill_name:
+                logger.info("[ThoughtExecutor] Detected SKILL.md read for '%s', auto-executing skill", skill_name)
+                try:
+                    skill_content_result = await tool.ainvoke(args)
+                except AttributeError:
+                    skill_content_result = tool.invoke(args)
+                skill_content = str(skill_content_result)
+
+                try:
+                    from app.api.chat import get_agent_manager
+                    am = get_agent_manager()
+                    skill_result = await execute_skill_from_skillmd(
+                        skill_name=skill_name,
+                        skill_content=skill_content,
+                        user_query=user_query,
+                        tools=am.tools,
+                        llm=am.llm,
+                    )
+                    result_str = skill_result.get("result", "")
+                    gen_images = skill_result.get("generated_images") or []
+                    if gen_images:
+                        logger.info("[ThoughtExecutor] Skill '%s' generated %d image(s)", skill_name, len(gen_images))
+                    return result_str, gen_images
+                except Exception as e:
+                    logger.error("[ThoughtExecutor] Skill '%s' execution failed: %s", skill_name, e)
+                    return f"Skill '{skill_name}' execution failed: {str(e)}", []
+
+    try:
         result = await tool.ainvoke(args)
-        return result
+        result, gen_images = embed_output_images_v2(str(result))
+        if gen_images:
+            logger.info("[ThoughtExecutor] %s generated %d image(s)", tool.name, len(gen_images))
+        _cache_tool_result(tool.name, args, result, gen_images)
+        return result, gen_images
 
     except AttributeError:
-        # Tool doesn't support async, use sync
         try:
             result = tool.invoke(args)
-            return result
+            result, gen_images = embed_output_images_v2(str(result))
+            if gen_images:
+                logger.info("[ThoughtExecutor] %s generated %d image(s)", tool.name, len(gen_images))
+            _cache_tool_result(tool.name, args, result, gen_images)
+            return result, gen_images
         except Exception as e:
             raise Exception(f"Tool execution failed: {str(e)}")
 
@@ -246,19 +452,26 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any]) -> Any:
         raise Exception(f"Tool execution failed: {str(e)}")
 
 
+def _cache_tool_result(tool_name: str, args: Dict[str, Any], result: Any, gen_images: list) -> None:
+    """Store tool result in global cache (best-effort)."""
+    try:
+        from app.core.tot.cache import get_global_cache
+        cache = get_global_cache()
+        cache.set(tool_name, args, {
+            "result": result,
+            "generated_images": gen_images,
+        })
+    except Exception:
+        pass
+
+
+# OLD: 同步执行 fallback（保留）
 def _execute_tools_sync(
     tool_calls: List[Dict[str, Any]],
     tools: List[BaseTool]
 ) -> List[Dict[str, Any]]:
     """
     Synchronous version of tool execution (fallback).
-
-    Args:
-        tool_calls: List of tool call dicts
-        tools: List of available tools
-
-    Returns:
-        List of result dicts
     """
     tool_map = {tool.name: tool for tool in tools}
     results = []

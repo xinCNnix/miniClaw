@@ -53,5 +53,11 @@ class DomainProfile(BaseModel):
     # Domain-specific termination/final answer instructions
     termination_instruction: str = ""
 
+    # Domain-specific synthesis instructions (injected into synthesis node)
+    synthesis_instruction: str = ""
+
+    # Tools that this domain REQUIRES to be called (enforced in generation + termination)
+    required_tools: List[str] = []
+
     # Domain-specific output JSON Schema (injected into Final Writer)
     preferred_output_schema: Dict[str, Any] = {}

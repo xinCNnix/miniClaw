@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from "react"
 import { apiClient } from "@/lib/api"
-import type { Message, ThinkingEvent } from "@/types/chat"
+import type { Message, ThinkingEvent, GeneratedImage } from "@/types/chat"
 import type { ChatRequest } from "@/types/api"
 
 interface UseChatOptions {
@@ -24,6 +24,24 @@ interface UseChatReturn {
   newSession: () => Promise<void>
 }
 
+/** Extract base64 image markdown from text and convert to GeneratedImage[]. */
+function extractBase64Images(text: string): GeneratedImage[] {
+  const images: GeneratedImage[] = []
+  const regex = /!\[([^\]]*)\]\(data:image\/([^;]+);base64,([A-Za-z0-9+/=]+)\)/g
+  let match: RegExpExecArray | null
+  let idx = 0
+  while ((match = regex.exec(text)) !== null) {
+    images.push({
+      media_id: `temp_${Date.now()}_${idx}`,
+      api_url: `data:image/${match[2]};base64,${match[3]}`,
+      name: match[1] || `image_${idx}`,
+      mime_type: `image/${match[2]}`,
+    })
+    idx++
+  }
+  return images
+}
+
 export function useChat(options: UseChatOptions = {}): UseChatReturn {
   const { apiUrl, onError } = options
 
@@ -36,7 +54,6 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   const sendMessage = useCallback(async (content: string, images: any[] = [], context: Record<string, any> = {}) => {
     // Add user message
     const userMessage: Message = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       role: "user",
       content,
       timestamp: new Date().toISOString(),
@@ -69,6 +86,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
       }
 
       let assistantContent = ""
+      let collectedImages: GeneratedImage[] = []
       let sessionId = currentSessionId
 
       // Connect to SSE stream
@@ -108,12 +126,15 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
 
           if (line.startsWith("data: ")) {
             try {
-              const data = JSON.parse(line.slice(6))
-              console.log('[SSE] Event received:', data.type, data)
+              const jsonStr = line.slice(6)
+              const data = JSON.parse(jsonStr)
+              // Log large events that might contain images
+              if (jsonStr.length > 10000) {
+                console.log(`[SSE] Large event: type=${data.type}, jsonLen=${jsonStr.length}`)
+              }
 
               switch (data.type) {
                 case "thinking_start":
-                  console.log('[SSE] thinking_start event')
                   setThinkingEvents((prev) => [
                     ...prev,
                     {
@@ -126,64 +147,126 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
 
                 // ToT events
                 case "tot_reasoning_start":
-                  setThinkingEvents((prev) => [
-                    ...prev,
-                    {
+                  // 去重：只保留最新的 reasoning_start
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(e => e.type !== 'tot_reasoning_start')
+                    return [...filtered, {
                       type: "tot_reasoning_start",
                       mode: "tot",
                       max_depth: data.max_depth,
                       timestamp: new Date().toISOString(),
-                    },
-                  ])
+                    }]
+                  })
+                  break
+
+                case "tot_status":
+                  // 去重：同一 node 只保留最新状态
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(e =>
+                      !(e.type === 'tot_status' && (e as any).node === data.node)
+                    )
+                    return [...filtered, {
+                      type: "tot_status",
+                      status_message: data.status_message,
+                      node: data.node,
+                      timestamp: new Date().toISOString(),
+                    }]
+                  })
                   break
 
                 case "tot_thoughts_generated":
-                  setThinkingEvents((prev) => [
-                    ...prev,
-                    {
+                  // 旧代码：每个事件都追加，导致数组无限增长
+                  // setThinkingEvents((prev) => [
+                  //   ...prev,
+                  //   {
+                  //     type: "tot_thoughts_generated",
+                  //     depth: data.depth,
+                  //     count: data.count,
+                  //     thoughts: data.thoughts,
+                  //     timestamp: new Date().toISOString(),
+                  //   },
+                  // ])
+                  // 新代码：去重，同一 depth 只保留最新的生成事件
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(e =>
+                      !(e.type === 'tot_thoughts_generated' && (e as any).depth === data.depth)
+                    )
+                    return [...filtered, {
                       type: "tot_thoughts_generated",
                       depth: data.depth,
                       count: data.count,
                       thoughts: data.thoughts,
                       timestamp: new Date().toISOString(),
-                    },
-                  ])
+                    }]
+                  })
                   break
 
                 case "tot_thoughts_evaluated":
-                  setThinkingEvents((prev) => [
-                    ...prev,
-                    {
+                  // 旧代码：每个事件都追加
+                  // setThinkingEvents((prev) => [
+                  //   ...prev,
+                  //   {
+                  //     type: "tot_thoughts_evaluated",
+                  //     best_path: data.best_path,
+                  //     best_score: data.best_score,
+                  //     timestamp: new Date().toISOString(),
+                  //   },
+                  // ])
+                  // 新代码：去重，只保留最新的评估事件
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(e => e.type !== 'tot_thoughts_evaluated')
+                    return [...filtered, {
                       type: "tot_thoughts_evaluated",
                       best_path: data.best_path,
                       best_score: data.best_score,
+                      // Phase 10: beam fields
+                      active_beams: data.active_beams,
+                      beam_scores: data.beam_scores,
                       timestamp: new Date().toISOString(),
-                    },
-                  ])
+                    }]
+                  })
                   break
 
                 case "tot_tools_executed":
-                  setThinkingEvents((prev) => [
-                    ...prev,
-                    {
+                  // BUG FIX: ToT 模式下需要收集 generated_images
+                  if (data.generated_images && data.generated_images.length > 0) {
+                    collectedImages.push(...data.generated_images)
+                    console.log(`[SSE] tot_tools_executed: ${data.generated_images.length} generated_images received`)
+                  }
+                  // 去重：同一 thought_id 只保留最新
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(e =>
+                      !(e.type === 'tot_tools_executed' && (e as any).thought_id === data.thought_id)
+                    )
+                    return [...filtered, {
                       type: "tot_tools_executed",
                       thought_id: data.thought_id,
                       content: data.content,
                       tool_count: data.tool_count,
                       timestamp: new Date().toISOString(),
-                    },
-                  ])
+                    }]
+                  })
                   break
 
                 case "tot_tree_update":
-                  setThinkingEvents((prev) => [
-                    ...prev,
-                    {
+                  // 旧代码：每个树更新都追加，导致完整树结构反复堆积
+                  // setThinkingEvents((prev) => [
+                  //   ...prev,
+                  //   {
+                  //     type: "tot_tree_update",
+                  //     tree: data.tree,
+                  //     timestamp: new Date().toISOString(),
+                  //   },
+                  // ])
+                  // 新代码：替换而非追加，只保留最新的树结构，避免内存堆积
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(e => e.type !== 'tot_tree_update')
+                    return [...filtered, {
                       type: "tot_tree_update",
                       tree: data.tree,
                       timestamp: new Date().toISOString(),
-                    },
-                  ])
+                    }]
+                  })
                   break
 
                 case "tot_termination":
@@ -199,17 +282,68 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   ])
                   break
 
+                // Phase 10: beam search events
+                case "tot_backtrack":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_backtrack",
+                      reason: data.reason,
+                      depth: data.depth,
+                      beam_idx: data.beam_idx,
+                      from_root: data.from_root,
+                      to_root: data.to_root,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "tot_thoughts_regenerated":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "tot_thoughts_regenerated",
+                      depth: data.depth,
+                      beam_indices: data.beam_indices,
+                      count: data.count,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
                 case "tot_reasoning_complete":
                   setThinkingEvents((prev) => [
                     ...prev,
                     {
                       type: "tot_reasoning_complete",
-                      final_answer: data.final_answer,
+                      final_answer_length: data.final_answer_length,
+                      final_answer_preview: data.final_answer_preview,
                       best_path: data.best_path,
                       total_thoughts: data.total_thoughts,
                       timestamp: new Date().toISOString(),
                     },
                   ])
+                  // BUG FIX: ToT 完成时把收集到的图片附到最终消息
+                  if (collectedImages.length > 0) {
+                    setMessages((prev) => {
+                      const lastMessage = prev[prev.length - 1]
+                      if (lastMessage?.role === "assistant") {
+                        return [
+                          ...prev.slice(0, -1),
+                          { ...lastMessage, generated_images: [...collectedImages] },
+                        ]
+                      }
+                      return [
+                        ...prev,
+                        {
+                          role: "assistant" as const,
+                          content: assistantContent,
+                          generated_images: [...collectedImages],
+                          timestamp: new Date().toISOString(),
+                        },
+                      ]
+                    })
+                  }
                   break
 
                 case "tool_call":
@@ -228,34 +362,33 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   break
 
                 case "content_delta":
-                case "text_delta":  // Handle both types for compatibility
                   if (data.content) {
-                    console.log('[SSE]', data.type, 'received:', data.content.substring(0, 50))
                     assistantContent += data.content
+                    // Log every 20th delta to avoid spam
+                    if (assistantContent.length % 2000 < data.content.length) {
+                      console.log(`[SSE] content_delta: totalLen=${assistantContent.length}, hasImage=${assistantContent.includes("data:image/")}`)
+                    }
                     setMessages((prev) => {
                       const lastMessage = prev[prev.length - 1]
 
                       if (lastMessage && lastMessage.role === "assistant") {
                         // Create new object to ensure React detects the change
-                        const newMessages = [
+                        return [
                           ...prev.slice(0, -1),
                           {
                             ...lastMessage,
                             content: assistantContent,
                           },
                         ]
-                        console.log('[SSE] Updating assistant message, total messages:', newMessages.length)
-                        return newMessages
                       } else {
-                        const newMsg: Message = {
-                          id: `msg_${Date.now()}_assistant`,
-                          role: "assistant",
-                          content: assistantContent,
-                          timestamp: new Date().toISOString(),
-                        }
-                        const newMessages = [...prev, newMsg]
-                        console.log('[SSE] Creating new assistant message, total messages:', newMessages.length)
-                        return newMessages
+                        return [
+                          ...prev,
+                          {
+                            role: "assistant",
+                            content: assistantContent,
+                            timestamp: new Date().toISOString(),
+                          },
+                        ]
                       }
                     })
                   }
@@ -263,6 +396,36 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
 
                 case "tool_output":
                   if (data.tool_name && data.output !== undefined) {
+                    const outputStr = typeof data.output === "string" ? data.output : String(data.output)
+
+                    // New pipeline: structured generated_images from v2 backend
+                    const eventImages: GeneratedImage[] = data.generated_images || []
+                    if (eventImages.length > 0) {
+                      collectedImages.push(...eventImages)
+                      console.log(`[SSE] tool_output: ${eventImages.length} generated_images received`)
+                    }
+
+                    // Legacy compat: detect base64 in output
+                    const hasImage = outputStr.includes("data:image/")
+                    if (hasImage) {
+                      const imgMatch = outputStr.match(/data:image\/[^;]+;base64,[A-Za-z0-9+/]+/)
+                      if (imgMatch) {
+                        const uri = imgMatch[0]
+                        console.log(`[SSE] image URI (legacy): mime=${uri.slice(0, uri.indexOf(";"))}, base64Len=${uri.length - uri.indexOf(",") - 1}`)
+                      }
+                      // Extract base64 images into GeneratedImage format
+                      const legacyImages = extractBase64Images(outputStr)
+                      if (legacyImages.length > 0) {
+                        collectedImages.push(...legacyImages)
+                        console.log(`[SSE] Extracted ${legacyImages.length} base64 image(s) (legacy path)`)
+                      }
+                      // Clean text without base64 for assistantContent
+                      const cleanText = outputStr.replace(/!\[[^\]]*\]\(data:image\/[^)]+\)/g, "").trim()
+                      if (cleanText) {
+                        assistantContent += `\n\n${cleanText}\n\n`
+                      }
+                    }
+
                     setThinkingEvents((prev) => [
                       ...prev,
                       {
@@ -273,43 +436,20 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                         timestamp: new Date().toISOString(),
                       },
                     ])
-                  }
-                  break
-
-                case "image":
-                  // Image generated by python_repl (matplotlib, etc.)
-                  if (data.content) {
-                    const imageData = data.content as string // data:image/png;base64,...
-                    const base64 = imageData.replace(/^data:image\/\w+;base64,/, '')
+                    // Update message with generated_images
                     setMessages((prev) => {
                       const lastMessage = prev[prev.length - 1]
-                      const imageAttachment = {
-                        type: "image" as const,
-                        content: base64,
-                        mime_type: "image/png",
-                      }
-
-                      if (lastMessage && lastMessage.role === "assistant") {
-                        const existingImages = lastMessage.images || []
-                        return [
-                          ...prev.slice(0, -1),
-                          {
-                            ...lastMessage,
-                            images: [...existingImages, imageAttachment],
-                          },
-                        ]
-                      } else {
-                        return [
-                          ...prev,
-                          {
-                            id: `msg_${Date.now()}_assistant`,
-                            role: "assistant",
-                            content: "",
+                      const updatedMsg = lastMessage?.role === "assistant"
+                        ? { ...lastMessage, content: assistantContent, generated_images: [...collectedImages] }
+                        : {
+                            role: "assistant" as const,
+                            content: assistantContent,
+                            generated_images: [...collectedImages],
                             timestamp: new Date().toISOString(),
-                            images: [imageAttachment],
-                          },
-                        ]
-                      }
+                          }
+                      return lastMessage?.role === "assistant"
+                        ? [...prev.slice(0, -1), updatedMsg]
+                        : [...prev, updatedMsg]
                     })
                   }
                   break
@@ -319,40 +459,30 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   setCurrentSessionId(sessionId)
                   break
 
-                case "llm_retry":
-                  setThinkingEvents((prev) => [
-                    ...prev,
-                    {
-                      type: "llm_retry",
-                      attempt: data.attempt,
-                      max_retries: data.max_retries,
-                      delay: data.delay,
-                      error_code: data.error_code,
-                      error_message: data.error_message,
-                      context: data.context,
-                      timestamp: new Date().toISOString(),
-                    },
-                  ])
-                  break
-
-                case "llm_error":
-                  setThinkingEvents((prev) => [
-                    ...prev,
-                    {
-                      type: "llm_error",
-                      error_code: data.error_code,
-                      error_message: data.error_message,
-                      exhausted: data.exhausted,
-                      context: data.context,
-                      timestamp: new Date().toISOString(),
-                    },
-                  ])
-                  break
-
                 case "error":
                   throw new Error(data.error || "Unknown error")
 
                 case "done":
+                  break
+
+                case "self_correction":
+                  console.log("[SSE] Self-correction event received:", data)
+                  // 将自我纠正内容追加到当前 assistant 消息
+                  if (data.correction) {
+                    const correctionText = `\n\n---\n**自我纠正**（质量分：${data.quality_score?.toFixed(1) ?? "N/A"}/10）\n\n${data.correction}`
+                    assistantContent += correctionText
+                    setMessages((prev) => {
+                      const lastMsg = prev[prev.length - 1]
+                      if (lastMsg && lastMsg.role === "assistant") {
+                        const updatedMsg = {
+                          ...lastMsg,
+                          content: (lastMsg.content || "") + correctionText,
+                        }
+                        return [...prev.slice(0, -1), updatedMsg]
+                      }
+                      return prev
+                    })
+                  }
                   break
               }
             } catch (e) {
@@ -366,6 +496,9 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
       if (sessionId) {
         setCurrentSessionId(sessionId)
       }
+
+      // Final content summary
+      console.log(`[SSE] Stream complete: ${collectedImages.length} images, contentLen=${assistantContent.length}`)
     } catch (error) {
       if (error instanceof Error && error.name !== "AbortError") {
         if (onError) {
@@ -378,7 +511,6 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         setMessages((prev) => [
           ...prev,
           {
-            id: `msg_${Date.now()}_error`,
             role: "assistant",
             content: `Error: ${error.message}`,
             timestamp: new Date().toISOString(),
@@ -426,6 +558,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         timestamp: msg.timestamp,
         ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
         ...(msg.images && { images: msg.images }),
+        ...(msg.generated_images && { generated_images: msg.generated_images }),
       }))
 
       loadMessages(messages)

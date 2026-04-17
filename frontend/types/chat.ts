@@ -2,13 +2,20 @@
  * Type definitions for the chat system
  */
 
+export interface GeneratedImage {
+  media_id: string;
+  api_url: string;
+  name: string;
+  mime_type: string;
+}
+
 export interface Message {
-  id: string;
   role: 'user' | 'assistant' | 'tool';
   content: string;
   tool_calls?: ToolCall[];
   timestamp?: string;
   images?: ImageAttachment[];
+  generated_images?: GeneratedImage[];
 }
 
 export interface ImageAttachment {
@@ -20,7 +27,7 @@ export interface ImageAttachment {
 export interface ToolCall {
   id: string;
   name: string;
-  args: Record<string, unknown>;
+  args: Record<string, any>;
 }
 
 export interface ChatState {
@@ -31,14 +38,17 @@ export interface ChatState {
 }
 
 export interface SSEEvent {
-  type: 'thinking_start' | 'tool_call' | 'content_delta' | 'tool_output' | 'error' | 'done' | 'llm_retry' | 'llm_error';
+  type: 'thinking_start' | 'tool_call' | 'content_delta' | 'tool_output' | 'error' | 'done' | 'self_correction';
   content?: string;
   tool_calls?: ToolCall[];
   error?: string;
   tool_name?: string;
-  output?: unknown;
+  output?: any;
   status?: string;
   session_id?: string;
+  generated_images?: GeneratedImage[];
+  correction?: string;
+  quality_score?: number;
 }
 
 export interface ThoughtTreeNode {
@@ -47,6 +57,7 @@ export interface ThoughtTreeNode {
   parent_id?: string
   score?: number
   status: 'pending' | 'evaluated' | 'selected' | 'pruned'
+  tool_calls?: Array<{ name: string; args: Record<string, unknown> }>
   children: ThoughtTreeNode[]
 }
 
@@ -55,13 +66,13 @@ export type ThinkingEvent =
   | {
       type: 'tool_use'
       tool_name: string
-      input: unknown
+      input: any
       timestamp: string
     }
   | {
       type: 'tool_output'
       tool_name: string
-      output: unknown
+      output: any
       status: string
       timestamp: string
     }
@@ -75,6 +86,12 @@ export type ThinkingEvent =
       type: 'tot_reasoning_start'
       mode: 'tot'
       max_depth: number
+      timestamp: string
+    }
+  | {
+      type: 'tot_status'
+      status_message: string
+      node: string
       timestamp: string
     }
   | {
@@ -92,6 +109,8 @@ export type ThinkingEvent =
       type: 'tot_thoughts_evaluated'
       best_path: string[]
       best_score: number
+      active_beams?: string[][]   // Phase 10: active beam paths
+      beam_scores?: number[]      // Phase 10: scores for each beam
       timestamp: string
     }
   | {
@@ -108,7 +127,8 @@ export type ThinkingEvent =
     }
   | {
       type: 'tot_reasoning_complete'
-      final_answer: string
+      final_answer_length: number
+      final_answer_preview: string
       best_path: string[]
       total_thoughts: number
       timestamp: string
@@ -120,21 +140,20 @@ export type ThinkingEvent =
       depth?: number
       timestamp: string
     }
+  // Phase 10: Beam search events
   | {
-      type: 'llm_retry'
-      attempt: number
-      max_retries: number
-      delay: number
-      error_code: string
-      error_message: string
-      context?: string
+      type: 'tot_backtrack'
+      reason?: string
+      depth?: number
+      beam_idx?: number
+      from_root?: string
+      to_root?: string
       timestamp: string
     }
   | {
-      type: 'llm_error'
-      error_code: string
-      error_message: string
-      exhausted: boolean
-      context?: string
+      type: 'tot_thoughts_regenerated'
+      depth: number
+      beam_indices?: number[]
+      count: number
       timestamp: string
     }

@@ -150,6 +150,16 @@ On the first run, you'll need to configure your LLM API keys. The script will pr
 
 For manual configuration, see **[QUICKSTART.md](./QUICKSTART.md)**.
 
+### 📐 LaTeX Support (Optional)
+
+For advanced math formula rendering in plots (geometry-plotter skill), install a LaTeX distribution:
+
+- **Windows**: Install [MiKTeX](https://miktex.org/) via `winget install MiKTeX.MiKTeX`
+- **Linux**: `sudo apt install texlive-full`
+- **macOS**: `brew install --cask mactex`
+
+Without LaTeX, the system falls back to matplotlib's built-in mathtext renderer, which covers most common math symbols but doesn't support advanced LaTeX commands like `\begin{cases}`, `\text{}`, `\boxed{}`.
+
 ### Docker Deployment
 
 ```bash
@@ -173,15 +183,14 @@ Access:
 
 ### 5 Core Tools
 
-miniClaw includes 6 carefully designed core tools covering the most common AI Agent scenarios:
+miniClaw includes 5 carefully designed core tools covering the most common AI Agent scenarios:
 
 | Tool | Function | Security Features | Example |
 |------|----------|-------------------|---------|
 | **terminal** | Shell command execution | Sandboxed + command blacklist | `ls -la`, `git status` |
-| **python_repl** | Python code interpreter | Timeout control + 3 execution modes | Data analysis, computation |
+| **python_repl** | Python code interpreter | Timeout control + exception handling | Data analysis, computation |
 | **fetch_url** | Web scraping | HTML auto-cleaning | News fetching, API calls |
 | **read_file** | File reading | Restricted to project directory | Reading code, documentation |
-| **write_file** | File writing | Sensitive file protection | Writing code, generating reports |
 | **search_kb** | RAG knowledge base retrieval | Hybrid search (semantic + keyword) | Document queries, knowledge Q&A |
 
 > 💡 All tools can be automatically invoked by Agent through instructions in System Prompt.
@@ -266,27 +275,15 @@ miniclaw/
 │   │   │
 │   │   ├── core/                # Core modules
 │   │   │   ├── agent.py         # LangChain Agent wrapper
-│   │   │   ├── agent_components/ # Modular agent components (v0.2.0)
 │   │   │   ├── llm.py           # LLM model initialization
 │   │   │   ├── rag_engine.py    # RAG retrieval engine
-│   │   │   ├── obfuscation.py   # API key obfuscation
-│   │   │   ├── container.py     # Dependency injection container (v0.2.0)
-│   │   │   ├── interfaces.py    # Protocol interfaces (v0.2.0)
-│   │   │   ├── exceptions.py    # Structured exceptions (v0.2.0)
-│   │   │   ├── callback_handler.py  # Trajectory callbacks (v0.2.0)
-│   │   │   ├── streaming/       # Event-driven streaming (v0.2.0)
-│   │   │   ├── reflection/      # Unified evaluation framework (v0.2.0)
-│   │   │   └── tot/             # Tree of Thoughts system
-│   │   │       ├── nodes/       # ToT node implementations
-│   │   │       ├── cache.py     # Tool result cache
-│   │   │       └── ...          # state, router, graph_builder
+│   │   │   └── obfuscation.py   # API key obfuscation
 │   │   │
-│   │   ├── tools/               # 6 core tools
+│   │   ├── tools/               # 5 core tools
 │   │   │   ├── terminal.py      # Shell command execution
 │   │   │   ├── python_repl.py   # Python code interpreter
 │   │   │   ├── fetch_url.py     # Web scraping
 │   │   │   ├── read_file.py     # File reading
-│   │   │   ├── write_file.py    # File writing
 │   │   │   └── search_kb.py     # Knowledge base search
 │   │   │
 │   │   ├── skills/              # Skills system
@@ -295,10 +292,9 @@ miniclaw/
 │   │   │   └── dependencies.py  # Dependency management
 │   │   │
 │   │   ├── memory/              # Conversation memory management
-│   │   │   ├── session.py       # Session management
-│   │   │   ├── prompts.py       # System Prompt components
-│   │   │   ├── auto_learning/   # Pattern learning system (v0.2.0)
-│   │   │   └── models.py        # Memory Pydantic models
+│   │   │   ├── extractor.py     # Information extraction
+│   │   │   ├── long_term_updater.py  # Long-term memory update
+│   │   │   └── prompts.py       # System Prompt components
 │   │   │
 │   │   ├── api/                 # API routes
 │   │   │   ├── chat.py          # Chat interface (SSE streaming)
@@ -335,16 +331,13 @@ miniclaw/
 │   ├── components/              # React components
 │   │   ├── ui/                  # Shadcn/UI components
 │   │   ├── chat/                # Chat components
-│   │   ├── common/              # Shared components (v0.2.0)
 │   │   └── editor/              # Code editor
 │   │
 │   ├── lib/                     # Utility libraries
 │   │   └── api.ts               # API client
 │   │
 │   ├── hooks/                   # React Hooks
-│   │   ├── useChat.ts           # Chat Hook
-│   │   ├── useToast.tsx         # Toast notifications (v0.2.0)
-│   │   └── useSSE.ts            # SSE event handling
+│   │   └── useChat.ts           # Chat Hook
 │   │
 │   └── types/                   # TypeScript types
 │       └── chat.ts              # Chat type definitions
@@ -354,7 +347,6 @@ miniclaw/
 │   ├── API.md                   # API documentation
 │   └── DEPLOYMENT.md            # Deployment guide
 │
-├── .env.example                 # Environment variable template
 ├── QUICKSTART.md                # Quick start guide
 ├── README.md                    # This file
 ├── DEVELOPMENT_PLAN.md          # Development plan
@@ -660,15 +652,14 @@ Contributions are welcome! Please follow this process:
 
 ## Roadmap
 
-### v0.3 (Planned)
+### v0.2 (Planned)
 
 - [ ] Multi-session management
 - [ ] Skill marketplace integration
 - [ ] WebRTC voice chat
 - [ ] Multimodal support (images, files)
-- [ ] Production deployment optimization
 
-### v0.4 (Future)
+### v0.3 (Future)
 
 - [ ] Multi-Agent collaboration
 - [ ] Knowledge graph memory
