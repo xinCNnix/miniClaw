@@ -19,18 +19,12 @@ export interface FileListResponse {
   current_path: string;
 }
 
-export interface ToolCall {
-  id: string;
-  name: string;
-  args: Record<string, unknown>;
-}
-
 export interface Session {
   session_id: string;
   created_at: string;
   updated_at: string;
   message_count: number;
-  metadata: Record<string, unknown>;
+  metadata: Record<string, any>;
 }
 
 export interface SessionListResponse {
@@ -42,11 +36,11 @@ export interface ChatRequest {
   message: string;
   session_id?: string;
   stream?: boolean;
-  context?: Record<string, unknown>;
+  context?: Record<string, any>;
 }
 
 export interface ChatResponse {
   role: string;
   content: string;
-  tool_calls?: ToolCall[];
+  tool_calls?: any[];
 }

@@ -15,6 +15,7 @@ export default defineConfig({
     actionTimeout: 60000,
     // Use system Chrome instead of downloading Playwright's
     channel: 'chrome', // Use installed Chrome/Chromium
+    headless: false, // Show browser window for testing
   },
   projects: [
     {

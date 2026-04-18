@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import { Send, Loader2, Image as ImageIcon, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTranslation } from "@/hooks/use-translation.hook"
-import { useToastContext } from "@/components/common/ToastContext"
 
 interface ImageAttachment {
   file: File
@@ -15,7 +14,7 @@ interface ImageAttachment {
 
 interface InputBoxProps {
   className?: string
-  onSend: (content: string, images?: ImageAttachment[]) => Promise<void>
+  onSend: (content: string, images?: ImageAttachment[]) => void
   disabled?: boolean
   placeholder?: string
 }
@@ -27,7 +26,6 @@ export function InputBox({
   placeholder,
 }: InputBoxProps) {
   const { t } = useTranslation()
-  const { showToast } = useToastContext()
   const [content, setContent] = useState("")
   const [images, setImages] = useState<ImageAttachment[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -41,21 +39,10 @@ export function InputBox({
     }
   }, [content])
 
-  // Cleanup object URLs on unmount
-  useEffect(() => {
-    return () => {
-      images.forEach(img => {
-        if (img.preview) {
-          URL.revokeObjectURL(img.preview)
-        }
-      })
-    }
-  }, [images])
-
-  const handleSend = async () => {
+  const handleSend = () => {
     const trimmed = content.trim()
     if ((trimmed || images.length > 0) && !disabled) {
-      await onSend(trimmed, images)
+      onSend(trimmed, images)
       setContent("")
       setImages([])
     }
@@ -77,13 +64,13 @@ export function InputBox({
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
       if (!file.type.startsWith("image/")) {
-        showToast(t('chat.upload_only_images'), 'error')
+        alert(t('chat.upload_only_images'))
         continue
       }
 
       // Limit size to 10MB
       if (file.size > 10 * 1024 * 1024) {
-        showToast(t('chat.upload_too_large', { name: file.name }), 'error')
+        alert(t('chat.upload_too_large', { name: file.name }))
         continue
       }
 

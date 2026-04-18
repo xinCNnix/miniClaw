@@ -9,7 +9,6 @@ from .trajectory_encoder import TrajectoryEncoder
 from .policy_head import PolicyValueHead
 from .buffer import EnhancedReplayBuffer
 from .rl_trainer import RLTrainer
-from .agent_model import AgentModel
 
 __all__ = [
     # Models
@@ -22,8 +21,6 @@ __all__ = [
     # Training Components
     "EnhancedReplayBuffer",
     "RLTrainer",
-    # Unified Interface
-    "AgentModel",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.1.0"

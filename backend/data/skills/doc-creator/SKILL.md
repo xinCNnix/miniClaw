@@ -27,6 +27,15 @@ Generate professional Microsoft Office documents (Word, Excel, PowerPoint) with 
 - `output.xlsx`: Excel workbook
 - `output.pptx`: PowerPoint presentation
 
+## CRITICAL: Mandatory Execution Steps
+
+创建文档时必须完成以下两步：
+1. 使用 `write_file` 编写 Python 脚本
+2. 使用 `terminal` 执行脚本来生成最终文档
+
+**重要**: 仅编写脚本是不够的，必须用 `terminal` 工具执行脚本，
+用户需要的是输出文档，而不是脚本文件。
+
 ## How to Use
 
 ### Step 1: Generate Content (Optional)

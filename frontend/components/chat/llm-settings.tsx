@@ -5,7 +5,6 @@ import { Plus, Edit2, Trash2 } from "lucide-react"
 import { apiClient } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { useToastContext } from "@/components/common/ToastContext"
 
 interface LLMConfig {
   id: string
@@ -40,7 +39,6 @@ const PROVIDER_OPTIONS = [
 ]
 
 export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
-  const { showToast } = useToastContext()
   const [llms, setLLMs] = useState<LLMConfig[]>([])
   const [currentLLMId, setCurrentLLMId] = useState<string>("")
   const [message, setMessage] = useState("")
@@ -62,10 +60,9 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
       const response = await apiClient.listLLMs()
       setLLMs(response.llms)
       setCurrentLLMId(response.current_llm_id)
-    } catch (error: unknown) {
+    } catch (error: any) {
       console.error("Failed to load LLMs:", error)
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      setMessage(`加载失败: ${errorMessage}`)
+      setMessage(`加载失败: ${error.message}`)
       setTimeout(() => setMessage(""), 3000)
     }
   }
@@ -93,9 +90,8 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
       if (onConfigChange) {
         onConfigChange()
       }
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      setMessage(`切换失败: ${errorMessage}`)
+    } catch (error: any) {
+      setMessage(`切换失败: ${error.message}`)
       setTimeout(() => setMessage(""), 3000)
     } finally {
       setSwitchingLLM(null)
@@ -103,17 +99,16 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
   }
 
   const handleDelete = async (llmId: string) => {
-    // TODO: Replace with proper confirmation dialog
-    // For now, just show a warning toast and proceed
-    showToast(`确定要删除 ${llmId} 吗？`, 'warning')
+    if (!confirm(`确定要删除 ${llmId} 吗？`)) return
 
     try {
       await apiClient.deleteLLM(llmId)
-      showToast("删除成功", 'success')
+      setMessage("删除成功")
       await loadLLMs()
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      showToast(`删除失败: ${errorMessage}`, 'error')
+      setTimeout(() => setMessage(""), 2000)
+    } catch (error: any) {
+      setMessage(`删除失败: ${error.message}`)
+      setTimeout(() => setMessage(""), 3000)
     }
   }
 
@@ -190,9 +185,8 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
         setMessage(result.message || "保存失败")
         setTimeout(() => setMessage(""), 3000)
       }
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      setMessage(`保存失败: ${errorMessage}`)
+    } catch (error: any) {
+      setMessage(`保存失败: ${error.message}`)
       setTimeout(() => setMessage(""), 3000)
     }
   }

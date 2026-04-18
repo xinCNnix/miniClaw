@@ -128,8 +128,6 @@ class RLTrainer:
             self.mlp_optimizer = model.optimizer
             logger.debug("Using single optimizer for basic mode")
 
-        self._old_logits_cache: dict[str, torch.Tensor] = {}
-
         logger.info(
             f"Initialized RLTrainer: gamma={gamma}, "
             f"entropy_coef={entropy_coef}, policy_loss_coef={policy_loss_coef}, "
@@ -461,15 +459,6 @@ class RLTrainer:
             action_logits = output["action_logits"]
             value_pred = output["value"]
 
-            # Cache current logits for future KL computation
-            if exp.get("episode_id"):
-                self._old_logits_cache[exp["episode_id"]] = action_logits.detach().clone()
-                # Periodic cleanup to prevent memory leak
-                if len(self._old_logits_cache) > 500:
-                    keys_to_remove = list(self._old_logits_cache.keys())[:100]
-                    for k in keys_to_remove:
-                        del self._old_logits_cache[k]
-
             # Compute losses
             policy_loss = self._compute_policy_loss(action_logits, action)
             value_loss = self._compute_value_loss(value_pred, reward)
@@ -478,12 +467,8 @@ class RLTrainer:
             )
             entropy = self._compute_entropy(action_logits)
 
-            # KL loss with cached old logits
+            # KL loss (if we have old logits - for now skip)
             kl_loss = torch.tensor(0.0, device=policy_loss.device)
-            exp_episode = exp.get("episode_id")
-            if exp_episode and exp_episode in self._old_logits_cache:
-                old_logits = self._old_logits_cache[exp_episode]
-                kl_loss = self._compute_kl_loss(action_logits, old_logits)
 
             # Prompt consistency loss
             prompt_consistency_loss = self._compute_prompt_consistency_loss(

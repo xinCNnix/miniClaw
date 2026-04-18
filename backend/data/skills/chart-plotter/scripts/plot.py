@@ -20,17 +20,18 @@ from pathlib import Path
 # Script: backend/data/skills/chart-plotter/scripts/plot.py
 # backend/ root is 5 levels up: scripts/ → chart-plotter/ → skills/ → data/ → backend/
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+_PROJECT_ROOT = _BACKEND_ROOT.parent  # project root (miniclaw/)
 
 
 def _resolve_output_path(output_path: str) -> str:
-    """Resolve output path: absolute as-is, relative against backend/downloads/."""
+    """Resolve output path: absolute as-is, relative against project_root/outputs/."""
     p = Path(output_path)
     if p.is_absolute():
         return str(p)
-    # Always place output in downloads/ unless path already includes it
-    if not output_path.startswith("downloads" + os.sep) and not output_path.startswith("downloads/"):
-        output_path = f"downloads{os.sep}{output_path}"
-    return str(_BACKEND_ROOT / output_path)
+    # Always place output in outputs/ unless path already includes it
+    if not output_path.startswith("outputs" + os.sep) and not output_path.startswith("outputs/"):
+        output_path = f"outputs{os.sep}{output_path}"
+    return str(_PROJECT_ROOT / output_path)
 
 # --- Font Setup for Chinese Support ---
 def get_chinese_font():
@@ -168,7 +169,7 @@ def main():
     
     plt.tight_layout()
 
-    # Resolve output paths (auto-add downloads/ prefix)
+    # Resolve output paths (auto-add outputs/ prefix)
     png_path = _resolve_output_path(args.output_png)
     svg_path = _resolve_output_path(args.output_svg)
     pdf_path = _resolve_output_path(args.output_pdf) if args.output_pdf else None

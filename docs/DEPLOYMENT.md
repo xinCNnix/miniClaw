@@ -491,7 +491,7 @@ server {
 
 ---
 
-*Last Updated: 2026-03-27*
+*Last Updated: 2024-03-14*
 
 1. **Clone the repository:**
 
@@ -1127,7 +1127,7 @@ curl http://localhost:8002/health
 # Expected response
 {
   "status": "healthy",
-  "version": "0.2.0"
+  "version": "0.1.0"
 }
 ```
 
@@ -1238,4 +1238,4 @@ For deployment issues:
 
 ---
 
-*Last Updated: 2026-03-27*
+*Last Updated: 2024-03-14*

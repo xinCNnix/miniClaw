@@ -71,32 +71,9 @@ The script will return a list of matching repositories with:
 - Description matches user need: Consider installing
 - Recent updates: More likely to be maintained
 
-### Step 3: Security Check (MANDATORY - For All Sources)
 
-**⚠️ CRITICAL: Before installing ANY skill (from ClawHub or GitHub), you MUST run security check:**
 
-```bash
-cd backend/data/skills/clawsec-suite
-node scripts/guarded_skill_install.mjs --skill <skill-name> --version <version>
-```
-
-**Security Rules:**
-- Exit code 0 → ✅ Safe, proceed to installation
-- Exit code 42 → ⛔ **MALICIOUS ADVISORY DETECTED**, STOP immediately
-
-**If malicious advisory detected:**
-1. **Inform user immediately** with advisory details and severity
-2. **Recommend against installation** - explain the risks
-3. **Require explicit double confirmation** with `--confirm-advisory`:
-   ```bash
-   node scripts/guarded_skill_install.mjs --skill <skill-name> --version <version> --confirm-advisory
-   ```
-
-**This step CANNOT be skipped, even for trusted sources!**
-
----
-
-### Step 4: Install the Skill
+### Step 3: Install the Skill
 
 **From ClawHub:**
 ```bash
@@ -118,7 +95,7 @@ The installation will:
 
 ---
 
-### Step 5: Verify and Inform User
+### Step 4: Verify and Inform User
 
 ```bash
 # Validate the installed skill
@@ -138,7 +115,7 @@ python data/skills/skill-creator/scripts/refresh_skills.py
 The skill is now ready to use. Would you like me to test it?
 ```
 
-### Step 6: Handle Errors
+### Step 5: Handle Errors
 
 If installation fails:
 1. Explain the error to the user

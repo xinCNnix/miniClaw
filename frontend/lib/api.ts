@@ -610,7 +610,7 @@ export class APIClient {
   }
 
   /**
-   * Switch to a different LLM provider (hot-switch)
+   * Switch to a different LLM provider (hot-switch) - Legacy
    */
   async switchProvider(provider: string): Promise<{
     success: boolean;
@@ -629,6 +629,111 @@ export class APIClient {
     if (!response.ok) {
       const error = await response.text();
       throw new Error(`Failed to switch provider: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Get all configured LLMs (without API keys)
+   */
+  async listLLMs(): Promise<{
+    current_llm_id: string;
+    llms: Array<{
+      id: string;
+      provider: string;
+      name: string;
+      model: string;
+      base_url: string;
+      has_api_key: boolean;
+      api_key_preview: string;
+      is_current: boolean;
+    }>;
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/config/llms`);
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to list LLMs: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Save or update LLM configuration
+   *
+   * api_key 是可选的：
+   * - 新增时：必须提供 api_key
+   * - 编辑时：如果不修改 api_key 则不传此字段
+   */
+  async saveLLM(request: {
+    id?: string;
+    provider: string;
+    name: string;
+    model: string;
+    base_url: string;
+    api_key?: string;
+    user_confirmed?: boolean;
+  }): Promise<{
+    success: boolean;
+    llm_id: string;
+    requires_confirmation?: boolean;
+    message?: string;
+    domain?: string;
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/config/llms`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to save LLM: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Switch to a different LLM (hot-switch)
+   */
+  async switchLLM(llmId: string): Promise<{
+    success: boolean;
+    current_llm_id: string;
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/config/llms/switch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ llm_id: llmId }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to switch LLM: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Delete LLM configuration
+   */
+  async deleteLLM(llmId: string): Promise<{
+    success: boolean;
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/config/llms/${llmId}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to delete LLM: ${error}`);
     }
 
     return response.json();

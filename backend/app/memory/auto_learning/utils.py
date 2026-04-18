@@ -26,33 +26,34 @@ def get_embedder(
 ) -> SentenceTransformer:
     """Get or create SentenceTransformer singleton.
 
-    This function implements the singleton pattern for the SentenceTransformer
-    embedder, ensuring that only one instance is created and reused across
-    the application. This improves performance by avoiding repeated model loading.
+    Uses the same local cache path as the project's embedding_manager
+    to avoid online downloads.
 
     Args:
         model_name: Optional model name. If None, uses the default from settings.
-                    The default is typically "all-MiniLM-L6-v2".
 
     Returns:
         SentenceTransformer: The singleton embedder instance.
-
-    Examples:
-        >>> embedder = get_embedder()
-        >>> embedding = embedder.encode("Hello world")
-
-        >>> # Use custom model
-        >>> embedder = get_embedder("all-mpnet-base-v2")
     """
     global _embedder
 
     if _embedder is None:
+        # 复用项目 embedding_manager 的本地缓存路径和离线模式
+        from pathlib import Path
+        import os
+        project_root = Path(__file__).parent.parent.parent.parent
+        hf_cache_dir = project_root / "data" / "models" / "embedding"
+        os.environ['HF_HOME'] = str(hf_cache_dir)
+        os.environ['HUGGINGFACE_HUB_CACHE'] = str(hf_cache_dir / "hub")
+        os.environ['HF_HUB_OFFLINE'] = '1'
+        os.environ['TRANSFORMERS_OFFLINE'] = '1'
+
         settings = get_settings()
         model_name = model_name or settings.pattern_embedder_model_name
 
-        logger.info(f"Loading sentence transformer: {model_name}")
+        logger.info(f"Loading sentence transformer (offline): {model_name}")
         _embedder = SentenceTransformer(model_name)
-        logger.info("Sentence transformer loaded successfully")
+        logger.info("Sentence transformer loaded successfully from local cache")
 
     return _embedder
 

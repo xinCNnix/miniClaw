@@ -238,9 +238,44 @@ docs/TOOLS_UPDATE.md
 docs/ARCHITECTURE.md
 docs/DATABASE_*.md
 
-# Project reports and summaries (not tracked in git)
-PROJECT_COMPLETION_REPORT.md
-SKILLS_FIX_SUMMARY.md
+# Temporary reports and analysis (generated during development)
 *_REPORT.md
-*_SUMMARY.md
-docs/TOT_IMPROVEMENT_PLAN.md
+*_ANALYSIS.md
+*_SUMMARY_*.md
+*_FIX_*.md
+*_TEST_*.md
+*_DEBUG*.md
+*_LOG*.md
+*STATUS*.md
+*QUICK*.md
+
+# Test scripts and temporary files (keep only organized tests in tests/)
+test_*.py
+*_test_*.py
+manual_test_*.py
+debug_*.py
+verify_*.py
+restart_*.bat
+restart_*.sh
+
+# Response dumps and temporary outputs
+*_response.txt
+test_results.txt
+*.txt.bak
+
+# Backup files
+*.backup
+*_backup.*
+
+# Temporary documentation
+COMMIT_MESSAGE.txt
+TOT_TEST_PLAN.md
+
+# Skills directory (user-specific, not tracked in git)
+backend/data/skills/
+
+# Encrypted credentials (contains API keys)
+backend/data/credentials.encrypted
+backend/data/credentials.json
+*.key
+

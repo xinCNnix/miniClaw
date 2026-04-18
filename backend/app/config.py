@@ -441,7 +441,7 @@ class Settings(BaseSettings):
     tca_model_path: str = "data/complexity_training/tca_model.pth"
 
     # === Auto Learning ===
-    pattern_embedder_model_name: str = "all-MiniLM-L6-v2"
+    pattern_embedder_model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"
     pattern_storage_path: str = "data/patterns"
     enable_rl_training: bool = True
     rl_target_update_freq: int = 100

@@ -179,19 +179,23 @@ class SkillsBootstrap:
             description = frontmatter.get("description", "No description")
 
             # Calculate relative location from base_dir
+            # Location should be the skill directory (without SKILL.md filename)
             # This ensures the path works correctly when Agent uses read_file tool
             settings = get_settings()
             base_dir = Path(settings.base_dir).resolve()
 
-            # Convert skill_path to absolute path first
-            skill_path_abs = skill_path.resolve() if not skill_path.is_absolute() else skill_path
+            # Get the skill directory (parent of SKILL.md)
+            skill_dir = skill_path.parent
+
+            # Convert skill directory to absolute path first
+            skill_dir_abs = skill_dir.resolve() if not skill_dir.is_absolute() else skill_dir
 
             try:
-                rel_path = skill_path_abs.relative_to(base_dir)
+                rel_path = skill_dir_abs.relative_to(base_dir)
                 location = rel_path.as_posix()
             except ValueError:
                 # Fallback: if skill is outside base_dir (shouldn't happen)
-                rel_path = skill_path.relative_to(self.skills_dir.parent)
+                rel_path = skill_dir.relative_to(self.skills_dir.parent)
                 location = f"./{rel_path.as_posix()}"
 
             # Optional fields

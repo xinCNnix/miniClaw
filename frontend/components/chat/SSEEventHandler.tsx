@@ -88,7 +88,7 @@ export function SSEEventHandler({
                   case "tool_call":
                     if (event.tool_calls && event.tool_calls.length > 0) {
                       const toolCall = event.tool_calls[0]
-                      onToolCall(toolCall.name, toolCall.args)
+                      onToolCall(toolCall.name, toolCall.arguments)
                     }
                     break
                   case "content_delta":

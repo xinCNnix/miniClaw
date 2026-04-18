@@ -1,7 +1,6 @@
 import type { Metadata } from "next"
 import "./globals.css"
-import { Providers } from "@/components/common/Providers"
-import { AppProvider } from "@/contexts/AppContext"
+import { cn } from "@/lib/utils"
 
 export const metadata: Metadata = {
   title: "MiNiCLAW - AI Agent System",
@@ -16,11 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased font-sans">
-        <Providers>
-          <AppProvider apiUrl={process.env.NEXT_PUBLIC_API_URL || "http://localhost:8002"}>
-            {children}
-          </AppProvider>
-        </Providers>
+        {children}
       </body>
     </html>
   )

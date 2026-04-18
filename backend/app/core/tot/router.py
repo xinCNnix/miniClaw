@@ -458,6 +458,11 @@ class ToTOrchestrator:
 
                     final_state = state
 
+                    # 跳过 state 为 None 的情况（节点内部报错可能返回 None）
+                    if state is None:
+                        logger.warning("[ToT Stream] Skipping None state from node %s", node_name if isinstance(graph_output, dict) and len(graph_output) == 1 else "?")
+                        continue
+
                     # Fix 5: 根据完成的节点发送状态消息（每个节点只发一次）
                     if isinstance(graph_output, dict) and len(graph_output) == 1:
                         if node_name not in _sent_nodes and node_name in _node_status_map:
@@ -553,14 +558,15 @@ class ToTOrchestrator:
                                     "duration": 0.0,
                                 })
 
-                    best_score = final_state.get("best_score", 0) if final_state else 0
-
-                    action = await evaluate_and_correct(
-                        user_query=query,
-                        agent_output=final_answer or "",
-                        tool_calls=tool_calls,
-                        execution_time=0.0,  # ToT 内部时间难以精确获取
-                        execution_mode="tot",
+                    action = await asyncio.wait_for(
+                        evaluate_and_correct(
+                            user_query=query,
+                            agent_output=final_answer or "",
+                            tool_calls=tool_calls,
+                            execution_time=0.0,
+                            execution_mode="tot",
+                        ),
+                        timeout=30.0,
                     )
                     tot_correction_score = action.quality_score
                     logger.info(
@@ -569,6 +575,8 @@ class ToTOrchestrator:
                     )
                     if action.should_correct and action.correction:
                         tot_correction = action.correction
+            except asyncio.TimeoutError:
+                logger.warning("[reflection] ToT reflection timed out (30s), skipping")
             except Exception as e:
                 logger.warning(f"[reflection] ToT reflection failed: {e}")
 
@@ -623,7 +631,10 @@ class ToTOrchestrator:
                 "error": f"Reasoning error: {str(e)}"
             }
 
-        # === TCA post-execution data recording ===
+        # Final done event（必须先发送，后续 TCA/Meta recording 可能卡住）
+        yield {"type": "done"}
+
+        # === TCA post-execution data recording（done 之后，不阻塞前端）===
         try:
             _s = get_settings_lazy()
             if getattr(_s, "enable_tca", False):
@@ -665,6 +676,3 @@ class ToTOrchestrator:
                 )
         except Exception as e:
             logger.debug(f"[MetaPolicy] ToT post-execution recording failed: {e}")
-
-        # Final done event
-        yield {"type": "done"}

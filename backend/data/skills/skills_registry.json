@@ -2,18 +2,58 @@
   "skills": {
     "get_weather": {
       "name": "get_weather",
-      "description": "获取指定城市实时天气",
-      "description_en": "实时获取城市天气",
+      "description": "Get current weather and forecasts via wttr.in. Use when: user asks about weather, temperature, or forecasts for any location.",
       "enabled": true,
       "installed_at": "2026-03-08T20:29:50.836170",
       "version": "1.0.0",
       "author": "miniClaw",
-      "tags": [
-        "weather",
-        "api",
-        "utility"
-      ]
+      "tags": ["weather", "api", "utility"]
+    },
+    "arxiv-search": {
+      "name": "arxiv-search",
+      "description": "Search and retrieve academic papers from arXiv.org by query, author, or ID. Use when user asks to find research papers, search academic literature, or get paper information from arXiv.",
+      "enabled": true,
+      "installed_at": "2026-03-13T16:15:00.000000",
+      "version": "1.0.0",
+      "author": "miniClaw",
+      "tags": ["arxiv", "academic", "research", "papers", "literature-search"]
+    },
+    "find-skill": {
+      "name": "find-skill",
+      "description": "Search and install skills from external sources like GitHub, clawhub, and other skill repositories. Use when user asks to find, download, or install new skills from the internet.",
+      "enabled": true,
+      "installed_at": "2026-03-13T16:15:00.000000",
+      "version": "1.0.0",
+      "author": "miniClaw",
+      "tags": ["skills", "search", "install", "github", "repository"]
+    },
+    "github": {
+      "name": "github",
+      "description": "GitHub operations via `gh` CLI: issues, PRs, CI runs, code review, API queries. Use for checking PR status, creating issues, listing PRs, viewing CI logs.",
+      "enabled": true,
+      "installed_at": "2026-03-13T16:15:00.000000",
+      "version": "1.0.0",
+      "author": "miniClaw",
+      "tags": ["github", "git", "development", "code-review"]
+    },
+    "skill_validator": {
+      "name": "skill_validator",
+      "description": "Validate skill files before use. Use when: loading new skills, verifying skill integrity, checking skill metadata. Checks for: required fields, valid syntax, security issues.",
+      "enabled": true,
+      "installed_at": "2026-03-13T16:15:00.000000",
+      "version": "1.0.0",
+      "author": "miniClaw",
+      "tags": ["validation", "skills", "security"]
+    },
+    "skill-creator": {
+      "name": "skill-creator",
+      "description": "Create or update skills. Use when designing, structuring, validating, or packaging skills with scripts, references, and assets.",
+      "enabled": true,
+      "installed_at": "2026-03-13T16:15:00.000000",
+      "version": "1.0.0",
+      "author": "miniClaw",
+      "tags": ["creation", "skills", "development"]
     }
   },
-  "last_updated": "2026-03-11T10:46:54.596628"
+  "last_updated": "2026-03-13T16:39:00.000000"
 }

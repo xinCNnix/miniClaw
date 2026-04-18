@@ -12,6 +12,7 @@ Supports:
 """
 
 import argparse
+import os
 import sys
 import re
 from pathlib import Path
@@ -216,17 +217,18 @@ def generate_dot_code(
 # Script: backend/data/skills/diagram-plotter/scripts/diagram_plotter.py
 # backend/ root is 5 levels up: scripts/ → diagram-plotter/ → skills/ → data/ → backend/
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+_PROJECT_ROOT = _BACKEND_ROOT.parent  # project root (miniclaw/)
 
 
 def _resolve_output_path(output_path: str) -> str:
-    """Resolve output path: absolute as-is, relative against backend/downloads/."""
+    """Resolve output path: absolute as-is, relative against project_root/outputs/."""
     p = Path(output_path)
     if p.is_absolute():
         return str(p)
-    # Always place output in downloads/ unless path already includes it
-    if not output_path.startswith("downloads" + os.sep) and not output_path.startswith("downloads/"):
-        output_path = f"downloads{os.sep}{output_path}"
-    return str(_BACKEND_ROOT / output_path)
+    # Always place output in outputs/ unless path already includes it
+    if not output_path.startswith("outputs" + os.sep) and not output_path.startswith("outputs/"):
+        output_path = f"outputs{os.sep}{output_path}"
+    return str(_PROJECT_ROOT / output_path)
 
 
 def create_diagram(

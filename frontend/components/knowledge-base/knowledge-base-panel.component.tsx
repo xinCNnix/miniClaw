@@ -11,11 +11,9 @@ import { apiClient } from '@/lib/api';
 import type { KBDocument, KBUploadStatus, KBLargeFileUploadResponse, KBBatchUploadResponse, KBBatchUploadComplete } from '@/types/knowledge-base';
 import { Upload, File, Trash2, AlertCircle, FileText, AlertTriangle, FolderOpen } from 'lucide-react';
 import { useTranslation } from '@/hooks/use-translation.hook';
-import { useToastContext } from '@/components/common/ToastContext';
 
 export function KnowledgeBasePanel() {
   const { t } = useTranslation()
-  const { showToast } = useToastContext()
   const [documents, setDocuments] = useState<KBDocument[]>([]);
   const [uploadStatus, setUploadStatus] = useState<KBUploadStatus>({
     isUploading: false,
@@ -236,15 +234,14 @@ export function KnowledgeBasePanel() {
       });
 
       // Show result message from server
-      showToast(response.message, 'success');
-    } catch (error: unknown) {
+      alert(response.message);
+    } catch (error: any) {
       console.error('Batch upload failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       setUploadStatus({
         isUploading: false,
         progress: 0,
         currentFile: null,
-        error: errorMessage || 'Batch upload failed',
+        error: error.message || 'Batch upload failed',
       });
     }
   };
@@ -273,15 +270,14 @@ export function KnowledgeBasePanel() {
       });
 
       // Show result message from server
-      showToast(response.message, 'success');
-    } catch (error: unknown) {
+      alert(response.message);
+    } catch (error: any) {
       console.error('Folder upload failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       setUploadStatus({
         isUploading: false,
         progress: 0,
         currentFile: null,
-        error: errorMessage || 'Folder upload failed',
+        error: error.message || 'Folder upload failed',
       });
     }
   };
@@ -389,16 +385,16 @@ export function KnowledgeBasePanel() {
   };
 
   const handleDelete = async (docId: string, filename: string) => {
-    // TODO: Replace with proper confirmation dialog
-    // For now, just show a warning toast and proceed
-    showToast(t('knowledge_base.delete_confirm', { filename }), 'warning');
+    if (!confirm(t('knowledge_base.delete_confirm', { filename }))) {
+      return;
+    }
 
     try {
       await apiClient.deleteKBDocument(docId);
       await fetchDocuments();
     } catch (error) {
       console.error('Delete failed:', error);
-      showToast(t('knowledge_base.error_delete_failed'), 'error');
+      alert(t('knowledge_base.error_delete_failed'));
     }
   };
 

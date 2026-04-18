@@ -48,39 +48,34 @@ class TerminalTool(BaseTool):
     description: str = """
     Execute shell commands in a safe, sandboxed environment.
 
-    ⚠️ CRITICAL USAGE RULES - Read this before using!
+    IMPORTANT: You MUST provide the 'command' parameter with the shell command to execute.
 
-    Python Execution:
-    - To EXECUTE PYTHON SCRIPTS: command="python script.py" ✅
-    - To RUN PYTHON CODE: Use python_repl tool instead ✅
-    - ❌ NEVER: command="python" (will hang - starts interactive REPL)
-    - ❌ NEVER: command="python3" or "python.exe" alone (same issue)
-
-    File Operations:
-    - To READ files: Use read_file tool ✅
-    - To WRITE files: Use write_file tool ✅
-    - Only use terminal for file listing (ls, dir) or searching (find, grep)
-
-    Examples:
-    ✅ terminal("python script.py") - Execute Python script
-    ✅ terminal("python -m pip install requests") - Install packages
-    ✅ terminal("ls -la") - List files
-    ✅ terminal("curl -s 'https://api.example.com/data'") - HTTP request
-    ❌ terminal("python") - Will hang! Use python_repl instead
-    ❌ terminal("echo 'text' > file.txt") - Use write_file instead
-
-    Parameters:
+    Parameter format:
     - command (required): The shell command string to execute
 
-    Safety Features:
-    - Commands restricted to project directory
-    - Dangerous commands blocked (rm -rf /, format, shutdown, etc.)
-    - Timeout protection (30s default)
-    - Automatic dependency detection for Python commands
+    Important restrictions:
+    - Commands are restricted to the project directory
+    - Dangerous commands are blocked for both Unix and Windows
+    - Commands have a timeout limit
 
-    Blocked Commands:
-    Unix: rm -rf /, mkfs, dd if=/dev/zero, fork bombs
-    Windows: format, shutdown, reg delete, taskkill /f, diskpart
+    Blocked Unix commands: rm -rf /, mkfs, dd if=/dev/zero, fork bombs, etc.
+    Blocked Windows commands: format, shutdown, reg delete, taskkill /f, diskpart, etc.
+
+    Common uses (Unix/Linux/macOS):
+    - File operations: ls, cp, mv, cat
+    - Process management: ps, kill
+    - System info: uname, df, free
+
+    Common uses (Windows):
+    - File operations: dir, copy, move, type
+    - Process management: tasklist
+    - System info: systeminfo, ver
+
+    Usage examples:
+    - command="ls -la"
+    - command="cat README.md"
+    - command="find . -name '*.py'"
+    - command="curl -s 'https://api.example.com/data'"
     """
     args_schema: type[TerminalInput] = TerminalInput
 
@@ -98,14 +93,6 @@ class TerminalTool(BaseTool):
         import re
         # Normalize whitespace by collapsing multiple spaces
         command_normalized = re.sub(r'\s+', ' ', command.lower().strip())
-
-        # ⚠️ 检测单独的 python 命令（会启动 REPL 卡住）
-        if command_normalized in ['python', 'python3', 'python.exe']:
-            raise ValueError(
-                "Command 'python' without arguments will start interactive REPL and hang. "
-                "To execute Python code, use the 'python_repl' tool instead. "
-                "To run a Python script, use 'python script.py' with the terminal tool."
-            )
 
         for blocked in self._blocked_commands:
             # Also normalize the blocked pattern

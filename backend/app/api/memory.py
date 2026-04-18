@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 
 from app.memory.memory_manager import get_memory_manager, MemoryManager
 from app.memory.session import get_session_manager
-from app.memory.auto_learning import get_pattern_memory
 
 logger = logging.getLogger(__name__)
 
@@ -68,80 +67,6 @@ class MemoryStatsResponse(BaseModel):
 # ============================================================================
 # API Endpoints
 # ============================================================================
-
-@router.get("/patterns")
-async def get_patterns(
-    query: str = Query("", description="Search query for patterns"),
-    top_k: int = Query(10, ge=1, le=50, description="Number of patterns to return"),
-) -> dict:
-    """
-    Get learned patterns from Pattern Memory.
-
-    Returns patterns that have been extracted and learned from previous
-    task executions. Can optionally filter by query.
-
-    ## Query Parameters
-    - **query**: Optional search query to find relevant patterns
-    - **top_k**: Maximum number of patterns to return (1-50, default: 10)
-
-    ## Response
-    ```json
-    {
-      "patterns": [
-        {
-          "id": "pattern_001",
-          "description": "Handle API timeout by increasing timeout",
-          "situation": "API timeout error",
-          "outcome": "Failed after 30s",
-          "fix_action": "Increased timeout to 60s",
-          "similarity": 0.85
-        }
-      ],
-      "total": 1
-    }
-    ```
-
-    Args:
-        query: Optional search query
-        top_k: Maximum patterns to return
-
-    Returns:
-        Dictionary with patterns list and total count
-    """
-    try:
-        pattern_memory = get_pattern_memory()
-
-        # Get patterns
-        if query:
-            # Search with query
-            patterns = pattern_memory.get_top_patterns(query, top_k=top_k)
-        else:
-            # Get all patterns (limited by top_k)
-            all_patterns = pattern_memory.patterns[:top_k]
-            patterns = [
-                {
-                    "id": p.id,
-                    "description": p.description,
-                    "situation": p.situation,
-                    "outcome": p.outcome,
-                    "fix_action": p.fix_action,
-                    "similarity": 1.0,  # Full similarity for direct listing
-                }
-                for p in all_patterns
-            ]
-
-        return {
-            "patterns": patterns,
-            "total": len(patterns),
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to get patterns: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve patterns: {str(e)}",
-        )
-
 
 @router.get("/stats", response_model=MemoryStatsResponse)
 async def get_memory_stats() -> MemoryStatsResponse:

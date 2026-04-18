@@ -419,7 +419,7 @@ class SkillDependencyManager:
             success, msg = self.install_python_dependencies(missing)
 
             if success:
-                messages.append(f"✓ Auto-installed Python packages: {', '.join(missing)}")
+                messages.append(f"[OK] Auto-installed Python packages: {', '.join(missing)}")
                 # Re-check to update status
                 for pkg in deps.python_deps:
                     if not pkg.installed:
@@ -436,7 +436,7 @@ class SkillDependencyManager:
         if deps.has_uninstalled_system:
             hints = deps.system_install_hints
             if hints:
-                messages.append("⚠ Missing system dependencies. Please install:")
+                messages.append("[WARNING] Missing system dependencies. Please install:")
                 for hint in hints:
                     messages.append(f"  - {hint}")
                 # Don't fail on system dependencies, just warn
@@ -492,14 +492,14 @@ class SkillDependencyManager:
             if deps.python_deps:
                 lines.append("\nRequired Python packages:")
                 for pkg in deps.python_deps:
-                    status = "✓" if pkg.installed else "✗"
+                    status = "[OK]" if pkg.installed else "[MISSING]"
                     version = f" ({pkg.version})" if pkg.version else ""
                     lines.append(f"  {status} {pkg.package}{version}")
 
             if deps.system_deps:
                 lines.append("\nRequired system tools:")
                 for dep in deps.system_deps:
-                    status = "✓" if dep.installed else "✗"
+                    status = "[OK]" if dep.installed else "[MISSING]"
                     lines.append(f"  {status} {dep.name}")
                     if not dep.installed and dep.install_hints:
                         for hint in dep.install_hints:

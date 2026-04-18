@@ -183,7 +183,10 @@ async def _generate_multi_beam_extensions(state: ToTState) -> ToTState:
         "beam_count": len(active_beams),
     })
 
-    state["thoughts"].extend(unique_thoughts)
+    # 不在这里 extend thoughts，由 add_thoughts reducer 合并新增部分
+    # 原来 state["thoughts"].extend(unique_thoughts) + return state
+    # 导致 reducer left+right 时翻倍（left 已含新 thoughts，right 也含）
+    state["thoughts"] = unique_thoughts  # 只返回新增部分，reducer 会 left + right
     return state
 
 
@@ -291,7 +294,8 @@ Think from a fundamentally different perspective."""
         "thoughts": [t.model_dump() for t in unique_thoughts],
     })
 
-    state["thoughts"].extend(unique_thoughts)
+    # 只返回新增部分，由 add_thoughts reducer 合并
+    state["thoughts"] = unique_thoughts
     return state
 
 
@@ -428,7 +432,8 @@ async def _generate_single_beam(state: ToTState) -> ToTState:
         "thoughts": [t.model_dump() for t in unique_thoughts]
     })
 
-    state["thoughts"].extend(unique_thoughts)
+    # 只返回新增部分，由 add_thoughts reducer 合并
+    state["thoughts"] = unique_thoughts
 
     return state
 
