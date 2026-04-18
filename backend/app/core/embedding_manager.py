@@ -116,7 +116,7 @@ class EmbeddingModelManager:
 
         # Set HuggingFace environment variables
         project_root = Path(__file__).parent.parent.parent
-        hf_cache_dir = project_root / "backup" / "data" / "models"
+        hf_cache_dir = project_root / "data" / "models" / "embedding"
         hf_cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Force offline mode - no network access

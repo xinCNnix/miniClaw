@@ -294,6 +294,39 @@ class StreamCoordinator:
             # Multi-round tool calling loop
             round_count = 0
             lc_messages = self._convert_messages(messages)
+            _last_tool_names: list[str] = []  # Track tool calls for TCA recording
+
+            # === TCA injection ===
+            try:
+                if self.settings and getattr(self.settings, "enable_tca", False):
+                    from app.core.meta_policy.tca_helpers import get_tca_decision
+                    from app.core.meta_policy.capability_map import CapabilityMap
+
+                    _cap_map = CapabilityMap.from_core_tools()
+                    user_msg = messages[-1].get("content", "") if messages else ""
+                    _tca_decision = get_tca_decision(user_msg, cap_map=_cap_map)
+                    if _tca_decision and _tca_decision.get("injection_text"):
+                        from langchain_core.messages import SystemMessage
+                        lc_messages.append(SystemMessage(content=_tca_decision["injection_text"]))
+                        logger.info("[TCA] StreamCoordinator injection applied")
+            except Exception as e:
+                logger.debug(f"[TCA] StreamCoordinator enrichment failed: {e}")
+
+            # === Meta Policy injection ===
+            try:
+                if self.settings and getattr(self.settings, "enable_meta_policy", False):
+                    from app.core.meta_policy.meta_policy_helpers import get_meta_policy_decision
+                    from app.core.meta_policy.capability_map import CapabilityMap
+
+                    _cap_map_mp = CapabilityMap.from_core_tools()
+                    user_msg = messages[-1].get("content", "") if messages else ""
+                    _mp_decision = get_meta_policy_decision(user_msg, cap_map=_cap_map_mp)
+                    if _mp_decision and _mp_decision.get("injection_text"):
+                        from langchain_core.messages import SystemMessage
+                        lc_messages.append(SystemMessage(content=_mp_decision["injection_text"]))
+                        logger.info("[MetaPolicy] StreamCoordinator injection applied")
+            except Exception as e:
+                logger.debug(f"[MetaPolicy] StreamCoordinator enrichment failed: {e}")
 
             while round_count < self.max_rounds:
                 round_start_time = asyncio.get_event_loop().time()
@@ -667,6 +700,7 @@ class StreamCoordinator:
                         content=str(result),
                         tool_call_id=tc['id']
                     ))
+                    _last_tool_names.append(tc['name'])  # Track for TCA recording
 
                 # Round completion summary
                 round_end_time = asyncio.get_event_loop().time()
@@ -752,6 +786,36 @@ class StreamCoordinator:
             yield error_event.to_sse_dict()
 
         finally:
+            # === TCA post-execution data recording ===
+            try:
+                if self.settings and getattr(self.settings, "enable_tca", False):
+                    from app.core.meta_policy.tca_helpers import record_tca_episode
+
+                    user_msg = messages[-1].get("content", "") if messages else ""
+                    record_tca_episode(
+                        query=user_msg,
+                        tool_calls=[{"name": n} for n in _last_tool_names],
+                        plan_steps=round_count,
+                        task_completed=round_count < self.max_rounds,
+                    )
+            except Exception as e:
+                logger.debug(f"[TCA] StreamCoordinator post-execution recording failed: {e}")
+
+            # === Meta Policy post-execution data recording ===
+            try:
+                if self.settings and getattr(self.settings, "enable_meta_policy", False):
+                    from app.core.meta_policy.meta_policy_helpers import record_meta_policy_episode
+
+                    user_msg = messages[-1].get("content", "") if messages else ""
+                    record_meta_policy_episode(
+                        query=user_msg,
+                        tool_calls=[{"name": n} for n in _last_tool_names],
+                        plan_steps=round_count,
+                        task_completed=round_count < self.max_rounds,
+                    )
+            except Exception as e:
+                logger.debug(f"[MetaPolicy] StreamCoordinator post-execution recording failed: {e}")
+
             # Cleanup
             self.event_bus.unsubscribe(StreamEventType.TOOL_EXECUTION_START, tool_execution_handler)
             self.event_bus.unsubscribe(StreamEventType.TOOL_EXECUTION_COMPLETE, tool_execution_handler)

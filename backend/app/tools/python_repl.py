@@ -129,17 +129,17 @@ class PythonREPLTool(BaseTool):
     # Namespace for persistent state
     _namespace: Dict[str, Any] = {}
 
-    # Current execution state (for monitoring)
-    _current_process: Optional[Any] = None
-    _execution_start_time: float = 0
-    _operation_count: int = 0
-    _should_stop: bool = False
-
     # Allowed directories for file I/O
     _allowed_dirs: list[Path] = []
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        # Instance-level execution state to avoid race conditions between runs
+        self._current_process: Optional[Any] = None
+        self._execution_start_time: float = 0
+        self._operation_count: int = 0
+        self._should_stop: bool = False
+        self._execution_generation: int = 0
         self._update_allowed_dirs()
 
     def _update_allowed_dirs(self) -> None:
@@ -267,14 +267,25 @@ class PythonREPLTool(BaseTool):
         Returns:
             Tuple of (output, success, stats)
         """
-        # Reset state
+        # Reset state — bump generation so stale monitor threads exit
         self._operation_count = 0
         self._execution_start_time = time.time()
         self._should_stop = False
+        self._execution_generation += 1
+        current_gen = self._execution_generation
 
         # Create string buffers for output capture
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
+
+        # Patch code: replace plt.show() with plt.savefig() to prevent GUI popup blocking
+        import re
+        # original_code = code  # preserved for reference
+        code = re.sub(
+            r'plt\.show\(\)',
+            'print("[matplotlib: plt.show() intercepted and skipped — use plt.savefig() instead]")',
+            code
+        )
 
         # Prepare local namespace with safe open() wrapper
         def safe_open(file_path, *args, **kwargs):
@@ -285,6 +296,17 @@ class PythonREPLTool(BaseTool):
             "__builtins__": __builtins__,
             "open": safe_open,  # Override open with safe wrapper
         }
+
+        # Set matplotlib to non-interactive backend BEFORE any user code imports it
+        # This prevents plt.show() from opening GUI windows and blocking the process
+        # original_backend = None  # preserved for reference
+        try:
+            import matplotlib
+            # matplotlib.use('Agg')  # original: could cause issues if already imported
+            if matplotlib.get_backend() != 'agg':
+                matplotlib.use('Agg')
+        except ImportError:
+            pass
 
         # Merge with persistent namespace
         local_namespace.update(self._namespace)
@@ -302,8 +324,8 @@ class PythonREPLTool(BaseTool):
                             f"Operation limit exceeded: {self._operation_count} > {config['max_operations']}"
                         )
 
-                # Check if user requested stop
-                if self._should_stop:
+                # Check if execution was cancelled (stale generation = old monitor)
+                if self._should_stop and self._execution_generation == current_gen:
                     raise Exception("Execution stopped by user")
 
                 # Monitor callback
@@ -364,14 +386,18 @@ class PythonREPLTool(BaseTool):
             """Execute code with timeout monitoring."""
             # Monitor thread for timeout and memory checking
             def monitor():
-                while not self._should_stop:
+                while self._execution_generation == current_gen and not self._should_stop:
                     time.sleep(settings.python_monitor_interval)
+
+                    # Stale monitor from a previous run — exit immediately
+                    if self._execution_generation != current_gen:
+                        return
 
                     # Check timeout
                     elapsed = time.time() - self._execution_start_time
                     if elapsed > config["timeout"]:
                         self._should_stop = True
-                        raise TimeoutError(f"Execution timed out after {elapsed:.0f}s")
+                        return
 
                     # Check memory limit
                     try:
@@ -379,9 +405,7 @@ class PythonREPLTool(BaseTool):
                         memory_bytes = process.memory_info().rss
                         if memory_bytes > config["memory_limit"]:
                             self._should_stop = True
-                            raise MemoryLimitError(
-                                f"Memory limit exceeded: {memory_bytes / 1024 / 1024:.1f}MB > {config['memory_limit'] / 1024 / 1024:.1f}MB"
-                            )
+                            return
                     except Exception:
                         pass  # Process might have terminated
 

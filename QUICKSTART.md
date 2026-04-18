@@ -41,6 +41,22 @@ git --version
 # macOS: xcode-select --install
 ```
 
+#### 4. MiKTeX / LaTeX (Optional - for math plot rendering)
+```bash
+# Check if LaTeX is installed
+latex --version
+
+# If not installed (optional, for full LaTeX rendering in plots):
+# Windows:
+winget install MiKTeX.MiKTeX
+# Linux:
+sudo apt install texlive-full
+# macOS:
+brew install --cask mactex
+```
+
+> **Note**: LaTeX is optional. Without it, plots still work but use matplotlib's built-in mathtext renderer (limited LaTeX support). With LaTeX installed, plots support full LaTeX syntax including `\begin{cases}`, `\text{}`, `\boxed{}`, etc.
+
 **Note**: The startup scripts will verify these tools and guide you if any are missing.
 
 ---

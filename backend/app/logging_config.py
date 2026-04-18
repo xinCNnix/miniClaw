@@ -166,89 +166,94 @@ def get_agent_logger(name: str = "agent") -> logging.Logger:
     return logger
 
 
-class AgentExecutionLogger:
-    """
-    Context manager for logging agent execution details.
-
-    Usage:
-        with AgentExecutionLogger("task_name") as logger:
-            logger.log_input(user_message)
-            # ... execute ...
-            logger.log_output(response)
-    """
-
-    def __init__(self, task_name: str):
-        """
-        Initialize agent execution logger.
-
-        Args:
-            task_name: Name of the task being executed
-        """
-        self.task_name = task_name
-        self.logger = get_agent_logger()
-
-    def __enter__(self):
-        """Start execution logging."""
-        self.logger.info("=" * 80)
-        self.logger.info(f"AGENT EXECUTION START: {self.task_name}")
-        self.logger.info("=" * 80)
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """End execution logging."""
-        if exc_type is not None:
-            self.logger.error(f"AGENT EXECUTION FAILED: {self.task_name}")
-            self.logger.error(f"Error: {exc_val}", exc_info=True)
-        else:
-            self.logger.info("=" * 80)
-            self.logger.info(f"AGENT EXECUTION COMPLETE: {self.task_name}")
-            self.logger.info("=" * 80)
-        self.logger.info("")  # Empty line for readability
-
-    def log_input(self, messages: list, system_prompt: str):
-        """Log agent input."""
-        self.logger.debug(f"Input messages count: {len(messages)}")
-        self.logger.debug(f"System prompt length: {len(system_prompt)} chars")
-        self.logger.debug(f"System prompt preview: {system_prompt[:500]}...")
-
-        for i, msg in enumerate(messages[-3:]):  # Last 3 messages
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")
-            self.logger.debug(f"Message {i+1} [{role}]: {content[:200]}...")
-
-    def log_tool_call(self, tool_name: str, tool_args: dict):
-        """Log tool invocation."""
-        self.logger.info(f"TOOL CALL: {tool_name}")
-        self.logger.debug(f"Arguments: {tool_args}")
-
-    def log_tool_result(self, tool_name: str, result: str, success: bool, duration: float = None):
-        """Log tool result."""
-        status = "SUCCESS" if success else "FAILED"
-        self.logger.info(f"TOOL RESULT: {tool_name} - {status}")
-        if duration:
-            self.logger.debug(f"Duration: {duration:.2f}s")
-
-        # Log result preview
-        result_preview = result[:500] if result else ""
-        self.logger.debug(f"Result preview: {result_preview}...")
-
-        # Log result size
-        result_size = len(result) if result else 0
-        self.logger.debug(f"Result size: {result_size} chars")
-
-    def log_llm_response(self, response_content: str, tool_calls: list = None):
-        """Log LLM response."""
-        self.logger.info(f"LLM RESPONSE: {len(response_content)} chars")
-        self.logger.debug(f"Content preview: {response_content[:300]}...")
-
-        if tool_calls:
-            self.logger.info(f"Tool calls requested: {len(tool_calls)}")
-            for tc in tool_calls:
-                tc_name = tc.get("name", "unknown")
-                tc_args = tc.get("args", {})
-                self.logger.debug(f"  - {tc_name}: {str(tc_args)[:200]}...")
-
-    def log_final_output(self, output: str):
-        """Log final agent output."""
-        self.logger.info(f"FINAL OUTPUT: {len(output)} chars")
-        self.logger.debug(f"Output content: {output}")
+# --- 旧版 AgentExecutionLogger 已迁移到 core/trajectory/logger.py ---
+from app.core.trajectory import AgentExecutionLogger  # backward compat
+#
+# 以下为旧版代码（保留供参考）：
+#
+# class AgentExecutionLogger:
+#     """
+#     Context manager for logging agent execution details.
+#
+#     Usage:
+#         with AgentExecutionLogger("task_name") as logger:
+#             logger.log_input(user_message)
+#             # ... execute ...
+#             logger.log_output(response)
+#     """
+#
+#     def __init__(self, task_name: str):
+#         """
+#         Initialize agent execution logger.
+#
+#         Args:
+#             task_name: Name of the task being executed
+#         """
+#         self.task_name = task_name
+#         self.logger = get_agent_logger()
+#
+#     def __enter__(self):
+#         """Start execution logging."""
+#         self.logger.info("=" * 80)
+#         self.logger.info(f"AGENT EXECUTION START: {self.task_name}")
+#         self.logger.info("=" * 80)
+#         return self
+#
+#     def __exit__(self, exc_type, exc_val, exc_tb):
+#         """End execution logging."""
+#         if exc_type is not None:
+#             self.logger.error(f"AGENT EXECUTION FAILED: {self.task_name}")
+#             self.logger.error(f"Error: {exc_val}", exc_info=True)
+#         else:
+#             self.logger.info("=" * 80)
+#             self.logger.info(f"AGENT EXECUTION COMPLETE: {self.task_name}")
+#             self.logger.info("=" * 80)
+#         self.logger.info("")  # Empty line for readability
+#
+#     def log_input(self, messages: list, system_prompt: str):
+#         """Log agent input."""
+#         self.logger.debug(f"Input messages count: {len(messages)}")
+#         self.logger.debug(f"System prompt length: {len(system_prompt)} chars")
+#         self.logger.debug(f"System prompt preview: {system_prompt[:500]}...")
+#
+#         for i, msg in enumerate(messages[-3:]):  # Last 3 messages
+#             role = msg.get("role", "unknown")
+#             content = msg.get("content", "")
+#             self.logger.debug(f"Message {i+1} [{role}]: {content[:200]}...")
+#
+#     def log_tool_call(self, tool_name: str, tool_args: dict):
+#         """Log tool invocation."""
+#         self.logger.info(f"TOOL CALL: {tool_name}")
+#         self.logger.debug(f"Arguments: {tool_args}")
+#
+#     def log_tool_result(self, tool_name: str, result: str, success: bool, duration: float = None):
+#         """Log tool result."""
+#         status = "SUCCESS" if success else "FAILED"
+#         self.logger.info(f"TOOL RESULT: {tool_name} - {status}")
+#         if duration:
+#             self.logger.debug(f"Duration: {duration:.2f}s")
+#
+#         # Log result preview
+#         result_preview = result[:500] if result else ""
+#         self.logger.debug(f"Result preview: {result_preview}...")
+#
+#         # Log result size
+#         result_size = len(result) if result else 0
+#         self.logger.debug(f"Result size: {result_size} chars")
+#
+#     def log_llm_response(self, response_content: str, tool_calls: list = None):
+#         """Log LLM response."""
+#         self.logger.info(f"LLM RESPONSE: {len(response_content)} chars")
+#         self.logger.debug(f"Content preview: {response_content[:300]}...")
+#
+#         if tool_calls:
+#             self.logger.info(f"Tool calls requested: {len(tool_calls)}")
+#             for tc in tool_calls:
+#                 tc_name = tc.get("name", "unknown")
+#                 tc_args = tc.get("args", {})
+#                 self.logger.debug(f"  - {tc_name}: {str(tc_args)[:200]}...")
+#
+#     def log_final_output(self, output: str):
+#         """Log final agent output."""
+#         self.logger.info(f"FINAL OUTPUT: {len(output)} chars")
+#         self.logger.debug(f"Output content: {output}")

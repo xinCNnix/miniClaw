@@ -4,8 +4,9 @@ import asyncio
 import logging
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+# [DEAD CODE] 以下导入仅在已注释的 SEMANTIC_REWARD_PROMPT 和 chain 中使用
+# from langchain_core.output_parsers import StrOutputParser
+# from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from app.config import get_settings
@@ -14,28 +15,29 @@ from app.memory.auto_learning.reflection.models import ReflectionResult, RewardR
 logger = logging.getLogger(__name__)
 
 
-# Default prompt template for semantic reward evaluation
-SEMANTIC_REWARD_PROMPT = ChatPromptTemplate.from_template("""
-你是一个AI Agent执行质量评估专家。请评估以下Agent执行的质量。
-
-用户查询: {user_query}
-
-Agent输出: {agent_output}
-
-反思分析:
-- 任务完成: {completed}
-- 问题: {problems}
-- 建议: {suggestions}
-
-请评估执行质量并给出一个-1.0到1.0之间的评分：
-- 1.0: 完美执行，完全满足需求
-- 0.5 到 0.9: 良好执行，有小问题
-- 0.0 到 0.4: 基本满足，有明显问题
-- -0.5 到 -0.1: 执行失败，但有部分正确
-- -1.0: 完全失败
-
-只返回一个数字（例如：0.75），不要其他内容：
-""")
+# [DEAD CODE] SEMANTIC_REWARD_PROMPT 已弃用：compute_reward 现在直接使用 quality_score/10.0
+# 保留以备参考
+# SEMANTIC_REWARD_PROMPT = ChatPromptTemplate.from_template("""
+# 你是一个AI Agent执行质量评估专家。请评估以下Agent执行的质量。
+#
+# 用户查询: {user_query}
+#
+# Agent输出: {agent_output}
+#
+# 反思分析:
+# - 任务完成: {completed}
+# - 问题: {problems}
+# - 建议: {suggestions}
+#
+# 请评估执行质量并给出一个-1.0到1.0之间的评分：
+# - 1.0: 完美执行，完全满足需求
+# - 0.5 到 0.9: 良好执行，有小问题
+# - 0.0 到 0.4: 基本满足，有明显问题
+# - -0.5 到 -0.1: 执行失败，但有部分正确
+# - -1.0: 完全失败
+#
+# 只返回一个数字（例如：0.75），不要其他内容：
+# """)
 
 
 class RewardModel:
@@ -53,14 +55,14 @@ class RewardModel:
     def __init__(
         self,
         llm: BaseChatModel | None = None,
-        semantic_prompt: ChatPromptTemplate = SEMANTIC_REWARD_PROMPT,
+        # [DEAD CODE] semantic_prompt 参数已弃用
+        # semantic_prompt: ChatPromptTemplate = SEMANTIC_REWARD_PROMPT,
         timeout: int = 20,
     ) -> None:
         """Initialize RewardModel.
 
         Args:
             llm: Optional LLM instance. If None, creates default LLM
-            semantic_prompt: Optional prompt for semantic evaluation
             timeout: Timeout in seconds for LLM calls (default: 20)
 
         Examples:
@@ -73,11 +75,12 @@ class RewardModel:
             ... )
         """
         self.llm = llm or self._get_default_llm()
-        self.semantic_prompt = semantic_prompt
+        # [DEAD CODE] self.semantic_prompt 已弃用
+        # self.semantic_prompt = semantic_prompt
         self.timeout = timeout
 
-        # Build the chain
-        self.chain = self.semantic_prompt | self.llm | StrOutputParser()
+        # [DEAD CODE] self.chain 已弃用：compute_reward 现在使用 quality_score/10.0
+        # self.chain = self.semantic_prompt | self.llm | StrOutputParser()
 
         logger.info(
             f"RewardModel initialized with LLM: {type(self.llm).__name__}, "
@@ -209,66 +212,45 @@ class RewardModel:
             breakdown=breakdown,
         )
 
-    async def _compute_semantic_reward(
-        self,
-        user_query: str,
-        agent_output: str,
-        reflection: ReflectionResult,
-    ) -> float:
-        """Compute semantic reward using LLM.
-
-        Args:
-            user_query: Original user query
-            agent_output: Agent's output response
-            reflection: Reflection analysis result
-
-        Returns:
-            Semantic reward in range [-1.0, 1.0]
-        """
-        try:
-            # Format reflection for prompt
-            problems_str = "; ".join(reflection.problems) if reflection.problems else "无"
-            suggestions_str = (
-                "; ".join(reflection.suggestions) if reflection.suggestions else "无"
-            )
-
-            # Run LLM with timeout
-            result_str = await asyncio.wait_for(
-                self.chain.ainvoke(
-                    {
-                        "user_query": user_query,
-                        "agent_output": agent_output,
-                        "completed": "是" if reflection.completed else "否",
-                        "problems": problems_str,
-                        "suggestions": suggestions_str,
-                    }
-                ),
-                timeout=self.timeout,
-            )
-
-            # Parse reward
-            reward = float(result_str.strip())
-
-            # Clamp to [-1.0, 1.0]
-            reward = max(-1.0, min(1.0, reward))
-
-            logger.debug(f"Semantic reward: {reward:.3f}")
-            return reward
-
-        except asyncio.TimeoutError:
-            logger.warning("Semantic reward computation timed out")
-            # Fallback: use reflection confidence
-            return 0.5 if reflection.completed else 0.0
-
-        except (ValueError, IndexError) as e:
-            logger.warning(f"Failed to parse semantic reward: {e}")
-            # Fallback: use reflection confidence
-            return 0.5 if reflection.completed else 0.0
-
-        except Exception as e:
-            logger.error(f"Semantic reward computation failed: {e}", exc_info=True)
-            # Fallback: use reflection confidence
-            return 0.5 if reflection.completed else 0.0
+    # [DEAD CODE] _compute_semantic_reward 已弃用：compute_reward 现在直接使用 quality_score/10.0
+    # 保留以备参考
+    # async def _compute_semantic_reward(
+    #     self,
+    #     user_query: str,
+    #     agent_output: str,
+    #     reflection: ReflectionResult,
+    # ) -> float:
+    #     """Compute semantic reward using LLM."""
+    #     try:
+    #         problems_str = "; ".join(reflection.problems) if reflection.problems else "无"
+    #         suggestions_str = (
+    #             "; ".join(reflection.suggestions) if reflection.suggestions else "无"
+    #         )
+    #         result_str = await asyncio.wait_for(
+    #             self.chain.ainvoke(
+    #                 {
+    #                     "user_query": user_query,
+    #                     "agent_output": agent_output,
+    #                     "completed": "是" if reflection.completed else "否",
+    #                     "problems": problems_str,
+    #                     "suggestions": suggestions_str,
+    #                 }
+    #             ),
+    #             timeout=self.timeout,
+    #         )
+    #         reward = float(result_str.strip())
+    #         reward = max(-1.0, min(1.0, reward))
+    #         logger.debug(f"Semantic reward: {reward:.3f}")
+    #         return reward
+    #     except asyncio.TimeoutError:
+    #         logger.warning("Semantic reward computation timed out")
+    #         return 0.5 if reflection.completed else 0.0
+    #     except (ValueError, IndexError) as e:
+    #         logger.warning(f"Failed to parse semantic reward: {e}")
+    #         return 0.5 if reflection.completed else 0.0
+    #     except Exception as e:
+    #         logger.error(f"Semantic reward computation failed: {e}", exc_info=True)
+    #         return 0.5 if reflection.completed else 0.0
 
     def _compute_shaping_reward(
         self,
@@ -323,5 +305,112 @@ class RewardModel:
 
         return shaping_reward, breakdown
 
+    def compute_meta_policy_reward(
+        self,
+        advice: dict,
+        actual_action: str,
+        actual_tool: str | None,
+        actual_skill: str | None,
+        tool_success: bool,
+        recent_tools: list,
+        round_count: int,
+        max_rounds: int,
+        task_completed: bool,
+    ) -> dict:
+        """Compute reward for meta policy tool/skill decisions.
 
-__all__ = ["RewardModel", "SEMANTIC_REWARD_PROMPT"]
+        Args:
+            advice: Meta policy advice dict (action_type, tool, skill, confidence)
+            actual_action: LLM's actual action type (CALL_TOOL/CALL_SKILL/THINK/FINISH)
+            actual_tool: Tool actually used, or None
+            actual_skill: Skill actually used, or None
+            tool_success: Whether the tool call succeeded
+            recent_tools: List of recent tool call names (for repeat detection)
+            round_count: Current execution round
+            max_rounds: Maximum allowed rounds
+            task_completed: Whether the task completed successfully
+
+        Returns:
+            Dict with total, tool_reward, skill_reward, episode_reward
+        """
+        tool_reward = self._compute_tool_reward(actual_tool, tool_success, recent_tools)
+        skill_reward = self._compute_skill_reward(actual_skill, tool_success, advice)
+        episode_reward = self._compute_episode_reward(round_count, max_rounds, task_completed)
+
+        total = (tool_reward + skill_reward) * 0.6 + episode_reward * 0.4
+
+        return {
+            "total": total,
+            "tool_reward": tool_reward,
+            "skill_reward": skill_reward,
+            "episode_reward": episode_reward,
+        }
+
+    def _compute_tool_reward(
+        self,
+        actual_tool: str | None,
+        tool_success: bool,
+        recent_tools: list,
+    ) -> float:
+        """Compute tool selection reward.
+
+        +1.0: Tool succeeded
+        -1.0: Tool failed
+        -0.3: Tool was recently repeated (indicates stuck loop)
+        """
+        if actual_tool is None:
+            return 0.0
+
+        if not tool_success:
+            return -1.0
+
+        # Repeat detection
+        if actual_tool in recent_tools[-3:]:
+            return -0.3
+
+        return 1.0
+
+    def _compute_skill_reward(
+        self,
+        actual_skill: str | None,
+        tool_success: bool,
+        advice: dict,
+    ) -> float:
+        """Compute skill selection reward.
+
+        +1.5: Skill used and succeeded (skills are higher value than raw tools)
+        -0.5: Skill used but failed
+        -1.0: Skill suggested but not used (missed opportunity)
+        -0.3: Skill used for simple task (overkill)
+        """
+        if actual_skill is None:
+            # Check if a skill was suggested but not used
+            if advice.get("skill") and advice.get("action_type") == "CALL_SKILL":
+                return -1.0  # Missed opportunity
+            return 0.0
+
+        if not tool_success:
+            return -0.5
+
+        return 1.5
+
+    def _compute_episode_reward(
+        self,
+        round_count: int,
+        max_rounds: int,
+        task_completed: bool,
+    ) -> float:
+        """Compute episode-level reward.
+
+        +5.0: Task completed
+        -2.0: Task not completed
+        -3.0: Exceeded max rounds
+        """
+        if task_completed:
+            return 5.0
+        if round_count >= max_rounds:
+            return -3.0
+        return -2.0
+
+
+__all__ = ["RewardModel"]

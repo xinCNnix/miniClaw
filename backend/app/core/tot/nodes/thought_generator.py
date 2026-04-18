@@ -2,15 +2,19 @@
 Enhanced Thought Generator Node
 
 Generates diverse candidate thoughts with branching support.
+Phase 3: Multi-beam generation + backtracking regeneration.
 """
 
+import asyncio
 import logging
 import re
+import time
 import uuid
-from typing import List
+from typing import Any, Dict, List, Optional
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from app.core.tot.state import ToTState, Thought
+from app.core.tot.state import ToTState, Thought, get_thought_map
+from app.core.tot.utils import content_similarity as _content_similarity, tool_calls_signature as _tool_calls_signature
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +23,10 @@ async def thought_generator_node(state: ToTState) -> ToTState:
     """
     Generate multiple diverse candidate thoughts using LLM.
 
-    Enhanced features:
-    - Generates 3-5 thoughts per step (branching)
-    - Encourages diversity in tool selection and reasoning
-    - Maintains coherence with parent thoughts
-    - Uses different prompt strategies for variety
-    - Uses llm_with_tools to generate proper tool calls with arguments
+    Phase 3 增强:
+    - beam_width 在 state 中时使用多束生成（depth > 0 为每个活跃束生成 k 个子节点）
+    - 支持 needs_regeneration 回溯重生成（用不同策略 + 反思 prompt）
+    - 当 beam_width 未设置时退化为原有单束生成（向后兼容）
 
     Args:
         state: Current ToT state
@@ -32,39 +34,334 @@ async def thought_generator_node(state: ToTState) -> ToTState:
     Returns:
         Updated state with new thoughts added
     """
-    llm_with_tools = state.get("llm_with_tools", state["llm"])  # Use LLM with tools if available
     current_depth = state["current_depth"]
     user_query = state["user_query"]
-    branching_factor = state.get("branching_factor", 3)  # Get from state, default to 3
+    branching_factor = state.get("branching_factor", 3)
+    beam_width = state.get("beam_width")
 
-    logger.info(f"Generating {branching_factor} thoughts at depth {current_depth}")
+    # ---- Phase 3: 回溯重生成路由 ----
+    needs_regeneration = state.get("needs_regeneration", [])
+    if needs_regeneration:
+        logger.info(f"[Generator] Regeneration requested for beams: {needs_regeneration}")
+        return await _regenerate_for_beams(state, needs_regeneration)
 
-    # OPTIMIZATION: Use single prompt to generate all thoughts at once
+    # ---- Phase 3: 多束生成路由 ----
+    active_beams = state.get("active_beams", [])
+    if beam_width and current_depth > 0 and active_beams:
+        logger.info(
+            f"[Generator] Multi-beam mode: {len(active_beams)} beams, "
+            f"generating {branching_factor} children each at depth {current_depth}"
+        )
+        return await _generate_multi_beam_extensions(state)
+
+    # ---- 原有单束生成逻辑（向后兼容 + depth 0） ----
+    return await _generate_single_beam(state)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: 多束扩展生成
+# ---------------------------------------------------------------------------
+
+async def _generate_multi_beam_extensions(state: ToTState) -> ToTState:
+    """为所有活跃束的尖端生成 k 个子节点。
+
+    每个 beam 独立调用 LLM（可并行），使用不同的 variant。
+    """
+    llm_with_tools = state.get("llm_with_tools", state["llm"])
+    current_depth = state["current_depth"]
+    user_query = state["user_query"]
+    branching_factor = state.get("branching_factor", 3)
+    active_beams = state.get("active_beams", [])
+
+    all_new_thoughts = []
+    gen_start = time.time()
+    thought_map = get_thought_map(state["thoughts"])
+
+    async def _generate_for_beam(beam_idx: int, beam: List[str]) -> List[Thought]:
+        """为单个 beam 生成子节点。"""
+        parent_id = beam[-1]
+        parent_thoughts = [thought_map[tid] for tid in beam if tid in thought_map]
+
+        # 每个 beam 使用不同 variant
+        variant_index = (current_depth + beam_idx) % 3
+
+        from app.core.tot.prompt_composer import compose_system_prompt
+        existing_branches_summary = _collect_existing_branches_summary(state)
+
+        system_prompt = compose_system_prompt(
+            base_system_prompt=state.get("system_prompt", ""),
+            node_role="generator",
+            domain_profile=state.get("domain_profile"),
+            variant=variant_index,
+            tools=state.get("tools"),
+            prompt_level="full",
+            enrichment={"existing_branches_summary": existing_branches_summary} if existing_branches_summary else None,
+        )
+
+        prompt = _generate_combined_extension_prompt(
+            user_query, parent_thoughts, branching_factor,
+            existing_branches_summary=existing_branches_summary,
+        )
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=prompt)
+        ]
+
+        logger.info(f"[Generator-Beam{beam_idx}] Generating {branching_factor} children for beam tip {parent_id}")
+
+        try:
+            response = await llm_with_tools.ainvoke(messages)
+
+            new_thoughts = _parse_or_create_thoughts(
+                response, parent_id=parent_id, depth=current_depth
+            )
+
+            logger.info(f"[Generator-Beam{beam_idx}] Generated {len(new_thoughts)} thoughts")
+            return new_thoughts
+
+        except Exception as e:
+            logger.error(f"[Generator-Beam{beam_idx}] Error: {e}")
+            return _generate_fallback_thoughts(
+                user_query, current_depth, parent_id, branching_factor
+            )
+
+    # 并行为所有 beam 生成子节点
+    tasks = [
+        _generate_for_beam(beam_idx, beam)
+        for beam_idx, beam in enumerate(active_beams)
+    ]
+    results = await asyncio.gather(*tasks)
+
+    for beam_thoughts in results:
+        all_new_thoughts.extend(beam_thoughts)
+
+    elapsed = time.time() - gen_start
+
+    # 补充不足的 thoughts（每个 beam 不足 branching_factor 个时补 fallback）
+    # 按 parent_id 分组统计
+    parent_counts: Dict[str, int] = {}
+    for t in all_new_thoughts:
+        parent_counts[t.parent_id] = parent_counts.get(t.parent_id, 0) + 1
+
+    for beam in active_beams:
+        parent_id = beam[-1]
+        current_count = parent_counts.get(parent_id, 0)
+        if current_count < branching_factor:
+            fallback = _generate_fallback_thoughts(
+                user_query, current_depth, parent_id,
+                branching_factor - current_count
+            )
+            all_new_thoughts.extend(fallback)
+
+    # 去重
+    unique_thoughts = _deduplicate_thoughts(all_new_thoughts)
+
+    logger.info(
+        f"[Generator] Multi-beam total: {len(unique_thoughts)} thoughts for "
+        f"{len(active_beams)} beams at depth {current_depth} ({elapsed:.1f}s)"
+    )
+
+    # tot_logger
+    if "tot_logger" in state:
+        state["tot_logger"].log_generation(
+            depth=current_depth,
+            count=len(unique_thoughts),
+            variant=f"multi_beam_{len(active_beams)}",
+            prompt_length=0,  # 多次调用，不单独记录
+            duration=elapsed,
+            token_usage=None,
+        )
+
+    # Add to reasoning trace
+    state["reasoning_trace"].append({
+        "type": "thoughts_generated",
+        "depth": current_depth,
+        "count": len(unique_thoughts),
+        "thoughts": [t.model_dump() for t in unique_thoughts],
+        "beam_mode": True,
+        "beam_count": len(active_beams),
+    })
+
+    # 不在这里 extend thoughts，由 add_thoughts reducer 合并新增部分
+    # 原来 state["thoughts"].extend(unique_thoughts) + return state
+    # 导致 reducer left+right 时翻倍（left 已含新 thoughts，right 也含）
+    state["thoughts"] = unique_thoughts  # 只返回新增部分，reducer 会 left + right
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: 回溯重生成
+# ---------------------------------------------------------------------------
+
+async def _regenerate_for_beams(state: ToTState, beam_indices: List[int]) -> ToTState:
+    """为回溯 beam 重新生成分支。使用不同策略 + 反思上下文。"""
+    llm_with_tools = state.get("llm_with_tools", state["llm"])
+    active_beams = state.get("active_beams", [])
+    current_depth = state["current_depth"]
+    user_query = state["user_query"]
+    branching_factor = state.get("branching_factor", 3)
+
+    all_new_thoughts = []
+    thought_map = get_thought_map(state["thoughts"])
+
+    for beam_idx in beam_indices:
+        if beam_idx >= len(active_beams):
+            continue
+        beam = active_beams[beam_idx]
+        parent_id = beam[-1]
+
+        # 收集旧分支摘要（已被标记为 pruned）
+        old_children = [
+            t for t in state["thoughts"]
+            if t.parent_id == parent_id and t.status == "pruned"
+        ]
+        old_summaries = [
+            f"  - {t.content[:60]}... (score={t.evaluation_score:.1f})"
+            for t in old_children
+        ]
+        failure_context = "\n".join(old_summaries)
+
+        # 使用不同的 variant（强制换策略）
+        variant_index = (current_depth + beam_idx + 1) % 3
+
+        from app.core.tot.prompt_composer import compose_system_prompt
+        existing_branches_summary = _collect_existing_branches_summary(state)
+
+        system_prompt = compose_system_prompt(
+            base_system_prompt=state.get("system_prompt", ""),
+            node_role="generator",
+            domain_profile=state.get("domain_profile"),
+            variant=variant_index,
+            tools=state.get("tools"),
+            prompt_level="full",
+            enrichment={"existing_branches_summary": existing_branches_summary} if existing_branches_summary else None,
+        )
+
+        parent_thoughts = [thought_map[tid] for tid in beam if tid in thought_map]
+
+        prompt = _generate_combined_extension_prompt(
+            user_query, parent_thoughts, branching_factor,
+            existing_branches_summary=existing_branches_summary,
+        )
+
+        # 追加反思重生成上下文
+        if failure_context:
+            prompt += f"""
+
+=== 反思重生成 ===
+Previous attempts from this node ALL scored below threshold:
+{failure_context}
+
+These approaches failed. You MUST generate COMPLETELY DIFFERENT strategies.
+Avoid the tools and reasoning angles used above.
+Think from a fundamentally different perspective."""
+
+        try:
+            response = await llm_with_tools.ainvoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=prompt)
+            ])
+
+            new_thoughts = _parse_or_create_thoughts(
+                response, parent_id=parent_id, depth=current_depth
+            )
+
+            all_new_thoughts.extend(new_thoughts)
+            logger.info(f"[Regenerate-Beam{beam_idx}] Generated {len(new_thoughts)} new thoughts")
+
+        except Exception as e:
+            logger.error(f"[Regenerate-Beam{beam_idx}] Error: {e}")
+            all_new_thoughts.extend(
+                _generate_fallback_thoughts(user_query, current_depth, parent_id, branching_factor)
+            )
+
+    # 清除回溯标记（防止无限循环）
+    state["needs_regeneration"] = []
+
+    # 去重
+    unique_thoughts = _deduplicate_thoughts(all_new_thoughts)
+
+    logger.info(
+        f"[Regenerate] Total {len(unique_thoughts)} new thoughts for {len(beam_indices)} beams"
+    )
+
+    state["reasoning_trace"].append({
+        "type": "thoughts_regenerated",
+        "depth": current_depth,
+        "beam_indices": beam_indices,
+        "count": len(unique_thoughts),
+        "thoughts": [t.model_dump() for t in unique_thoughts],
+    })
+
+    # 只返回新增部分，由 add_thoughts reducer 合并
+    state["thoughts"] = unique_thoughts
+    return state
+
+
+# ---------------------------------------------------------------------------
+# 原有单束生成逻辑（向后兼容 + depth 0）
+# ---------------------------------------------------------------------------
+
+async def _generate_single_beam(state: ToTState) -> ToTState:
+    """
+    Generate multiple diverse candidate thoughts using LLM (original single-beam logic).
+
+    当 beam_width 未设置，或 depth == 0 时使用此路径。
+    """
+    llm_with_tools = state.get("llm_with_tools", state["llm"])
+    current_depth = state["current_depth"]
+    user_query = state["user_query"]
+    branching_factor = state.get("branching_factor", 3)
+
+    logger.info(f"Generating {branching_factor} thoughts at depth {current_depth} (single-beam mode)")
+
     # Build generation prompt based on depth
+    domain_profile = state.get("domain_profile")
     if current_depth == 0:
-        # Root: Generate diverse initial approaches
-        prompt = _generate_combined_root_prompt(user_query, branching_factor)
+        prompt = _generate_combined_root_prompt(user_query, branching_factor, domain_profile)
     else:
-        # Non-root: Extend with diverse alternatives
-        parent_thoughts = [t for t in state["thoughts"] if t.id in state["best_path"]]
+        thought_map = get_thought_map(state["thoughts"])
+        best_path = state.get("best_path", [])
+        parent_thoughts = [thought_map[tid] for tid in best_path if tid in thought_map]
         prompt = _generate_combined_extension_prompt(user_query, parent_thoughts, branching_factor)
 
-    # Generate thoughts using single prompt for efficiency
     all_new_thoughts = []
 
     try:
+        from app.core.tot.prompt_composer import compose_system_prompt
+
+        # Phase 0: variant 参数修复
+        if current_depth == 0:
+            variant_index = 0
+        else:
+            variant_index = (current_depth + hash(state.get("best_path", [""])[-1])) % 3
+
+        existing_branches_summary = _collect_existing_branches_summary(state)
+
+        system_prompt = compose_system_prompt(
+            base_system_prompt=state.get("system_prompt", ""),
+            node_role="generator",
+            domain_profile=state.get("domain_profile"),
+            variant=variant_index,
+            tools=state.get("tools"),
+            prompt_level="full",
+            enrichment={"existing_branches_summary": existing_branches_summary} if existing_branches_summary else None,
+        )
+
         messages = [
-            SystemMessage(content=_get_generator_system_prompt(0)),
+            SystemMessage(content=system_prompt),
             HumanMessage(content=prompt)
         ]
 
         logger.info(f"[TOT_GENERATOR] Sending prompt to LLM with tools")
-        logger.info(f"[TOT_GENERATOR] System prompt length: {len(_get_generator_system_prompt(0))}")
+        logger.info(f"[TOT_GENERATOR] System prompt length: {len(system_prompt)}")
         logger.info(f"[TOT_GENERATOR] User prompt: {prompt[:200]}...")
 
+        start_time = time.time()
         response = await llm_with_tools.ainvoke(messages)
+        elapsed = time.time() - start_time
 
-        # DEBUG: Log response details
         logger.info(f"[TOT_GENERATOR] Response received")
         logger.info(f"[TOT_GENERATOR] Response type: {type(response)}")
         logger.info(f"[TOT_GENERATOR] Has tool_calls attr: {hasattr(response, 'tool_calls')}")
@@ -80,30 +377,29 @@ async def thought_generator_node(state: ToTState) -> ToTState:
             logger.info(f"[TOT_GENERATOR] Response content preview: {str(response.content)[:300] if response.content else 'EMPTY'}...")
 
         # Parse response into Thought objects
-        # If LLM made tool calls, extract them properly
-        if hasattr(response, 'tool_calls') and response.tool_calls:
-            # LLM generated tool calls - create thoughts from them
-            logger.info(f"[TOT_GENERATOR] Creating thoughts from {len(response.tool_calls)} tool calls")
-            all_new_thoughts = _create_thoughts_from_tool_calls(
-                response.tool_calls,
-                response.content,
-                parent_id=state["best_path"][-1] if state["best_path"] else None,
-                depth=current_depth
-            )
+        _parent_id = state["best_path"][-1] if state["best_path"] else None
+        all_new_thoughts = _parse_or_create_thoughts(
+            response, parent_id=_parent_id, depth=current_depth
+        )
+        if not all_new_thoughts:
+            logger.warning(f"[TOT_GENERATOR] No thoughts parsed from response!")
         else:
-            # No tool calls, parse text response
-            logger.warning(f"[TOT_GENERATOR] No tool calls in response! Parsing as text response.")
-            all_new_thoughts = _parse_thoughts(
-                response.content,
-                parent_id=state["best_path"][-1] if state["best_path"] else None,
-                depth=current_depth
-            )
+            logger.info(f"[TOT_GENERATOR] Parsed {len(all_new_thoughts)} thoughts")
 
         logger.info(f"Generated {len(all_new_thoughts)} thoughts from single prompt")
 
+        if "tot_logger" in state:
+            state["tot_logger"].log_generation(
+                depth=current_depth,
+                count=len(all_new_thoughts),
+                variant="combined",
+                prompt_length=len(system_prompt) + len(prompt),
+                duration=elapsed,
+                token_usage=response.usage_metadata if hasattr(response, 'usage_metadata') else None,
+            )
+
     except Exception as e:
         logger.error(f"Error generating thoughts: {e}")
-        # Generate fallback thoughts
         all_new_thoughts = _generate_fallback_thoughts(
             user_query, current_depth,
             state["best_path"][-1] if state["best_path"] else None,
@@ -122,6 +418,10 @@ async def thought_generator_node(state: ToTState) -> ToTState:
     # Deduplicate thoughts based on content similarity
     unique_thoughts = _deduplicate_thoughts(all_new_thoughts)
 
+    # BUG FIX (Fix 8): visual skill injection
+    if current_depth == 0:
+        _inject_visual_skill_if_needed(user_query, unique_thoughts)
+
     logger.info(f"Total unique thoughts generated at depth {current_depth}: {len(unique_thoughts)}")
 
     # Add to reasoning trace for streaming
@@ -132,7 +432,8 @@ async def thought_generator_node(state: ToTState) -> ToTState:
         "thoughts": [t.model_dump() for t in unique_thoughts]
     })
 
-    state["thoughts"].extend(unique_thoughts)
+    # 只返回新增部分，由 add_thoughts reducer 合并
+    state["thoughts"] = unique_thoughts
 
     return state
 
@@ -158,7 +459,18 @@ Available tools:
 - fetch_url: Fetch content from a URL (requires "url" parameter)
 - read_file: Read a local file (requires "path" parameter)
 - python_repl: Execute Python code (requires "code" parameter)
-- terminal: Execute shell commands (requires "command" parameter)
+- terminal: Execute shell commands (requires "command" parameter)"""
+
+    # BUG FIX: 注入 skill 提示，让 LLM 知道可以调用 skill 生图等
+    # 原代码没有 skill 提示，导致 LLM 直接用 python_repl 生成代码而不是调用 skill
+    try:
+        from app.core.tot.skill_orchestrator import build_skill_hints
+        skill_hints = build_skill_hints()
+        base_prompt += "\n" + skill_hints + "\n"
+    except Exception:
+        pass  # skill 加载失败时仍使用基础提示
+
+    base_prompt += """
 
 HOW TO USE TOOLS:
 When you need to use a tool, respond with a tool call in this format:
@@ -189,20 +501,46 @@ Focus on practical solutions with some creative elements."""
     return variants[variant % len(variants)]
 
 
-def _generate_combined_root_prompt(query: str, count: int) -> str:
+def _generate_combined_root_prompt(query: str, count: int, domain_profile: dict | None = None) -> str:
     """
     Generate a single combined prompt for root-level thoughts.
 
     Args:
         query: User query
         count: Number of thoughts to generate
+        domain_profile: Optional domain profile for required_tools enforcement
 
     Returns:
         Single prompt asking for all thoughts at once
     """
+    # Fix 7: 根据 domain_profile.required_tools 动态注入工具调用要求
+    required_tools = (domain_profile or {}).get("required_tools", [])
+    if required_tools:
+        tool_requirement = (
+            f"\nIMPORTANT: This domain REQUIRES tool calls. "
+            f"You MUST call at least one of: {', '.join(required_tools)}\n"
+        )
+    else:
+        tool_requirement = ""
+
+    # Phase 0: 为每个分支指定不同的框架+角色组合（三重分化）
+    from app.core.tot.prompt_composer import _REASONING_FRAMEWORKS, _EXPERT_ROLES
+    branch_requirements = []
+    for i in range(count):
+        framework = _REASONING_FRAMEWORKS[i % len(_REASONING_FRAMEWORKS)]
+        role = _EXPERT_ROLES[(i + 1) % len(_EXPERT_ROLES)]
+        branch_requirements.append(
+            f"Approach {i+1}: 框架='{framework}' 角色='{role}'"
+        )
+
+    requirements_text = "\n".join(branch_requirements)
+
     return f"""User query: "{query}"
 
+{tool_requirement}
 CRITICAL INSTRUCTION: You MUST generate exactly {count} SEPARATE tool calls, one for each approach.
+
+{requirements_text}
 
 Available tools:
 - search_kb: Search the knowledge base for relevant information
@@ -222,12 +560,6 @@ Available tools:
 
 YOUR TASK - Generate {count} different tool calls for this query:
 
-Approach 1: First tool call
-Approach 2: Second tool call
-Approach 3: Third tool call
-{f'Approach 4: Fourth tool call' if count > 3 else ''}
-{f'Approach 5: Fifth tool call' if count > 4 else ''}
-
 Each approach should use a DIFFERENT tool or different parameters to ensure diversity.
 
 IMPORTANT:
@@ -236,7 +568,10 @@ IMPORTANT:
 - Make sure each approach is meaningfully different from the others"""
 
 
-def _generate_combined_extension_prompt(query: str, parent_thoughts: List[Thought], count: int) -> str:
+def _generate_combined_extension_prompt(
+    query: str, parent_thoughts: List[Thought], count: int,
+    existing_branches_summary: str = "",
+) -> str:
     """
     Generate a single combined prompt for extending existing thoughts.
 
@@ -244,6 +579,7 @@ def _generate_combined_extension_prompt(query: str, parent_thoughts: List[Though
         query: User query
         parent_thoughts: Thoughts on current best path
         count: Number of thoughts to generate
+        existing_branches_summary: 已有分支摘要（反对机制）
 
     Returns:
         Single prompt asking for all thoughts at once
@@ -252,12 +588,34 @@ def _generate_combined_extension_prompt(query: str, parent_thoughts: List[Though
         f"{i+1}. {t.content}" for i, t in enumerate(parent_thoughts)
     ])
 
+    # Phase 0: 为每个分支指定不同的框架+角色组合
+    from app.core.tot.prompt_composer import _REASONING_FRAMEWORKS, _EXPERT_ROLES
+    branch_requirements = []
+    for i in range(count):
+        framework = _REASONING_FRAMEWORKS[i % len(_REASONING_FRAMEWORKS)]
+        role = _EXPERT_ROLES[(i + 1) % len(_EXPERT_ROLES)]
+        branch_requirements.append(
+            f"Approach {i+1}: 框架='{framework}' 角色='{role}'"
+        )
+    requirements_text = "\n".join(branch_requirements)
+
+    # Phase 0: 反对机制提示
+    opposition_hint = ""
+    if existing_branches_summary:
+        opposition_hint = f"""
+=== 已有分支摘要（你 MUST NOT 重复这些思路）===
+{existing_branches_summary}
+新分支必须与已有思路显著不同。"""
+
     return f"""User query: "{query}"
 
 Previous reasoning steps (our current best path):
 {parent_context}
+{opposition_hint}
 
 Based on the reasoning path above, determine the next steps.
+
+{requirements_text}
 
 You should:
 1. Use tools to gather more information if needed
@@ -536,9 +894,47 @@ def _create_thoughts_from_tool_calls(
     return thoughts
 
 
+def _parse_or_create_thoughts(
+    response,           # AIMessage
+    parent_id: str | None,
+    depth: int,
+) -> List[Thought]:
+    """统一解析 LLM 响应为 Thought 对象。
+
+    有 tool_calls → 调用 _create_thoughts_from_tool_calls
+    无 tool_calls → 调用 _parse_thoughts（纯文本解析）
+    """
+    content = response.content or ""
+    tool_calls = getattr(response, "tool_calls", None) or []
+
+    if tool_calls:
+        return _create_thoughts_from_tool_calls(tool_calls, content, parent_id, depth)
+    else:
+        return _parse_thoughts(content, parent_id, depth)
+
+
+# def _tool_calls_signature(tool_calls: Optional[List[Dict[str, Any]]]) -> tuple:
+#     """Build a hashable signature from tool_calls for dedup comparison.
+#     [已迁移到 app.core.tot.utils.tool_calls_signature]
+#     """
+#     if not tool_calls:
+#         return ()
+#     parts = []
+#     for tc in sorted(tool_calls, key=lambda x: x.get("name", "")):
+#         name = tc.get("name", "")
+#         args = tc.get("args", {})
+#         path_val = args.get("path", "")
+#         query_val = args.get("query", "")
+#         parts.append((name, path_val, query_val))
+#     return tuple(parts)
+
+
 def _deduplicate_thoughts(thoughts: List[Thought]) -> List[Thought]:
     """
     Remove duplicate thoughts based on content similarity.
+
+    Thoughts with different tool_calls signatures are never considered duplicates,
+    even if their text content is similar.
 
     Args:
         thoughts: List of thoughts to deduplicate
@@ -546,49 +942,41 @@ def _deduplicate_thoughts(thoughts: List[Thought]) -> List[Thought]:
     Returns:
         List of unique thoughts
     """
-    unique_thoughts = []
-    seen_contents = set()
+    unique_thoughts: List[Thought] = []
+    seen: List[tuple] = []  # list of (content, tc_signature)
 
     for thought in thoughts:
-        # Simple deduplication based on content
         content_lower = thought.content.lower().strip()
+        tc_sig = _tool_calls_signature(thought.tool_calls)
 
-        # Check for similar content
         is_duplicate = False
-        for seen in seen_contents:
-            if _content_similarity(content_lower, seen) > 0.8:
+        for seen_content, seen_tc_sig in seen:
+            # 不同工具调用 → 不算重复
+            if tc_sig != seen_tc_sig:
+                continue
+            # 相同工具调用 → 检查内容相似度
+            if _content_similarity(content_lower, seen_content) > 0.8:
                 is_duplicate = True
                 break
 
         if not is_duplicate:
             unique_thoughts.append(thought)
-            seen_contents.add(content_lower)
+            seen.append((content_lower, tc_sig))
 
     return unique_thoughts
 
 
-def _content_similarity(content1: str, content2: str) -> float:
-    """
-    Calculate similarity between two thought contents.
-
-    Args:
-        content1: First content
-        content2: Second content
-
-    Returns:
-        Similarity score (0-1)
-    """
-    # Simple word-based similarity
-    words1 = set(content1.split())
-    words2 = set(content2.split())
-
-    if not words1 or not words2:
-        return 0.0
-
-    intersection = words1.intersection(words2)
-    union = words1.union(words2)
-
-    return len(intersection) / len(union) if union else 0.0
+# def _content_similarity(content1: str, content2: str) -> float:
+#     """Calculate similarity between two thought contents.
+#     [已迁移到 app.core.tot.utils.content_similarity]
+#     """
+#     words1 = set(content1.split())
+#     words2 = set(content2.split())
+#     if not words1 or not words2:
+#         return 0.0
+#     intersection = words1.intersection(words2)
+#     union = words1.union(words2)
+#     return len(intersection) / len(union) if union else 0.0
 
 
 def _generate_fallback_thoughts(
@@ -644,3 +1032,69 @@ def _generate_fallback_thoughts(
         ))
 
     return thoughts
+
+
+def _inject_visual_skill_if_needed(user_query: str, thoughts: list) -> None:
+    """Fix 8: 如果查询涉及图示/画图但所有 thought 都没有 read_file skill tool_call，
+    强制注入一个调用 chart-plotter 或 geometry-plotter skill 的 thought。
+
+    直接修改 thoughts 列表（in-place）。
+    """
+    # 检测关键词
+    visual_keywords = ["图示", "示意图", "画", "图", "图表", "绘制", "绘图",
+                       "diagram", "chart", "plot", "graph", "illustration", "visual"]
+    query_lower = user_query.lower()
+    needs_visual = any(kw in query_lower for kw in visual_keywords)
+    if not needs_visual:
+        return
+
+    # 检查是否已有 read_file 调用 SKILL.md 的 thought
+    has_skill_call = False
+    for t in thoughts:
+        if t.tool_calls:
+            for tc in t.tool_calls:
+                if tc.get("name") == "read_file":
+                    path = tc.get("args", {}).get("path", "")
+                    if "skill" in path.lower():
+                        has_skill_call = True
+                        break
+        if has_skill_call:
+            break
+
+    if has_skill_call:
+        return  # 已有 skill 调用，无需注入
+
+    # 决定用哪个 skill
+    geometry_keywords = ["几何", "定理", "证明", "勾股", "geometry", "theorem", "proof", "triangle"]
+    if any(kw in query_lower for kw in geometry_keywords):
+        skill_path = "data/skills/geometry-plotter/SKILL.md"
+        skill_desc = "Generate geometric diagram"
+    else:
+        skill_path = "data/skills/chart-plotter/SKILL.md"
+        skill_desc = "Generate chart/plot"
+
+    logger.info(f"[Fix 8] Injecting visual skill thought: {skill_path}")
+    thoughts.append(Thought(
+        id=f"thought_{uuid.uuid4().hex[:8]}",
+        parent_id=None,
+        content=f"Use skill to generate visual: {skill_desc}",
+        tool_calls=[{
+            "name": "read_file",
+            "args": {"path": skill_path}
+        }],
+        status="pending"
+    ))
+
+
+def _collect_existing_branches_summary(state: ToTState) -> str:
+    """收集 state 中已评估 thoughts 的摘要，用于反对机制（Phase 0）。"""
+    current_depth = state.get("current_depth", 0)
+    if current_depth == 0:
+        return ""  # root 层无需反对机制
+
+    evaluated_thoughts = [t for t in state["thoughts"] if t.status in ("evaluated", "done")]
+    summaries = []
+    for t in evaluated_thoughts[-6:]:  # 最多取最近 6 个
+        summary = t.content[:80] + "..." if len(t.content) > 80 else t.content
+        summaries.append(f"- [{t.id}] {summary}")
+    return "\n".join(summaries)

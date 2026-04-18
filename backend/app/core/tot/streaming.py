@@ -88,15 +88,51 @@ class ToTEventStreamer:
             return {
                 "type": "tot_thoughts_evaluated",
                 "best_path": trace_event.get("best_path", []),
-                "best_score": trace_event.get("best_score", 0.0)
+                "best_score": trace_event.get("best_score", 0.0),
+                # Phase 8: beam fields for frontend visualization
+                "active_beams": trace_event.get("active_beams", []),
+                "beam_scores": trace_event.get("beam_scores", []),
             }
 
         elif event_type == "thought_execution":
-            return {
+            # Phase 8: enhanced with step counts
+            generated_images = []
+            for r in trace_event.get("results", []):
+                if isinstance(r, dict) and r.get("generated_images"):
+                    generated_images.extend(r["generated_images"])
+
+            event = {
                 "type": "tot_tools_executed",
                 "thought_id": trace_event.get("thought_id"),
                 "content": trace_event.get("content"),
-                "tool_count": trace_event.get("tool_count", 0)
+                "tool_count": trace_event.get("tool_count", trace_event.get("total_steps", 0)),
+                # Phase 8: step details for local loop visualization
+                "total_steps": trace_event.get("total_steps", 0),
+                "executed_steps": trace_event.get("executed_steps", 0),
+                "errors": trace_event.get("errors", 0),
+            }
+            if generated_images:
+                event["generated_images"] = generated_images
+            return event
+
+        # Phase 8: backtracking events
+        elif event_type == "backtrack":
+            return {
+                "type": "tot_backtrack",
+                "reason": trace_event.get("reason"),
+                "depth": trace_event.get("depth"),
+                "beam_idx": trace_event.get("beam_idx"),
+                "from_root": trace_event.get("from_root"),
+                "to_root": trace_event.get("to_root"),
+            }
+
+        # Phase 8: regeneration events
+        elif event_type == "thoughts_regenerated":
+            return {
+                "type": "tot_thoughts_regenerated",
+                "depth": trace_event.get("depth", 0),
+                "beam_indices": trace_event.get("beam_indices", []),
+                "count": trace_event.get("count", 0),
             }
 
         elif event_type == "termination":
@@ -107,15 +143,57 @@ class ToTEventStreamer:
                 "depth": trace_event.get("depth")
             }
 
+        # --- Research-mode SSE events ---
+
+        elif event_type == "research_evidence_extracted":
+            return {
+                "type": "tot_research_evidence",
+                "evidence_count": trace_event.get("evidence_count", 0),
+                "sources_processed": trace_event.get("sources_processed", 0),
+            }
+
+        elif event_type == "research_coverage_update":
+            return {
+                "type": "tot_research_coverage",
+                "score": trace_event.get("score", 0.0),
+                "topics": trace_event.get("topics", []),
+            }
+
+        elif event_type == "research_contradiction":
+            return {
+                "type": "tot_research_contradiction",
+                "contradictions": trace_event.get("contradictions", []),
+            }
+
+        elif event_type == "research_draft_update":
+            return {
+                "type": "tot_research_draft",
+                "draft_length": trace_event.get("draft_length", 0),
+                "round": trace_event.get("round", 0),
+            }
+
+        elif event_type == "research_citation_fetch":
+            return {
+                "type": "tot_research_citation",
+                "targets": trace_event.get("targets", []),
+                "new_sources": trace_event.get("new_sources", 0),
+            }
+
         return None
 
     @staticmethod
-    def create_reasoning_start_event(max_depth: int) -> Dict[str, Any]:
+    def create_reasoning_start_event(
+        max_depth: int,
+        task_mode: str = "standard",
+        task_type: str = "generic",
+    ) -> Dict[str, Any]:
         """Create event signaling start of ToT reasoning."""
         return {
             "type": "tot_reasoning_start",
             "mode": "tot",
-            "max_depth": max_depth
+            "max_depth": max_depth,
+            "task_mode": task_mode,
+            "task_type": task_type,
         }
 
     @staticmethod
@@ -124,10 +202,16 @@ class ToTEventStreamer:
         best_path: list,
         total_thoughts: int
     ) -> Dict[str, Any]:
-        """Create event signaling completion of ToT reasoning."""
+        """Create event signaling completion of ToT reasoning.
+
+        Fix 4: Only sends final_answer_length and final_answer_preview (first 200 chars)
+        to avoid bloating the SSE event with the full answer (which is already
+        delivered via content_delta).
+        """
         return {
             "type": "tot_reasoning_complete",
-            "final_answer": final_answer,
+            "final_answer_length": len(final_answer),
+            "final_answer_preview": final_answer[:200] + ("..." if len(final_answer) > 200 else ""),
             "best_path": best_path,
             "total_thoughts": total_thoughts
         }
@@ -184,6 +268,10 @@ class ToTEventStreamer:
                 "parent_id": thought.parent_id,
                 "score": thought.evaluation_score,
                 "status": thought.status,
+                "tool_calls": [
+                    {"name": tc.get("name", ""), "args": tc.get("args", {})}
+                    for tc in thought.tool_calls
+                ] if thought.tool_calls else [],
                 "children": children
             }
 

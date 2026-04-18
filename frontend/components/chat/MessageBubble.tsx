@@ -4,9 +4,12 @@ import { clsx } from "clsx"
 import { User, Bot } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import remarkMath from "remark-math"
+import rehypeKatex from "rehype-katex"
+import "katex/dist/katex.min.css"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
-import type { Message } from "@/types/chat"
+import type { Message, GeneratedImage } from "@/types/chat"
 
 interface MessageBubbleProps {
   message: Message
@@ -41,17 +44,19 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
             : "bg-white border border-gray-200 text-gray-900"
         )}
       >
-        {/* Images */}
+        {/* User-attached images */}
         {message.images && message.images.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
-            {message.images.map((img, idx) => (
-              <img
-                key={idx}
-                src={`data:${img.mime_type};base64,${img.content}`}
-                alt={`Attachment ${idx + 1}`}
-                className="max-w-[200px] rounded-md border border-gray-300 dark:border-gray-600"
-              />
-            ))}
+            {message.images
+              .filter((img) => img.content && img.mime_type)
+              .map((img, idx) => (
+                <img
+                  key={idx}
+                  src={`data:${img.mime_type};base64,${img.content}`}
+                  alt={`Attachment ${idx + 1}`}
+                  className="max-w-[200px] rounded-md border border-gray-300 dark:border-gray-600"
+                />
+              ))}
           </div>
         )}
 
@@ -60,8 +65,23 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
         ) : (
           <div className="prose prose-sm max-w-none dark:prose-invert">
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
               components={{
+                img({ src, alt, ...props }: any) {
+                  if (!src || src.trim() === '') return null;
+                  return (
+                    <img
+                      src={src}
+                      alt={alt || 'Image'}
+                      className="max-w-full rounded-md border border-gray-200 my-2"
+                      loading="lazy"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                  );
+                },
                 code({ className, children, inline, ...props }: any) {
                   const match = /language-(\w+)/.exec(className || '')
                   return !inline && match ? (
@@ -137,6 +157,22 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
             >
               {message.content}
             </ReactMarkdown>
+          </div>
+        )}
+
+        {/* Generated images — native <img>, bypasses ReactMarkdown */}
+        {!isUser && message.generated_images && message.generated_images.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {message.generated_images.map((img: GeneratedImage, idx: number) => (
+              <img
+                key={img.media_id || idx}
+                src={img.api_url}
+                alt={img.name || `Generated ${idx + 1}`}
+                className="max-w-full rounded-md border border-gray-200 my-2"
+                loading="lazy"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+            ))}
           </div>
         )}
 

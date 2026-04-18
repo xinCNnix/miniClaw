@@ -150,6 +150,16 @@ On the first run, you'll need to configure your LLM API keys. The script will pr
 
 For manual configuration, see **[QUICKSTART.md](./QUICKSTART.md)**.
 
+### 📐 LaTeX Support (Optional)
+
+For advanced math formula rendering in plots (geometry-plotter skill), install a LaTeX distribution:
+
+- **Windows**: Install [MiKTeX](https://miktex.org/) via `winget install MiKTeX.MiKTeX`
+- **Linux**: `sudo apt install texlive-full`
+- **macOS**: `brew install --cask mactex`
+
+Without LaTeX, the system falls back to matplotlib's built-in mathtext renderer, which covers most common math symbols but doesn't support advanced LaTeX commands like `\begin{cases}`, `\text{}`, `\boxed{}`.
+
 ### Docker Deployment
 
 ```bash

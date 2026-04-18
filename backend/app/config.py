@@ -231,18 +231,21 @@ class Settings(BaseSettings):
     research_mode: Literal["heuristic", "analytical", "exhaustive"] = "heuristic"
 
     # Thinking Mode Configurations
-    # heuristic (启发式推理): 2层深度 × 3层宽度 = 最多9个思维节点，快速启发式探索
-    # analytical (分析式推理): 4层深度 × 4层宽度 = 最多256个思维节点，系统性分析
-    # exhaustive (穷尽式推理): 7层深度 × 6层宽度 = 最多279,936个思维节点，极限穷尽
+    # heuristic (启发式推理): 3层深度 × 3层宽度 = 约18个节点，兼顾覆盖和深度
+    # analytical (分析式推理): 4层深度 × 4层宽度 = 约48个节点，系统性分析
+    # exhaustive (穷尽式推理): 8层深度 × 4层宽度 = 约90个节点，深度优先搜索
+    # 注：深度比宽度更能逼近最优解，宽度超过3后冗余分支增多、收益递减
     thinking_modes: dict = {
         "heuristic": {
-            "depth": 2,
+            "depth": 3,  # 原 2 → 3: 增加 1 层深度，成本仅增 50%
             "branching": 3,
-            "timeout": 180,
+            "timeout": 240,  # 原 180 → 240: 配合深度增加适当延长
             "name": "启发式推理 (Heuristic Reasoning)",
             "name_en": "Heuristic Reasoning",
             "description": "快速探索问题核心，适用于时间敏感的查询",
-            "icon": "⚡"
+            "icon": "⚡",
+            "beam_search": True,  # Global Beam 束搜索，False 退回贪心模式
+            "max_tool_steps_per_node": 5,  # 执行节点局部循环最大步数
         },
         "analytical": {
             "depth": 4,
@@ -251,16 +254,20 @@ class Settings(BaseSettings):
             "name": "分析式推理 (Analytical Reasoning)",
             "name_en": "Analytical Reasoning",
             "description": "平衡深度与广度，适用于复杂问题分析",
-            "icon": "🔬"
+            "icon": "🔬",
+            "beam_search": True,
+            "max_tool_steps_per_node": 5,
         },
         "exhaustive": {
-            "depth": 7,
-            "branching": 6,
+            "depth": 8,  # 原 7 → 8: 更深的搜索
+            "branching": 4,  # 原 6 → 4: 降低宽度减少冗余分支，省下 token 投入深度
             "timeout": 36000,
             "name": "穷尽式推理 (Exhaustive Reasoning)",
             "name_en": "Exhaustive Reasoning",
-            "description": "极限探索所有可能性，适用于深度研究",
-            "icon": "🌌"
+            "description": "深度优先穷尽搜索，适用于深度研究",
+            "icon": "🌌",
+            "beam_search": True,
+            "max_tool_steps_per_node": 5,
         }
     }
 
@@ -313,6 +320,9 @@ class Settings(BaseSettings):
     max_prompt_length: int = 20000  # characters
     truncation_marker: str = "...[truncated]"
 
+    # LLM Request Timeout
+    llm_request_timeout: int = 120  # 单次 LLM API 调用超时（秒），防止 API 无响应时永久挂起
+
     # Agent Execution
     max_tool_rounds: int = 50  # Maximum rounds of tool calling (prevents infinite loops)
     enable_smart_stopping: bool = True  # Enable intelligent tool stopping (redundancy detection + sufficiency evaluation)
@@ -342,6 +352,7 @@ class Settings(BaseSettings):
     prompt_token_budget: dict = {
         "SKILLS_SNAPSHOT": 2000,
         "AGENTS": 1500,
+        "WIKI_MEMORY": 1500,
         "CONVERSATION_CONTEXT": 3000,
         "SEMANTIC_HISTORY": 2000,
         "USER": 1000,
@@ -375,7 +386,7 @@ class Settings(BaseSettings):
     # SQLite Database Storage
     memory_db_path: str = "data/memory.db"  # SQLite database file path
     use_sqlite: bool = True  # Use SQLite for memory storage
-    dual_write_mode: bool = False  # Write to both SQLite and JSON (transition period)
+    dual_write_mode: bool = True  # Write to both SQLite and JSON (transition period)
 
     # Markdown File Control
     md_user_max_items: int = 30  # Max items in USER.md
@@ -400,6 +411,93 @@ class Settings(BaseSettings):
     log_backup_count: int = 5  # Number of backup files to keep
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"  # Log format
     debug_agent: bool = True  # Enable detailed agent execution logging
+
+    # === Reflection System ===
+    enable_agent_reflection: bool = True
+    agent_reflection_quality_threshold: float = 6.0
+    evaluation_cache_enabled: bool = True
+    enable_reflection_learning: bool = True
+
+    # === PERV Enhancement ===
+    perv_router_enabled: bool = True
+    perv_enable_post_learning: bool = True
+    perv_enable_pattern_retrieval: bool = True
+    perv_enable_strategy_injection: bool = True
+    perv_enable_semantic_history: bool = True
+
+    # === Meta Policy & TCA ===
+    enable_meta_policy: bool = True
+    enable_tca: bool = True
+
+    # TCA model architecture
+    tca_embed_dim: int = 384
+    tca_hidden_dim: int = 256
+    tca_num_heads: int = 4
+    tca_num_layers: int = 4
+    tca_max_subtasks: int = 5
+    tca_learning_rate: float = 5e-4
+    tca_training_data_dir: str = "data/complexity_training"
+    tca_decompose_threshold: float = 0.5
+    tca_model_path: str = "data/complexity_training/tca_model.pth"
+
+    # === Auto Learning ===
+    pattern_embedder_model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    pattern_storage_path: str = "data/patterns"
+    enable_rl_training: bool = True
+    rl_target_update_freq: int = 100
+    rl_tau: float = 0.005
+    rl_transformer_lr: float = 1e-4
+    rl_mlp_lr: float = 3e-4
+    rl_kl_coef: float = 0.1
+    rl_prompt_consistency_coef: float = 0.05
+    rl_batch_size: int = 32
+    rl_gradient_clip: float = 1.0
+    enable_neural_strategy: bool = True
+    neural_strategy_auto_transition: bool = True
+
+    # === Memory Retriever ===
+    enable_kg: bool = True
+    # kg_store_backend: Literal["memory", "neo4j"] = "memory"  # BUG: get_kg_store() checks "sqlite"
+    kg_store_backend: Literal["sqlite", "neo4j"] = "sqlite"   # FIXED: match get_kg_store() logic
+    kg_max_triples_per_turn: int = 10
+    kg_confidence_threshold: float = 0.5
+    similarity_threshold: float = 0.7
+    similarity_block_threshold: float = 0.95
+
+    # === LLM Wiki ===
+    enable_wiki: bool = True
+    wiki_pages_dir: str = "data/wiki/pages"
+    wiki_max_page_size: int = 5000
+    wiki_evidence_required: bool = True
+    wiki_write_threshold: float = 0.7
+
+    # === Memory Engine (Phase 2) ===
+    enable_memory_engine: bool = False  # Master switch: use LangGraph engine path
+
+    # === EventLog (Phase 2 — 红线1) ===
+    enable_event_log: bool = False
+    event_log_max_payload_size: int = 10000  # Max payload JSON size in bytes
+
+    # === EntityProfile (Phase 3) ===
+    enable_entity_profile: bool = False
+
+    # === Case Memory (Phase 3) ===
+    enable_case_memory: bool = False
+    case_memory_min_success_score: float = 0.5
+    case_memory_max_cases: int = 1000
+
+    # === Procedural Memory (Phase 3) ===
+    enable_procedural_memory: bool = False
+
+    # === Decay & Cleanup (Phase 4 — 红线4) ===
+    memory_ttl_default_days: int = 90          # Default TTL for memories
+    memory_decay_cron_hours: int = 24           # Decay cycle interval
+    memory_decay_factor: float = 0.01           # exp(-factor * days_old)
+    memory_prune_threshold: float = 0.1         # Vectors below this score get pruned
+
+    # === Session Retention (Phase 4 — 红线4 Session cleanup) ===
+    session_retention_days: int = 30            # Session file retention period
+    session_archive_on_delete: bool = True      # Archive to EventLog before deletion
 
 
 def _load_obfuscated_config() -> None:
@@ -478,8 +576,17 @@ def get_settings() -> Settings:
 
     每次调用都重新加载配置，确保前端设置与后端使用一致。
     """
+    import logging
     _load_obfuscated_config()
-    return Settings()
+    s = Settings()
+    logger = logging.getLogger(__name__)
+    logger.info(
+        f"[config] Features: reflection={s.enable_agent_reflection}, "
+        f"perv_router={s.perv_router_enabled}, meta_policy={s.enable_meta_policy}, "
+        f"tca={s.enable_tca}, rl_training={s.enable_rl_training}, "
+        f"neural_strategy={s.enable_neural_strategy}, kg={s.enable_kg}"
+    )
+    return s
 
 
 def get_available_providers() -> List[Dict[str, Any]]:

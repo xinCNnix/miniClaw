@@ -172,12 +172,16 @@ const zhTranslations = {
   },
   // Research Mode
   research_mode: {
-    title: '研究模式',
+    title: '深度研究模式',
     thinking_mode: '思考模式',
     branching_factor: '分支因子',
     thoughts_per_node: '个思路/节点',
     narrow: '窄',
     wide: '宽',
+    search_depth: '搜索深度',
+    depth_layers: '层',
+    shallow: '浅',
+    deep: '深',
     heuristic: {
       name: '启发式推理',
       name_en: 'Heuristic',
@@ -203,6 +207,22 @@ const zhTranslations = {
       slow: '约1-2小时',
       very_slow: '约2-10小时'
     }
+  },
+  // Deep Planning Mode
+  deep_planning: {
+    title: '深度规划模式',
+  },
+  // Thought Tree
+  thought_tree: {
+    waiting: '等待推理树...',
+    step: '步骤 {step}/{total}',
+    generating: '生成中...',
+    evaluating: '评估中...',
+    evaluated: '已评估',
+    complete: '已完成',
+    pending: '等待中...',
+    score: '评分',
+    tools: '{count} 个工具',
   },
   // Common
   common: {
@@ -350,12 +370,16 @@ const enTranslations = {
   },
   // Research Mode
   research_mode: {
-    title: 'Research Mode',
+    title: 'Deep Research Mode',
     thinking_mode: 'Thinking Mode',
     branching_factor: 'Branching Factor',
     thoughts_per_node: 'thoughts/node',
     narrow: 'narrow',
     wide: 'wide',
+    search_depth: 'Search Depth',
+    depth_layers: 'layers',
+    shallow: 'shallow',
+    deep: 'deep',
     heuristic: {
       name: 'Heuristic Reasoning',
       name_en: 'Heuristic',
@@ -381,6 +405,22 @@ const enTranslations = {
       slow: '1-2 hours',
       very_slow: '2-10 hours'
     }
+  },
+  // Deep Planning Mode
+  deep_planning: {
+    title: 'Deep Planning Mode',
+  },
+  // Thought Tree
+  thought_tree: {
+    waiting: 'Waiting for reasoning tree...',
+    step: 'Step {step}/{total}',
+    generating: 'Generating...',
+    evaluating: 'Evaluating...',
+    evaluated: 'Evaluated',
+    complete: 'Complete',
+    pending: 'Pending...',
+    score: 'Score',
+    tools: '{count} tools',
   },
   // Common
   common: {

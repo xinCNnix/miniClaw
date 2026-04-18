@@ -23,7 +23,8 @@ from app.core.tot.nodes.thought_evaluator import (
     _build_evaluation_prompt,
     _parse_evaluation_scores,
 )
-from app.core.tot.nodes.termination_checker import ToTSmartStopping
+# [DEAD CODE] should_continue_reasoning 仅在已注释的 _evaluate_sufficiency 中使用
+# from app.core.tot.nodes.termination_checker import should_continue_reasoning
 from app.memory.auto_learning.reflection.models import ReflectionResult
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 EvaluationType = Literal[
     "micro_quality",  # LLM层：thought质量评分
-    "micro_sufficiency",  # LLM层：信息充分性判断
+    # "micro_sufficiency",  # [DEAD CODE] 已弃用：信息充分性判断，逻辑已迁移至 should_continue_reasoning
     "macro_task",  # Agent层：任务完成度评估
     "macro_failure",  # Agent层：失败原因分析
 ]
@@ -93,8 +94,9 @@ class UnifiedEvaluator:
         self.cache_enabled = cache_enabled
         self._cache: dict[str, dict] = {}
 
-        # 复用现有组件
-        self.smart_stopping = ToTSmartStopping()
+        # 复用现有组件：使用 should_continue_reasoning 判断充分性
+        # (原 ToTSmartStopping 已重构为函数式模块)
+        self.smart_stopping = None
 
         logger.info(f"UnifiedEvaluator initialized with cache_enabled={cache_enabled}")
 
@@ -153,8 +155,9 @@ class UnifiedEvaluator:
         """
         if evaluation_type == "micro_quality":
             return await self._evaluate_thought_quality(context)
-        elif evaluation_type == "micro_sufficiency":
-            return await self._evaluate_sufficiency(context)
+        # [DEAD CODE] micro_sufficiency 已弃用，逻辑已迁移至 should_continue_reasoning
+        # elif evaluation_type == "micro_sufficiency":
+        #     return await self._evaluate_sufficiency(context)
         else:
             raise ValueError(f"Unknown micro evaluation type: {evaluation_type}")
 
@@ -221,79 +224,63 @@ class UnifiedEvaluator:
                 scores={"relevance": 5.0, "feasibility": 5.0, "novelty": 5.0},
             )
 
-    async def _evaluate_sufficiency(
-        self,
-        context: dict[str, Any],
-    ) -> EvaluationResult:
-        """
-        评估信息充分性（LLM微观）
-
-        复用 termination_checker 的评估逻辑
-        """
-        from app.core.tot.state import ToTState, Thought
-
-        user_query = context.get("user_query")
-        thoughts_data = context.get("thoughts", [])
-        current_depth = context.get("current_depth", 0)
-
-        if not user_query:
-            logger.warning("Missing required context for sufficiency evaluation")
-            return EvaluationResult(
-                evaluation_type="micro_sufficiency",
-                scores={"sufficiency": 0.5},
-            )
-
-        try:
-            # 构建 ToTState（临时，用于调用 llm_evaluate_sufficiency）
-            # 注意：这里需要创建一个最小化的 ToTState
-            thoughts = []
-            for t in thoughts_data:
-                if isinstance(t, Thought):
-                    thoughts.append(t)
-                elif isinstance(t, dict):
-                    # 从字典创建 Thought 对象
-                    thoughts.append(
-                        Thought(
-                            id=t.get("id", ""),
-                            parent_id=t.get("parent_id"),
-                            content=t.get("content", ""),
-                            tool_calls=t.get("tool_calls", []),
-                            tool_results=t.get("tool_results", []),
-                            evaluation_score=t.get("evaluation_score"),
-                            criteria_scores=t.get("criteria_scores"),
-                            status=t.get("status", "pending"),
-                        )
-                    )
-
-            # 创建临时 state
-            temp_state = {
-                "user_query": user_query,
-                "thoughts": thoughts,
-                "current_depth": current_depth,
-                "llm": self.llm,
-            }  # 类型: ToTState
-
-            # 复用 ToTSmartStopping 的评估逻辑
-            sufficient, _ = await self.smart_stopping.llm_evaluate_sufficiency(temp_state)
-
-            # 转换为评分格式
-            sufficiency_score = 0.0 if sufficient else 1.0
-
-            logger.debug(
-                f"Sufficiency evaluation: sufficient={sufficient}, score={sufficiency_score}"
-            )
-
-            return EvaluationResult(
-                evaluation_type="micro_sufficiency",
-                scores={"sufficiency": sufficiency_score},
-            )
-
-        except Exception as e:
-            logger.error(f"Error evaluating sufficiency: {e}")
-            return EvaluationResult(
-                evaluation_type="micro_sufficiency",
-                scores={"sufficiency": 0.5},
-            )
+    # [DEAD CODE] _evaluate_sufficiency 已弃用：逻辑已迁移至 should_continue_reasoning
+    # 保留以备参考，实际不再调用
+    # async def _evaluate_sufficiency(
+    #     self,
+    #     context: dict[str, Any],
+    # ) -> EvaluationResult:
+    #     """评估信息充分性（LLM微观）- 复用 termination_checker 的评估逻辑"""
+    #     from app.core.tot.state import ToTState, Thought
+    #     user_query = context.get("user_query")
+    #     thoughts_data = context.get("thoughts", [])
+    #     current_depth = context.get("current_depth", 0)
+    #     if not user_query:
+    #         logger.warning("Missing required context for sufficiency evaluation")
+    #         return EvaluationResult(
+    #             evaluation_type="micro_sufficiency",
+    #             scores={"sufficiency": 0.5},
+    #         )
+    #     try:
+    #         thoughts = []
+    #         for t in thoughts_data:
+    #             if isinstance(t, Thought):
+    #                 thoughts.append(t)
+    #             elif isinstance(t, dict):
+    #                 thoughts.append(
+    #                     Thought(
+    #                         id=t.get("id", ""),
+    #                         parent_id=t.get("parent_id"),
+    #                         content=t.get("content", ""),
+    #                         tool_calls=t.get("tool_calls", []),
+    #                         tool_results=t.get("tool_results", []),
+    #                         evaluation_score=t.get("evaluation_score"),
+    #                         criteria_scores=t.get("criteria_scores"),
+    #                         status=t.get("status", "pending"),
+    #                     )
+    #                 )
+    #         temp_state = {
+    #             "user_query": user_query,
+    #             "thoughts": thoughts,
+    #             "current_depth": current_depth,
+    #             "llm": self.llm,
+    #         }
+    #         decision = should_continue_reasoning(temp_state)
+    #         sufficient = (decision == "finalize")
+    #         sufficiency_score = 0.0 if sufficient else 1.0
+    #         logger.debug(
+    #             f"Sufficiency evaluation: sufficient={sufficient}, score={sufficiency_score}"
+    #         )
+    #         return EvaluationResult(
+    #             evaluation_type="micro_sufficiency",
+    #             scores={"sufficiency": sufficiency_score},
+    #         )
+    #     except Exception as e:
+    #         logger.error(f"Error evaluating sufficiency: {e}")
+    #         return EvaluationResult(
+    #             evaluation_type="micro_sufficiency",
+    #             scores={"sufficiency": 0.5},
+    #         )
 
     async def _evaluate_task_completion(
         self,
@@ -332,10 +319,13 @@ class UnifiedEvaluator:
                 user_query=user_query,
                 agent_output=agent_output,
                 tool_calls=tool_calls,
+                execution_time=context.get("execution_time", 0.0),
             )
 
-            # 提取质量分数
-            quality_score = 7.0 if reflection.completed else 4.0
+            # 提取质量分数：使用 LLM 返回的分数，仅在缺失时 fallback
+            quality_score = getattr(reflection, "quality_score", None)
+            if quality_score is None:
+                quality_score = 7.0 if reflection.completed else 4.0
 
             logger.info(
                 f"Task completion evaluation: completed={reflection.completed}, "
@@ -404,6 +394,7 @@ class UnifiedEvaluator:
                 user_query=user_query,
                 agent_output=output_with_error,
                 tool_calls=tool_calls,
+                execution_time=context.get("execution_time", 0.0),
             )
 
             # 失败情况下质量分数较低
@@ -524,20 +515,19 @@ def get_unified_evaluator() -> UnifiedEvaluator:
     """获取统一评估器单例"""
     global _evaluator
     if _evaluator is None:
-        from app.config import settings
-        from langchain_openai import ChatOpenAI
+        from app.config import get_settings
+        from app.core.llm import get_default_llm
 
-        # 使用配置的LLM
-        llm = ChatOpenAI(
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            api_key=settings.openai_api_key,
-        )
+        settings = get_settings()
+        # 复用统一 LLM 工厂，跟 agent 用同一个 LLM
+        llm = get_default_llm()
+        cache_enabled = getattr(settings, "evaluation_cache_enabled", True)
 
         _evaluator = UnifiedEvaluator(
             llm=llm,
-            cache_enabled=settings.evaluation_cache_enabled,
+            cache_enabled=cache_enabled,
         )
+        logger.info(f"[reflection] UnifiedEvaluator created, cache_enabled={cache_enabled}")
 
     return _evaluator
 

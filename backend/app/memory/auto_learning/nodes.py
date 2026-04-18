@@ -7,7 +7,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 
-from auto_learning.memory import get_pattern_memory
+from app.memory.auto_learning.memory import get_pattern_memory
 
 logger = logging.getLogger(__name__)
 

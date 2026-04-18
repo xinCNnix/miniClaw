@@ -4,6 +4,9 @@ FastAPI Application Entry Point
 This is the main entry point for the miniClaw backend API.
 """
 
+import sys
+sys.dont_write_bytecode = True
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +29,8 @@ from app.api import memory as memory_api
 from app.api import websocket as websocket_api
 from app.api import memory_sync as memory_sync_api
 from app.api import embedding as embedding_api
+from app.api import media as media_api
+from app.api import wiki as wiki_api
 
 
 # Configure logging
@@ -151,6 +156,15 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Failed to generate SKILLS_SNAPSHOT.md: {e}")
 
+    # Recover MediaRegistry from existing output files
+    try:
+        from app.core.media import get_registry
+        registry = get_registry()
+        recovered = registry.register_existing_files()
+        logger.info(f"MediaRegistry recovery: {recovered} files re-registered")
+    except Exception as e:
+        logger.warning(f"MediaRegistry recovery failed: {e}")
+
     # Initialize agent (warmup)
     try:
         from app.tools import CORE_TOOLS
@@ -178,6 +192,21 @@ async def startup_event():
             logger.info("Embedding model warmup disabled")
     except Exception as e:
         logger.warning(f"Failed to start embedding warmup: {e}")
+
+    # Start MemoryJanitor for periodic decay/cleanup (红线4)
+    try:
+        if getattr(settings, "memory_decay_cron_hours", 0) > 0:
+            from app.memory.engine.cron import get_memory_janitor
+            janitor = get_memory_janitor()
+            interval = settings.memory_decay_cron_hours * 3600
+            asyncio.create_task(janitor.run_periodically(interval))
+            logger.info(
+                f"MemoryJanitor started (interval={settings.memory_decay_cron_hours}h)"
+            )
+        else:
+            logger.info("MemoryJanitor disabled (memory_decay_cron_hours=0)")
+    except Exception as e:
+        logger.warning(f"Failed to start MemoryJanitor: {e}")
 
 
 async def _warmup_embedding_model(embedding_manager, timeout: int):
@@ -278,6 +307,8 @@ app.include_router(memory_api.router, prefix="/api")
 app.include_router(memory_sync_api.router)
 app.include_router(websocket_api.router, prefix="/api")
 app.include_router(embedding_api.router, prefix="/api/embedding")
+app.include_router(media_api.router, prefix="/api/media")
+app.include_router(wiki_api.router, prefix="/api")
 
 
 if __name__ == "__main__":

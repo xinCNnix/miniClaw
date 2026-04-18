@@ -72,7 +72,7 @@ class AgentWithPatternLearning:
 
     Example:
         >>> from langchain_openai import ChatOpenAI
-        >>> from auto_learning.graph_builder import AgentWithPatternLearning
+        >>> from app.memory.auto_learning.graph_builder import AgentWithPatternLearning
         >>>
         >>> llm = ChatOpenAI(model="gpt-4")
         >>> tools = [...]  # Your tools

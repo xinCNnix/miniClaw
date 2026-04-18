@@ -12,6 +12,12 @@ from langchain_core.tools import BaseTool
 from app.core.streaming.events import StreamEvent, StreamEventType
 from app.core.streaming.event_bus import EventBus
 
+# Image embedding for tool output (graceful fallback)
+try:
+    from app.core.streaming.image_embedder import embed_output_images_v2
+except ImportError:
+    def embed_output_images_v2(x: str, max_age_seconds: int = 60) -> tuple[str, list[dict]]: return x, []
+
 
 class ToolExecutor:
     """
@@ -70,20 +76,24 @@ class ToolExecutor:
         try:
             # Execute the tool (may be sync or async)
             result = tool.invoke(tool_args)
+            result_str, gen_images = embed_output_images_v2(str(result))
 
             # Publish completion event
             # Keys "output" and "status" must match what chat.py expects
+            event_data = {
+                "id": tool_id,
+                "tool_name": tool_name,
+                "output": result_str,
+                "status": "success",
+            }
+            if gen_images:
+                event_data["generated_images"] = gen_images
             await self._event_bus.publish(StreamEvent(
                 type=StreamEventType.TOOL_EXECUTION_COMPLETE,
-                data={
-                    "id": tool_id,
-                    "tool_name": tool_name,
-                    "output": str(result),
-                    "status": "success",
-                }
+                data=event_data,
             ))
 
-            return result
+            return result_str
 
         except Exception as e:
             # Publish error event

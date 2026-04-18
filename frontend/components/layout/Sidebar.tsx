@@ -69,9 +69,9 @@ export function Sidebar({
       {/* Sessions List */}
       <div className="flex-1 overflow-y-auto p-2">
         <div className="space-y-1">
-          {sessions.map((session) => (
+          {sessions.map((session, index) => (
             <div
-              key={session.session_id}
+              key={`${session.session_id}-${index}`}
               className={cn(
                 "group flex items-center gap-2 p-3 rounded-md cursor-pointer transition-colors",
                 "hover:bg-gray-100",

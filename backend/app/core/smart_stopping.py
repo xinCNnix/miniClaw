@@ -21,7 +21,8 @@ class SmartToolStopping:
     """
 
     # 类变量：在所有实例间共享工具调用历史
-    _shared_tool_history: List[str] = []
+    # 存储 (tool_name, signature) 元组，signature 基于关键参数生成
+    _shared_tool_history: List[tuple] = []
 
     def __init__(
         self,
@@ -42,7 +43,7 @@ class SmartToolStopping:
         self.enable = enable
 
     @property
-    def tool_history(self) -> List[str]:
+    def tool_history(self) -> List[tuple]:
         """获取工具调用历史（使用类变量）"""
         return SmartToolStopping._shared_tool_history
 
@@ -50,6 +51,36 @@ class SmartToolStopping:
         """重置工具调用历史（在开始新对话时调用）"""
         SmartToolStopping._shared_tool_history.clear()
         logger.debug("[SMART_STOP] 工具调用历史已重置")
+
+    @staticmethod
+    def _make_signature(tool_name: str, tool_args: Dict) -> str:
+        """根据工具名和关键参数生成调用签名，用于区分不同的调用"""
+        if not tool_args:
+            return tool_name
+
+        # read_file: 用 file_path 区分不同文件读取
+        if tool_name == "read_file":
+            return f"read_file:{tool_args.get('file_path', tool_args.get('path', ''))}"
+
+        # terminal: 用 command 区分不同命令
+        if tool_name == "terminal":
+            return f"terminal:{tool_args.get('command', '')}"
+
+        # python_repl: 用 code/query 区分不同代码
+        if tool_name == "python_repl":
+            code = tool_args.get('code', tool_args.get('query', ''))
+            return f"python_repl:{code[:100]}"
+
+        # search_kb: 用 query 区分不同搜索
+        if tool_name == "search_kb":
+            return f"search_kb:{tool_args.get('query', '')}"
+
+        # write_file: 用 file_path 区分
+        if tool_name == "write_file":
+            return f"write_file:{tool_args.get('file_path', tool_args.get('path', ''))}"
+
+        # 其他工具：使用工具名
+        return tool_name
 
     def should_stop_tool_calling(
         self,
@@ -135,16 +166,28 @@ class SmartToolStopping:
         return True
 
     def _is_redundant_tool_call(self, tool_name: str, tool_args: Dict) -> bool:
-        """检测冗余工具调用"""
-        # 添加到历史
-        self.tool_history.append(tool_name)
+        """检测冗余工具调用（基于工具名+关键参数签名，而非仅工具名）"""
+        signature = self._make_signature(tool_name, tool_args)
 
-        # 检查窗口内是否重复
-        recent_tools = self.tool_history[-self.redundancy_window:]
+        # 添加签名到历史
+        self.tool_history.append((tool_name, signature))
 
-        # 同一个工具在窗口内使用超过 2 次
-        if recent_tools.count(tool_name) > 2:
-            logger.warning(f"[SMART_STOP] 检测到冗余工具调用: {tool_name}")
+        # 检查窗口内是否有相同的签名重复（同工具+同参数 = 真正冗余）
+        recent = self.tool_history[-self.redundancy_window:]
+        signature_count = sum(1 for _, sig in recent if sig == signature)
+
+        # 同一个签名在窗口内使用超过 2 次 → 真正的冗余
+        if signature_count > 2:
+            logger.warning(f"[SMART_STOP] 检测到冗余工具调用: {tool_name} (signature={signature})")
+            return True
+
+        # 额外检查：同一工具名（不同参数）连续超过 5 次 → 可能陷入了工具循环
+        name_count = sum(1 for name, _ in recent if name == tool_name)
+        extended_window = self.tool_history[-(self.redundancy_window * 2):]
+        extended_name_count = sum(1 for name, _ in extended_window if name == tool_name)
+
+        if extended_name_count > 5:
+            logger.warning(f"[SMART_STOP] 工具 {tool_name} 连续调用 {extended_name_count} 次（不同参数），可能陷入循环")
             return True
 
         return False
@@ -193,4 +236,30 @@ def should_stop_tool_calling(
 
     return stopper.should_stop_tool_calling(
         round_count, tool_name, tool_args, user_message, current_round_time
+    )
+
+
+# ── Backward-compatible aliases ──────────────────────────────────────
+
+# should_stop_before_execution was renamed to should_stop_tool_calling
+should_stop_before_execution = should_stop_tool_calling
+
+
+async def should_stop_after_execution(
+    settings,
+    round_count: int,
+    tool_name: str,
+    tool_args: Dict,
+    user_message: str,
+    current_round_time: float,
+    execution_result: Any = None,
+) -> tuple[bool, str]:
+    """Async version of should_stop for post-execution checks.
+
+    Currently delegates to the sync version. Reserved for future
+    post-execution heuristics (e.g., result quality analysis).
+    """
+    return should_stop_tool_calling(
+        settings, round_count, tool_name, tool_args,
+        user_message, current_round_time,
     )

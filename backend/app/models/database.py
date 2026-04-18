@@ -159,3 +159,132 @@ class MemoryMetadataDB(Base):
     __table_args__ = (
         Index("idx_memory_metadata_key", "key"),
     )
+
+
+# ============================================================================
+# Memory Engine Models (Phase 2-3)
+# ============================================================================
+
+
+class EventLogDB(Base):
+    """Append-only event log for the memory engine.
+
+    Every conversation turn, tool call, and external source is recorded here.
+    SHA256 hash field enforces dedup (红线1).
+
+    source_type is a free-form string matching MemoryEvidence.source_type,
+    so new skills don't require schema changes.
+    """
+    __tablename__ = "event_log"
+
+    event_id = Column(String(100), primary_key=True)
+    ts = Column(Float, nullable=False)
+    session_id = Column(String(100), nullable=False, index=True)
+    user_id = Column(String(100), nullable=False, default="")
+    event_type = Column(String(30), nullable=False)  # user_msg, assistant_msg, tool_call, session_archived, ...
+    source_type = Column(String(50), default="conversation")
+    payload_json = Column(Text, nullable=False)
+    hash = Column(String(64), nullable=False, unique=True)  # SHA256 dedup
+    parent_id = Column(String(100), nullable=True)
+    source_ref = Column(String(2000), nullable=True)  # URL / file_path / trace_id
+    meta_json = Column(Text, default="{}")             # Extensible metadata (JSON dict)
+
+    __table_args__ = (
+        Index("idx_event_log_session_id", "session_id"),
+        Index("idx_event_log_ts", "ts"),
+        Index("idx_event_log_event_type", "event_type"),
+    )
+
+
+class WikiPageDB(Base):
+    """Wiki page metadata (content stored in MD files).
+
+    Consolidated from wiki/store.py raw SQL into ORM.
+    """
+    __tablename__ = "wiki_pages"
+
+    page_id = Column(String(100), primary_key=True)
+    title = Column(String(200), unique=True, nullable=False)
+    aliases_json = Column(Text, default="[]")
+    tags_json = Column(Text, default="[]")
+    summary = Column(Text, default="")
+    file_path = Column(String(500), nullable=True)
+    content_hash = Column(String(64), nullable=True)
+    evidence_json = Column(Text, default="[]")
+    confidence = Column(Float, default=0.0)
+    access_count = Column(Integer, default=0)
+    source = Column(String(20), default="extracted")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_wiki_pages_title", "title"),
+    )
+
+
+class EntityProfileDB(Base):
+    """Entity-centric memory — one row per entity (user, project, tool, etc.).
+
+    Attributes are stored as a JSON dict with conflict tracking.
+    """
+    __tablename__ = "entity_profiles"
+
+    entity_id = Column(String(200), primary_key=True)
+    entity_type = Column(String(50), nullable=False)  # person, project, tool, concept
+    name = Column(String(200), nullable=False)
+    summary = Column(Text, default="")
+    attributes_json = Column(Text, default="{}")
+    last_updated = Column(Float, default=0.0)
+    confidence = Column(Float, default=0.0)
+
+    __table_args__ = (
+        Index("idx_entity_profiles_type", "entity_type"),
+        Index("idx_entity_profiles_name", "name"),
+    )
+
+
+class CaseRecordDB(Base):
+    """Case memory — stores completed task trajectories for reuse.
+
+    Extracted from execution logs (PEVR/ToT/Agent) at task completion.
+    """
+    __tablename__ = "case_records"
+
+    case_id = Column(String(100), primary_key=True)
+    ts = Column(Float, nullable=False)
+    title = Column(String(500), nullable=False)
+    context = Column(Text, default="")
+    problem = Column(Text, default="")
+    plan = Column(Text, default="")
+    actions_json = Column(Text, default="[]")
+    result = Column(Text, default="")
+    reflection = Column(Text, default="")
+    success_score = Column(Float, default=0.0)
+    tags_json = Column(Text, default="[]")
+    entities_json = Column(Text, default="[]")
+    evidence_json = Column(Text, default="[]")
+
+    __table_args__ = (
+        Index("idx_case_records_ts", "ts"),
+        Index("idx_case_records_success", "success_score"),
+    )
+
+
+class ProcedureDB(Base):
+    """Procedural memory — reusable step-by-step procedures.
+
+    Auto-extracted from successful task completions.
+    """
+    __tablename__ = "procedures"
+
+    proc_id = Column(String(100), primary_key=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, default="")
+    trigger_conditions = Column(Text, default="")
+    steps_json = Column(Text, default="[]")
+    success_rate = Column(Float, default=0.0)
+    last_used = Column(Float, default=0.0)
+
+    __table_args__ = (
+        Index("idx_procedures_name", "name"),
+    )

@@ -13,6 +13,13 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.tools import BaseTool
 from langchain_core.language_models.chat_models import BaseChatModel
 
+# Image embedding for tool output (graceful fallback)
+try:
+    from app.core.streaming.image_embedder import embed_output_images, embed_output_images_v2
+except ImportError:
+    def embed_output_images(x: str) -> str: return x
+    def embed_output_images_v2(x: str, max_age_seconds: int = 60) -> tuple[str, list[dict]]: return x, []
+
 from app.core.llm import create_llm, LLMProvider
 from app.config import get_settings
 from app.logging_config import get_agent_logger
@@ -262,6 +269,7 @@ class AgentManager:
         Async stream agent responses.
         """
         start_time = time.time()
+        _last_tool_calls: list[dict] = []  # 工具调用追踪（供反思评估使用）
 
         try:
             logger.info("=== Agent astream START ===")
@@ -284,6 +292,40 @@ class AgentManager:
 
             # Get max_tool_rounds from settings
             max_tool_rounds = settings.max_tool_rounds
+
+            # === TCA injection ===
+            _tca_injection_text = ""
+            try:
+                if getattr(settings, "enable_tca", False):
+                    from app.core.meta_policy.tca_helpers import get_tca_decision
+                    from app.core.meta_policy.capability_map import CapabilityMap
+
+                    _cap_map = CapabilityMap.from_core_tools()
+                    user_msg = messages[-1].get("content", "") if messages else ""
+                    _tca_decision = get_tca_decision(user_msg, cap_map=_cap_map)
+                    if _tca_decision and _tca_decision.get("injection_text"):
+                        _tca_injection_text = _tca_decision["injection_text"]
+                        lc_messages.append(SystemMessage(content=_tca_injection_text))
+                        logger.info("[TCA] Agent injection applied")
+            except Exception as e:
+                logger.debug(f"[TCA] Agent enrichment failed: {e}")
+
+            # === Meta Policy injection ===
+            _meta_policy_strategy_type = "baseline"
+            try:
+                if getattr(settings, "enable_meta_policy", False):
+                    from app.core.meta_policy.meta_policy_helpers import get_meta_policy_decision
+                    from app.core.meta_policy.capability_map import CapabilityMap
+
+                    _cap_map_mp = CapabilityMap.from_core_tools()
+                    user_msg = messages[-1].get("content", "") if messages else ""
+                    _mp_decision = get_meta_policy_decision(user_msg, cap_map=_cap_map_mp)
+                    if _mp_decision and _mp_decision.get("injection_text"):
+                        lc_messages.append(SystemMessage(content=_mp_decision["injection_text"]))
+                        _meta_policy_strategy_type = _mp_decision.get("strategy_type", "baseline")
+                        logger.info("[MetaPolicy] Agent injection applied: %s", _mp_decision.get("action_type"))
+            except Exception as e:
+                logger.debug(f"[MetaPolicy] Agent enrichment failed: {e}")
 
             # Multi-round tool calling loop
             round_count = 0
@@ -495,6 +537,13 @@ class AgentManager:
                     logger.info(f"[Round {round_count + 1}] Using CONCURRENT execution for {len(valid_tool_calls)} tools")
 
                     async for event in self._execute_tools_concurrent(valid_tool_calls, lc_messages):
+                        # 追踪并发工具调用结果（供反思评估使用）
+                        if event.get("type") == "tool_output":
+                            _last_tool_calls.append({
+                                "name": event.get("tool_name", "unknown"),
+                                "success": event.get("status") == "success",
+                                "duration": event.get("duration", 0.0),
+                            })
                         yield event
 
                 else:
@@ -519,18 +568,41 @@ class AgentManager:
                         }
 
                         try:
+                            # Guard against empty tool arguments (LLM sometimes sends {} for python_repl etc.)
+                            if not tool_args or tool_args == {}:
+                                raise ValueError(
+                                    f"Tool '{tool_name}' requires arguments but received none. "
+                                    f"Please provide the required parameters."
+                                )
+                            tool_start = time.time()
                             tool_output = await self._aexecute_tool(tool_name, tool_args)
+                            tool_duration = time.time() - tool_start
+                            tool_output_str, gen_images = embed_output_images_v2(str(tool_output))
 
-                            logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed")
+                            logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed, {len(gen_images)} image(s)")
+
+                            _last_tool_calls.append({
+                                "name": tool_name,
+                                "success": True,
+                                "duration": tool_duration,
+                            })
 
                             yield {
                                 "type": "tool_output",
                                 "tool_name": tool_name,
-                                "output": str(tool_output),
+                                "output": tool_output_str,
                                 "status": "success",
+                                "generated_images": gen_images if gen_images else None,
                             }
                         except Exception as e:
                             logger.error(f"[Round {round_count + 1}] Tool {tool_name} failed: {e}")
+
+                            _last_tool_calls.append({
+                                "name": tool_name,
+                                "success": False,
+                                "duration": 0.0,
+                            })
+
                             yield {
                                 "type": "tool_output",
                                 "tool_name": tool_name,
@@ -539,8 +611,17 @@ class AgentManager:
                             }
 
                         # Add tool result to conversation
+                        # Strip base64 data URIs for LLM context — LLM doesn't need raw image data
+                        llm_facing_output = tool_output_str
+                        if "data:image/" in llm_facing_output:
+                            import re
+                            llm_facing_output = re.sub(
+                                r'!\[[^\]]*\]\(data:image/[^)]{100,}\)',
+                                '[图片已生成]',
+                                llm_facing_output
+                            )
                         lc_messages.append(ToolMessage(
-                            content=str(tool_output),
+                            content=llm_facing_output,
                             tool_call_id=tool_id
                         ))
                 # === Phase 2 并发执行结束 ===
@@ -583,6 +664,70 @@ class AgentManager:
 
             total_duration = time.time() - start_time
             logger.info(f"=== Agent astream COMPLETE in {total_duration:.2f}s ===")
+
+            # === TCA post-execution data recording ===
+            try:
+                if getattr(settings, "enable_tca", False):
+                    from app.core.meta_policy.tca_helpers import record_tca_episode
+
+                    user_msg = messages[-1].get("content", "") if messages else ""
+                    record_tca_episode(
+                        query=user_msg,
+                        tool_calls=_last_tool_calls,
+                        plan_steps=round_count,
+                        task_completed=round_count < max_tool_rounds,
+                    )
+            except Exception as e:
+                logger.debug(f"[TCA] Agent post-execution recording failed: {e}")
+
+            # === Meta Policy post-execution data recording ===
+            try:
+                if getattr(settings, "enable_meta_policy", False):
+                    from app.core.meta_policy.meta_policy_helpers import record_meta_policy_episode
+
+                    user_msg = messages[-1].get("content", "") if messages else ""
+                    record_meta_policy_episode(
+                        query=user_msg,
+                        tool_calls=_last_tool_calls,
+                        plan_steps=round_count,
+                        task_completed=round_count < max_tool_rounds,
+                    )
+            except Exception as e:
+                logger.debug(f"[MetaPolicy] Agent post-execution recording failed: {e}")
+
+            # === 反思评估（Phase 3.2）===
+            if getattr(settings, "enable_agent_reflection", False):
+                try:
+                    from app.core.reflection.helpers import evaluate_and_correct
+
+                    # 收集完整的 agent 输出
+                    agent_output = ""
+                    user_query = messages[-1].get("content", "") if messages else ""
+
+                    # 从最近的 content_delta 提取输出（简化方式：用 LLM 最后响应）
+                    if hasattr(locals().get("response"), "content"):
+                        agent_output = response.content or ""
+
+                    if agent_output:
+                        result = await evaluate_and_correct(
+                            user_query=user_query,
+                            agent_output=agent_output,
+                            tool_calls=_last_tool_calls,
+                            execution_time=total_duration,
+                            execution_mode="normal",
+                        )
+                        logger.info(
+                            f"[reflection] Agent reflection: quality={result.quality_score:.1f}, "
+                            f"should_correct={result.should_correct}"
+                        )
+                        if result.should_correct and result.correction:
+                            yield {
+                                "type": "self_correction",
+                                "correction": result.correction,
+                                "quality_score": result.quality_score,
+                            }
+                except Exception as e:
+                    logger.warning(f"[reflection] Post-execution reflection failed: {e}")
 
         except Exception as e:
             logger.error(f"Agent astream error: {e}", exc_info=True)
@@ -656,12 +801,14 @@ class AgentManager:
         start = time.time()
         try:
             result = await self._aexecute_tool(tool_name, tool_args)
+            result_str, gen_images = embed_output_images_v2(str(result))
             duration = time.time() - start
 
-            logger.info(f"Tool {tool_name} completed in {duration:.2f}s")
+            logger.info(f"Tool {tool_name} completed in {duration:.2f}s, {len(gen_images)} image(s)")
 
             return {
-                "output": result,
+                "output": result_str,
+                "generated_images": gen_images if gen_images else None,
                 "duration": duration,
                 "tool_name": tool_name,
                 "tool_id": tool_id,
@@ -749,19 +896,32 @@ class AgentManager:
                 }]
             }
 
-            # Emit tool output event
+            # Emit tool output event (with generated_images from v2)
+            output_str = str(output)
+            gen_images = result.get("generated_images")
+            if gen_images:
+                logger.info("[Agent] %s generated %d image(s)", tool_name, len(gen_images))
             yield {
                 "type": "tool_output",
                 "tool_name": tool_name,
-                "output": str(output),
+                "output": output_str,
                 "status": status,
                 "duration": duration,
+                "generated_images": gen_images,
             }
 
-            # Add result to conversation history
+            # Add result to conversation history (strip base64 for LLM)
+            llm_output = output_str
+            if "data:image/" in llm_output:
+                import re
+                llm_output = re.sub(
+                    r'!\[[^\]]*\]\(data:image/[^)]{100,}\)',
+                    '[图片已生成]',
+                    llm_output
+                )
             lc_messages.append(
                 ToolMessage(
-                    content=str(output),
+                    content=llm_output,
                     tool_call_id=tool_id
                 )
             )

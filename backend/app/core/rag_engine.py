@@ -15,7 +15,7 @@ import logging
 # IMPORTANT: Set HuggingFace environment variables BEFORE importing any HF libraries
 # This prevents connection timeouts when accessing HuggingFace from China
 project_root = Path(__file__).parent.parent.parent
-hf_cache_dir = project_root / "backup" / "data" / "models"
+hf_cache_dir = project_root / "data" / "models" / "embedding"
 os.environ['HF_HOME'] = str(hf_cache_dir)
 os.environ['HUGGINGFACE_HUB_CACHE'] = str(hf_cache_dir / "hub")
 os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'  # Disable telemetry
@@ -64,9 +64,9 @@ class RAGEngine:
         self.kb_dir.mkdir(parents=True, exist_ok=True)
         self.vector_store_dir.mkdir(parents=True, exist_ok=True)
 
-        # Set HuggingFace cache directory to backup/data/models/
+        # Set HuggingFace cache directory to data/models/embedding/
         project_root = Path(__file__).parent.parent.parent
-        hf_cache_dir = project_root / "backup" / "data" / "models"
+        hf_cache_dir = project_root / "data" / "models" / "embedding"
         hf_cache_dir.mkdir(parents=True, exist_ok=True)
         os.environ['HF_HOME'] = str(hf_cache_dir)
         os.environ['HUGGINGFACE_HUB_CACHE'] = str(hf_cache_dir / "hub")
@@ -223,9 +223,9 @@ class RAGEngine:
 
         model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
-        # Check if model is already cached locally (in backup/data/models)
+        # Check if model is already cached locally (in data/models/embedding)
         project_root = Path(__file__).parent.parent.parent
-        hf_cache = Path(os.environ.get('HF_HOME', project_root / "backup" / "data" / "models"))
+        hf_cache = Path(os.environ.get('HF_HOME', project_root / "data" / "models" / "embedding"))
         model_cache_dir = hf_cache / "hub" / "models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2"
 
         # Helper function to load with timeout
@@ -277,7 +277,7 @@ class RAGEngine:
             except Exception as e2:
                 logger.error(f"✗ Failed to load from official HuggingFace: {e2}")
                 logger.error("Embedding model unavailable - knowledge base search will be disabled")
-                logger.error("Please ensure the model is downloaded to backup/data/models/")
+                logger.error("Please ensure the model is downloaded to data/models/embedding/")
                 raise
 
     def _initialize_vector_store(self):

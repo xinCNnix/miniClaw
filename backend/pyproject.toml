@@ -100,8 +100,15 @@ markers = [
     "unit: Unit tests",
     "integration: Integration tests",
     "e2e: End-to-end tests",
+    "adversarial: Adversarial tests",
+    "regression: Regression tests",
     "slow: Slow running tests",
     "security: Security tests",
+    "layer1: Layer 1 prompt/node-level tests",
+    "layer2: Layer 2 trajectory tests",
+    "trajectory: Trajectory/execution path tests",
+    "layer4: Layer 4 adversarial tests",
+    "layer5: Layer 5 regression tests",
 ]
 
 [tool.coverage.run]

@@ -588,7 +588,11 @@ async def learn_from_execution(
         logger.error(f"Failed to learn from execution: {e}", exc_info=True)
 
         # Return fallback result
-        from app.memory.auto_learning.reflection.models import LearningResult
+        from app.memory.auto_learning.reflection.models import (
+            LearningResult,
+            ReflectionResult,
+            RewardResult,
+        )
 
         return LearningResult(
             session_id=session_id,

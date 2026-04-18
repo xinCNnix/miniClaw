@@ -42,7 +42,7 @@ class PatternLearner:
         reflection_engine: ReflectionEngine | None = None,
         reward_model: RewardModel | None = None,
         pattern_extractor: PatternExtractor | None = None,
-        buffer = None,  # ReplayBuffer instance
+        buffer = None,  # EnhancedReplayBuffer instance
         rl_trainer = None,  # RLTrainer instance
         enable_rl: bool = False,
     ) -> None:
@@ -312,6 +312,9 @@ _pattern_learner_instance: PatternLearner | None = None
 def get_pattern_learner() -> PatternLearner:
     """Get the global pattern learner instance.
 
+    Reads RL training configuration from Settings to determine
+    whether to enable RL-based learning.
+
     Returns:
         PatternLearner: Global pattern learner instance
 
@@ -322,7 +325,37 @@ def get_pattern_learner() -> PatternLearner:
     global _pattern_learner_instance
 
     if _pattern_learner_instance is None:
-        _pattern_learner_instance = PatternLearner()
+        from app.config import get_settings
+        settings = get_settings()
+        enable_rl = getattr(settings, "enable_rl_training", False)
+
+        buffer = None
+        rl_trainer = None
+        if enable_rl:
+            try:
+                from app.memory.auto_learning.advanced.buffer import EnhancedReplayBuffer
+                from app.memory.auto_learning.advanced.rl_trainer import RLTrainer
+                from app.memory.auto_learning.nn import get_pattern_nn
+                nn_model = get_pattern_nn()
+                buffer = EnhancedReplayBuffer(
+                    capacity=getattr(settings, "rl_batch_size", 32),
+                    enable_trajectory=True,
+                    prioritized=True,
+                )
+                rl_trainer = RLTrainer(model=nn_model)
+            except ImportError as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"[auto_learning] RL components not available, disabling RL: {e}"
+                )
+                enable_rl = False
+
+        _pattern_learner_instance = PatternLearner(
+            buffer=buffer,
+            rl_trainer=rl_trainer,
+            enable_rl=enable_rl,
+        )
+        logger.info(f"[auto_learning] PatternLearner initialized with enable_rl={enable_rl}")
 
     return _pattern_learner_instance
 

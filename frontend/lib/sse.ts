@@ -10,7 +10,7 @@ export interface SSEMessage {
 }
 
 export interface ParsedSSEEvent {
-  type: 'thinking_start' | 'tool_call' | 'content_delta' | 'tool_output' | 'error' | 'done';
+  type: 'thinking_start' | 'tool_call' | 'content_delta' | 'tool_output' | 'error' | 'done' | 'self_correction';
   content?: string;
   tool_calls?: any[];
   error?: string;
