@@ -338,7 +338,7 @@ You are now in Tree-of-Thought reasoning mode. You MUST follow this search proce
 Tool Usage:
 - Core tools (use LangChain native function calling): {tool_list}
 - Skills (高级能力，读取 SKILL.md 即可自动执行):
-  系统会在你 read_file 一个 SKILL.md 时自动执行对应 skill。
+  系统会在你 read_file 一个 SKILL.md 时自动通过 SkillPolicy 门控执行。
   使用方法: read_file(path="data/skills/<skill-name>/SKILL.md")
   示例: read_file(path="data/skills/arxiv-search/SKILL.md") 将自动搜索 arXiv 论文。
 
@@ -348,11 +348,10 @@ IMPORTANT:
 - Do NOT reference tools that are not in the available list
 - Skills expand your capabilities beyond raw tool calls — use them when relevant
 
-=== SKILL 优先规则（最高优先级，必须遵守）===
-优先使用 Skill 完成任务。收到任务时先看上面 Available Skills 列表：
-- 有对应 Skill → 必须 read_file(SKILL.md) 调用，禁止用 python_repl/terminal 重新实现
-- 没有对应 Skill → 才可以用 python_repl 或 terminal 自己实现
-绝对禁止：用 python_repl/terminal 重新实现 skill 已有的能力（如画图、搜索论文等）。
+=== SKILL PRIORITY RULES ===
+- 有对应 Skill → 优先使用 read_file(SKILL.md)
+- 没有对应 Skill → 使用 python_repl 或 terminal
+- 禁止用 python_repl/terminal 重新实现 skill 已有的能力
 {variant_hint}
 {diversity_injection}"""
 

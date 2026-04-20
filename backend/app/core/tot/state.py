@@ -169,6 +169,10 @@ class ToTState(TypedDict):
     max_tool_steps_per_node: NotRequired[int]        # 每个节点最大工具调用步数（默认 5）
     max_time_per_node: NotRequired[float]            # 每个节点最大执行时间（秒，默认 30s）
 
+    # --- SkillPolicy 门控结果 (Phase: SkillPolicyNode) ---
+    skill_policy_decisions: NotRequired[Dict[str, Dict]]
+    # key = skill_name, value = {"allowed": bool, "reason": str, "compiled_tool": {...}}
+
 
 def get_depth_of_thought(thought: Thought, all_thoughts: List[Thought]) -> int:
     """

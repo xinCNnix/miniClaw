@@ -6,6 +6,7 @@ from .verifier import verifier_node
 from .replanner import replanner_node
 from .finalizer import finalizer_node
 from .summarizer import summarizer_node
+from .skill_policy import skill_policy_node
 
 __all__ = [
     "planner_node",
@@ -14,4 +15,5 @@ __all__ = [
     "replanner_node",
     "finalizer_node",
     "summarizer_node",
+    "skill_policy_node",
 ]

@@ -88,7 +88,7 @@ async def summarizer_node(state: dict) -> dict:
         from app.core.llm import create_llm
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        llm = create_llm()
+        llm = create_llm(get_settings().llm_provider)
         bound_llm = llm.bind(max_tokens=max_tokens, temperature=0.0)
 
         messages = [

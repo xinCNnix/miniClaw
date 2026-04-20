@@ -10,6 +10,7 @@ from .state import PlannerState, PlanStep, Observation, VerifierReport, PlanUpda
 from .pevr_logger import extract_token_usage
 from .router import route, hard_rule_router
 from .scheduler import ExecutionLayer, build_execution_layers, get_max_parallelism, adjust_parallelism
+from .nodes.skill_policy import skill_policy_node
 
 __all__ = [
     "PlannerOrchestrator",
@@ -28,4 +29,5 @@ __all__ = [
     "build_execution_layers",
     "get_max_parallelism",
     "adjust_parallelism",
+    "skill_policy_node",
 ]

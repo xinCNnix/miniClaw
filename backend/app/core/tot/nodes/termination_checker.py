@@ -34,7 +34,7 @@ async def termination_checker_node(state: ToTState) -> ToTState:
     current_score = state["best_score"]
     current_depth = state["current_depth"]
     max_depth = state["max_depth"]
-    quality_threshold = 6.0
+    quality_threshold = 8.0
     beam_width = state.get("beam_width")
 
     # Fix 9: 未执行工具时提高阈值
@@ -138,7 +138,7 @@ def should_continue_reasoning(state: ToTState) -> TerminationDecision:
     current_score = state["best_score"]
     current_depth = state["current_depth"]
     max_depth = state["max_depth"]
-    quality_threshold = 6.0
+    quality_threshold = 8.0
     beam_width = state.get("beam_width")
 
     # Fix 9: 同步阈值调整
@@ -316,7 +316,7 @@ def _check_diminishing_returns(state: ToTState) -> bool:
 
     if len(recent_scores) >= 2:
         improvement = recent_scores[-1] - recent_scores[0]
-        if improvement < 0.5:
+        if improvement < 1.0:
             logger.info(f"Diminishing returns: improvement only {improvement:.2f}")
             return True
 

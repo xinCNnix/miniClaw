@@ -435,7 +435,7 @@ def build_planner_prompt(
 - Prefer minimal number of steps.
 - Every step must be directly executable.
 - Steps must include explicit tool name and input args.
-- If some input is missing, create a step to ask user (tool: "ask_user").
+- If critical information is missing and cannot be inferred, output {{"status":"need_info","reason":"describe what is missing"}} instead of fabricating data.
 - Consider cost/time constraints, failure modes and fallbacks.
 - Avoid unnecessary browsing or long reasoning.
 - When a skill is needed, expand into explicit steps:

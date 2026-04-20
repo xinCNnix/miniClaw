@@ -116,13 +116,44 @@ async def planner_node(state: dict) -> dict:
         else:
             plan_steps = []
 
-        # Validate each step has the minimum required keys
+        # Validate each step has the minimum required keys and valid tool
         # New format requires {id, name, tool, inputs}, old format has {id, description, tool}
         required_keys = {"id", "tool"}
-        plan_steps = [
-            step for step in plan_steps
-            if isinstance(step, dict) and required_keys.issubset(step.keys())
-        ]
+        available_tool_names = {t.name for t in CORE_TOOLS}
+
+        valid_steps: List[Dict[str, Any]] = []
+        for step in plan_steps:
+            if not isinstance(step, dict) or not required_keys.issubset(step.keys()):
+                continue
+
+            tool_name = step.get("tool", "")
+            # Filter out steps referencing non-existent tools (e.g. "ask_user")
+            if tool_name and tool_name not in available_tool_names and not tool_name.startswith("skill."):
+                logger.warning(
+                    "[PEVR Planner] Filtering step %s: unknown tool '%s'",
+                    step.get("id", "?"), tool_name,
+                )
+                continue
+
+            # Warn about tools with required args but empty inputs
+            inputs = step.get("inputs", step.get("input", {}))
+            if not inputs and tool_name in available_tool_names:
+                tool_obj = next((t for t in CORE_TOOLS if t.name == tool_name), None)
+                if tool_obj:
+                    args_schema = getattr(tool_obj, "args_schema", None)
+                    if args_schema:
+                        try:
+                            required_args = args_schema.schema().get("required", [])
+                            if required_args:
+                                logger.warning(
+                                    "[PEVR Planner] Step %s: tool '%s' requires args %s but inputs is empty",
+                                    step.get("id", "?"), tool_name, required_args,
+                                )
+                        except Exception:
+                            pass
+
+            valid_steps.append(step)
+        plan_steps = valid_steps
 
         # Normalize steps: fill defaults for new fields, ensure backward compat
         for step in plan_steps:

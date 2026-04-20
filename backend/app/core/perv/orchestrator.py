@@ -86,7 +86,20 @@ class PlannerOrchestrator:
             payload fields.
         """
         if not self._graph:
-            self._graph = build_planner_graph()
+            try:
+                self._graph = build_planner_graph()
+            except OSError:
+                # Windows uvicorn reload subprocess may have invalid stderr.
+                # graph.compile() can trigger internal writes to stderr that fail.
+                # Retry after patching stderr to a safe sink.
+                import io as _io
+                import sys as _sys
+                _prev = _sys.stderr
+                _sys.stderr = _io.StringIO()
+                try:
+                    self._graph = build_planner_graph()
+                finally:
+                    _sys.stderr = _prev
 
         task = messages[-1]["content"] if messages else ""
 
@@ -173,6 +186,7 @@ class PlannerOrchestrator:
             "reasoning_trace": [],
             "enrichment": enrichment,
             "learning_metrics": {},
+            "skill_policy_report": None,
             "_pevr_log": self._pevr_log,
         }
 
@@ -498,6 +512,15 @@ class PlannerOrchestrator:
                 "type": "perv_summarized",
                 "summary_count": len(summaries) if summaries else 0,
             }
+
+        elif node_name == "skill_policy":
+            report = state_update.get("skill_policy_report")
+            if report and report.get("policy_applied"):
+                yield {
+                    "type": "perv_skill_policy",
+                    "matched": len(report.get("matched_skills", [])),
+                    "compiled": len(report.get("compiled_plan") or []),
+                }
 
         elif node_name == "verifier":
             report = state_update.get("verifier_report")

@@ -401,7 +401,7 @@ class ToTOrchestrator:
             "backtrack_count": 0,
             "regenerate_count": 0,
             "beam_switch_count": 0,
-            "backtrack_score_threshold": 4.0,
+            "backtrack_score_threshold": 5.5,
             "needs_regeneration": [],
             "deferred_image_paths": [],
             "max_tool_steps_per_node": 5,

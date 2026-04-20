@@ -125,6 +125,26 @@ class PlanStepRecord:
 
 
 @dataclass
+class SkillPolicyRecord:
+    """Record of SkillPolicyNode execution within a PEVR loop."""
+    policy_applied: bool = False
+    plan_steps_in: int = 0              # 输入 plan 步骤数
+    skill_refs_found: int = 0           # 提取到的 skill 引用数
+    skill_refs: List[Dict[str, Any]] = field(default_factory=list)  # [{skill_name, skill_type, source_step}]
+    matched_count: int = 0              # MATCH 阶段匹配数
+    matched_skills: List[Dict[str, Any]] = field(default_factory=list)
+    gate_results: List[Dict[str, Any]] = field(default_factory=list)
+    guard_passed: bool = False
+    guard_issues: List[str] = field(default_factory=list)
+    compiled_count: int = 0             # 成功编译数
+    compiled_skills: List[Dict[str, Any]] = field(default_factory=list)  # [{skill_name, compiled_tool}]
+    plan_steps_out: int = 0             # 输出 plan 步骤数
+    duration_ms: float = 0.0
+    error: Optional[str] = None
+    feature_enabled: bool = True
+
+
+@dataclass
 class LoopRecord:
     """Record of a single PEVR loop iteration (plan -> execute -> verify)."""
     loop_index: int
@@ -138,6 +158,9 @@ class LoopRecord:
     planning_duration_ms: float = 0.0
     planning_error: Optional[str] = None
     planning_tokens: TokenUsage = field(default_factory=TokenUsage)
+
+    # SkillPolicy phase (between planning and execution)
+    skill_policy: Optional[SkillPolicyRecord] = None
 
     # Execution phase
     tool_calls: List[ToolCallRecord] = field(default_factory=list)
@@ -588,6 +611,89 @@ class PEVRLogger:
                 self.finalization_tokens.completion_tokens,
             )
 
+    def log_skill_policy(
+        self,
+        loop_index: int,
+        report: Dict[str, Any],
+        duration_ms: float,
+    ):
+        """Log the SkillPolicy compilation phase.
+
+        Records MATCH/GATE/COMPILE/GUARD results for each skill referenced
+        in the plan.  Called by skill_policy_node after processing.
+
+        Args:
+            loop_index: Current loop index (same as retry_count).
+            report: The SkillPolicyReport dict from skill_policy_node.
+            duration_ms: Processing duration in milliseconds.
+        """
+        self._ensure_loop(loop_index)
+        loop = self._current_loop
+
+        rec = SkillPolicyRecord(
+            policy_applied=report.get("policy_applied", False),
+            plan_steps_in=report.get("plan_steps_in", 0),
+            skill_refs_found=report.get("skill_refs_found", 0),
+            skill_refs=report.get("skill_refs", []),
+            matched_count=len(report.get("matched_skills", [])),
+            matched_skills=[
+                {"name": m.get("skill_name"), "type": m.get("skill_type"), "score": m.get("score")}
+                for m in report.get("matched_skills", [])
+            ],
+            gate_results=report.get("gate_results", []),
+            guard_passed=report.get("guard_passed", False),
+            guard_issues=report.get("guard_issues", []),
+            compiled_count=report.get("compiled_count", 0),
+            compiled_skills=report.get("compiled_skills", []),
+            plan_steps_out=report.get("plan_steps_out", 0),
+            duration_ms=round(duration_ms, 1),
+            error=report.get("error"),
+            feature_enabled=report.get("feature_enabled", True),
+        )
+        loop.skill_policy = rec
+
+        if rec.error:
+            logger.error(
+                "[PEVR] [%s] SkillPolicy FAILED at loop %d: %s (%.0fms)",
+                _ts(), loop_index, rec.error, rec.duration_ms,
+            )
+        elif not rec.feature_enabled:
+            logger.info(
+                "[PEVR] [%s] SkillPolicy SKIP (disabled) at loop %d",
+                _ts(), loop_index,
+            )
+        elif not rec.policy_applied:
+            logger.info(
+                "[PEVR] [%s] SkillPolicy PASS_THROUGH at loop %d: "
+                "refs=%d matched=%d (%.0fms)",
+                _ts(), loop_index, rec.skill_refs_found,
+                rec.matched_count, rec.duration_ms,
+            )
+        else:
+            allowed = [g for g in rec.gate_results if g.get("allowed")]
+            rejected = [g for g in rec.gate_results if not g.get("allowed")]
+            logger.info(
+                "[PEVR] [%s] SkillPolicy COMPILED at loop %d: "
+                "refs=%d matched=%d gate=%d/%d guard=%s "
+                "plan=%d→%d (%.0fms)",
+                _ts(), loop_index,
+                rec.skill_refs_found, rec.matched_count,
+                len(allowed), len(allowed) + len(rejected),
+                rec.guard_passed,
+                rec.plan_steps_in, rec.plan_steps_out,
+                rec.duration_ms,
+            )
+            for cs in rec.compiled_skills:
+                logger.debug(
+                    "[PEVR]   compiled: %s → %s",
+                    cs.get("skill_name"), cs.get("compiled_tool"),
+                )
+            for g in rejected:
+                logger.debug(
+                    "[PEVR]   rejected: %s reason=%s",
+                    g.get("skill_name"), g.get("reason"),
+                )
+
     def log_error(self, phase: str, error: Exception, context: Dict[str, Any] = None):
         """Log an unexpected error at any phase.
 
@@ -721,6 +827,23 @@ class PEVRLogger:
                         "error": lp.planning_error,
                         "tokens": lp.planning_tokens.to_dict(),
                     },
+                    "skill_policy": {
+                        "policy_applied": lp.skill_policy.policy_applied,
+                        "feature_enabled": lp.skill_policy.feature_enabled,
+                        "plan_steps_in": lp.skill_policy.plan_steps_in,
+                        "skill_refs_found": lp.skill_policy.skill_refs_found,
+                        "skill_refs": lp.skill_policy.skill_refs,
+                        "matched_count": lp.skill_policy.matched_count,
+                        "matched_skills": lp.skill_policy.matched_skills,
+                        "gate_results": lp.skill_policy.gate_results,
+                        "guard_passed": lp.skill_policy.guard_passed,
+                        "guard_issues": lp.skill_policy.guard_issues,
+                        "compiled_count": lp.skill_policy.compiled_count,
+                        "compiled_skills": lp.skill_policy.compiled_skills,
+                        "plan_steps_out": lp.skill_policy.plan_steps_out,
+                        "duration_ms": lp.skill_policy.duration_ms,
+                        "error": lp.skill_policy.error,
+                    } if lp.skill_policy else None,
                     "execution": {
                         "tool_calls": [
                             {

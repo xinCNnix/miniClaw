@@ -192,6 +192,9 @@ class PlannerState(TypedDict):
     # SSE 追踪
     reasoning_trace: Annotated[List[Dict[str, Any]], _append_list]
 
+    # SkillPolicy 编译报告
+    skill_policy_report: Optional[Dict[str, Any]]
+
     # 学习集成（规划前准备的经验/策略/历史数据）
     enrichment: Dict[str, Any]
     # 执行后学习指标（reward、pattern_id 等）

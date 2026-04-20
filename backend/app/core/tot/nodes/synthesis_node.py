@@ -758,7 +758,6 @@ def _embed_deferred_images_for_path(
                 # 重新注册图片到 MediaRegistry
                 clean_text, img_meta = embed_output_images_v2(
                     result_text,
-                    session_id=state.get("session_id", ""),
                     max_age_seconds=300,
                 )
                 if img_meta:

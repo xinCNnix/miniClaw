@@ -418,9 +418,8 @@ async def _generate_single_beam(state: ToTState) -> ToTState:
     # Deduplicate thoughts based on content similarity
     unique_thoughts = _deduplicate_thoughts(all_new_thoughts)
 
-    # BUG FIX (Fix 8): visual skill injection
-    if current_depth == 0:
-        _inject_visual_skill_if_needed(user_query, unique_thoughts)
+    # Visual skill injection is now handled by SkillPolicy MATCH stage
+    # (removed _inject_visual_skill_if_needed patch)
 
     logger.info(f"Total unique thoughts generated at depth {current_depth}: {len(unique_thoughts)}")
 
@@ -1032,58 +1031,6 @@ def _generate_fallback_thoughts(
         ))
 
     return thoughts
-
-
-def _inject_visual_skill_if_needed(user_query: str, thoughts: list) -> None:
-    """Fix 8: 如果查询涉及图示/画图但所有 thought 都没有 read_file skill tool_call，
-    强制注入一个调用 chart-plotter 或 geometry-plotter skill 的 thought。
-
-    直接修改 thoughts 列表（in-place）。
-    """
-    # 检测关键词
-    visual_keywords = ["图示", "示意图", "画", "图", "图表", "绘制", "绘图",
-                       "diagram", "chart", "plot", "graph", "illustration", "visual"]
-    query_lower = user_query.lower()
-    needs_visual = any(kw in query_lower for kw in visual_keywords)
-    if not needs_visual:
-        return
-
-    # 检查是否已有 read_file 调用 SKILL.md 的 thought
-    has_skill_call = False
-    for t in thoughts:
-        if t.tool_calls:
-            for tc in t.tool_calls:
-                if tc.get("name") == "read_file":
-                    path = tc.get("args", {}).get("path", "")
-                    if "skill" in path.lower():
-                        has_skill_call = True
-                        break
-        if has_skill_call:
-            break
-
-    if has_skill_call:
-        return  # 已有 skill 调用，无需注入
-
-    # 决定用哪个 skill
-    geometry_keywords = ["几何", "定理", "证明", "勾股", "geometry", "theorem", "proof", "triangle"]
-    if any(kw in query_lower for kw in geometry_keywords):
-        skill_path = "data/skills/geometry-plotter/SKILL.md"
-        skill_desc = "Generate geometric diagram"
-    else:
-        skill_path = "data/skills/chart-plotter/SKILL.md"
-        skill_desc = "Generate chart/plot"
-
-    logger.info(f"[Fix 8] Injecting visual skill thought: {skill_path}")
-    thoughts.append(Thought(
-        id=f"thought_{uuid.uuid4().hex[:8]}",
-        parent_id=None,
-        content=f"Use skill to generate visual: {skill_desc}",
-        tool_calls=[{
-            "name": "read_file",
-            "args": {"path": skill_path}
-        }],
-        status="pending"
-    ))
 
 
 def _collect_existing_branches_summary(state: ToTState) -> str:

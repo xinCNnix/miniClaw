@@ -4,6 +4,112 @@
 
 ---
 
+## 2026-04-20 - v0.2.0: SkillPolicy 统一技能编译系统
+
+### 核心变更
+
+#### 1. SkillPolicy 统一技能编译管道
+
+新增四阶段确定性技能编译管道 (Match → Gate → Compile → Guard)，统一 PEVR 和 ToT 两个推理框架的技能调用逻辑。
+
+**新增模块:**
+- `backend/app/core/skill_policy/` — SkillPolicy 核心引擎
+  - `__init__.py` — 模块入口
+  - `types.py` — 共享类型定义
+  - `engine.py` — 四阶段纯函数实现（无 I/O、无 LLM 调用）
+- `backend/app/core/perv/nodes/skill_policy.py` — PEVR SkillPolicy 图节点
+- `backend/app/core/tot/nodes/skill_policy.py` — ToT SkillPolicy 门控辅助函数
+
+**PEVR 集成:**
+- 图拓扑变更: `planner → skill_policy → executor`（原 `planner → executor`）
+- replanner 回环也经过 skill_policy: `replanner → skill_policy → executor`
+- 新增 `perv_enable_skill_policy` 配置开关
+- PEVRLogger 新增 `SkillPolicyRecord` 和 `log_skill_policy()` 方法
+- Orchestrator 新增 `perv_skill_policy` SSE 事件
+
+**ToT 集成:**
+- thought_executor 新增 SkillPolicy 门控（优先于旧版 skill_orchestrator）
+- 新增 `_execute_compiled_skill()` 编译技能执行函数
+- 移除 thought_generator 中的 `_inject_visual_skill_if_needed` 硬编码补丁
+
+#### 2. PEVR Planner 增强
+
+- 工具验证：过滤引用不存在工具的 plan 步骤（如 `ask_user`）
+- 参数警告：检测必填参数为空时输出警告日志
+- 有效步骤过滤逻辑从简单 subset 检查升级为完整校验
+
+#### 3. PEVR Executor 增强
+
+- 新增 `_validate_required_args()` 预执行参数校验
+- 在工具调用前检查 args_schema 中 required 字段，缺失时跳过并返回错误信息
+
+#### 4. Windows 兼容性修复
+
+- graph.py: `graph.compile()` 期间临时重定向 stderr，避免 Windows uvicorn 子进程 OSError
+- orchestrator.py: `build_planner_graph()` 失败时自动重试（带 stderr 补丁）
+
+#### 5. RAG Engine 改进
+
+- 新增 `chroma_client` 属性暴露底层 ChromaDB PersistentClient
+- 新增 `get_chroma_client()` 便捷访问函数（供 MemoryJanitor、CaseMemory 等模块使用）
+
+#### 6. Auto-Learning 离线加载优化
+
+- 优先从本地缓存路径加载 SentenceTransformer，避免触发 HuggingFace 网络请求
+- 降级策略: 本地快照 → 离线模式加载 → 报错
+
+#### 7. ToT PromptComposer 优化
+
+- 技能优先规则简化为英文版本，减少 prompt token 消耗
+- 技能调用说明更新为 "通过 SkillPolicy 门控执行"
+
+#### 8. 清理
+
+- 删除废弃技能: `find_skill`, `get_weather`
+- 删除 `knowledge_base/.gitkeep`
+
+### 修改的文件
+
+**核心源码 (必须追踪):**
+- `backend/app/config.py` — 新增 `perv_enable_skill_policy` 配置
+- `backend/app/core/perv/__init__.py` — 导出 skill_policy_node
+- `backend/app/core/perv/graph.py` — 图拓扑更新 + Windows 兼容
+- `backend/app/core/perv/nodes/__init__.py` — 导出 skill_policy_node
+- `backend/app/core/perv/nodes/executor.py` — 参数校验
+- `backend/app/core/perv/nodes/planner.py` — 工具/参数验证
+- `backend/app/core/perv/nodes/replanner.py` — 适配新拓扑
+- `backend/app/core/perv/nodes/summarizer.py` — 小幅调整
+- `backend/app/core/perv/nodes/verifier.py` — 增强
+- `backend/app/core/perv/orchestrator.py` — SSE 事件 + Windows 兼容
+- `backend/app/core/perv/pevr_logger.py` — SkillPolicyRecord
+- `backend/app/core/perv/prompts.py` — 微调
+- `backend/app/core/perv/state.py` — skill_policy_report 字段
+- `backend/app/core/rag_engine.py` — chroma_client 暴露
+- `backend/app/core/tot/nodes/synthesis_node.py` — 清理
+- `backend/app/core/tot/nodes/termination_checker.py` — 调整
+- `backend/app/core/tot/nodes/thought_executor.py` — SkillPolicy 门控
+- `backend/app/core/tot/nodes/thought_generator.py` — 移除硬编码补丁
+- `backend/app/core/tot/prompt_composer.py` — 技能规则简化
+- `backend/app/core/tot/router.py` — 微调
+- `backend/app/core/tot/state.py` — 新增字段
+- `backend/app/memory/auto_learning/utils.py` — 离线加载优化
+- `backend/workspace/USER.md` — 用户画像更新
+- `.gitignore` — 新增过滤规则
+
+**新增模块:**
+- `backend/app/core/skill_policy/__init__.py`
+- `backend/app/core/skill_policy/types.py`
+- `backend/app/core/skill_policy/engine.py`
+- `backend/app/core/perv/nodes/skill_policy.py`
+- `backend/app/core/tot/nodes/skill_policy.py`
+
+**删除:**
+- `backend/app/data/knowledge_base/.gitkeep`
+- `backend/app/data/skills/find_skill/SKILL.md`
+- `backend/app/data/skills/get_weather/SKILL.md`
+
+---
+
 ## 2025-03-07 - 新增：完整的 E2E 测试框架
 
 ### 问题描述
