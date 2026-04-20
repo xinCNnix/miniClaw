@@ -305,8 +305,11 @@ test-upload.txt
 COMMIT_MESSAGE.txt
 TOT_TEST_PLAN.md
 
-# Skills directory (user-specific, not tracked in git)
-backend/data/skills/
+# Skills temporary / backup files
+backend/data/skills/*/*.bak
+backend/data/skills/*/*.tmp
+# Skills large data files (user-generated, not tracked)
+backend/data/skills/*/data/
 
 # Encrypted credentials (contains API keys)
 backend/data/credentials.encrypted

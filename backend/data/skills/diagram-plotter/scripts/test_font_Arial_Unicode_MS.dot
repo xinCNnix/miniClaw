@@ -1,0 +1,11 @@
+digraph {
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor=lightblue, fontname="Arial Unicode MS"];
+    edge [fontname="Arial Unicode MS"];
+    label="TestChinese";
+    fontsize=20;
+    fontname="Arial Unicode MS"
+    labelloc=top;
+    "User" -> "Auth";
+    "Auth" -> "DB";
+}

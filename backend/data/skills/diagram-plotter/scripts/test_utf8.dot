@@ -1,0 +1,8 @@
+digraph {
+    rankdir=TB;
+    node [fillcolor=lightblue fontname=SimHei shape=box style=filled];
+    edge [fontname=SimHei];
+    fontname=SimHei fontsize=20 label="系统架构图" labelloc=top;
+    "用户" -> "认证服务";
+    "认证服务" -> "数据库";
+}

@@ -1,0 +1,10 @@
+digraph G {
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor=lightblue, fontname="Microsoft YaHei"];
+    edge [fontname="Microsoft YaHei"];
+    label="系统架构图";
+    fontsize=20;
+    labelloc=top;
+    "用户" -> "认证服务";
+    "认证服务" -> "数据库";
+}
