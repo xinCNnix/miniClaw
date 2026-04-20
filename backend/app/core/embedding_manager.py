@@ -153,11 +153,47 @@ class EmbeddingModelManager:
                     f"Please download the model first."
                 )
 
-        # Load model from local path
+        # Load model from local path (strict offline, no network access)
+        #
+        # Why not use HuggingFaceEmbedding directly?
+        # HuggingFaceEmbedding.__init__ internally calls SentenceTransformer,
+        # which triggers huggingface_hub HEAD requests even with a local path.
+        # This causes 60s timeout on each startup when network is unavailable.
+        #
+        # Solution: Load SentenceTransformer ourselves (pure local, no network),
+        # then monkey-patch the result into a HuggingFaceEmbedding instance.
         try:
             logger.info(f"Loading embedding model from local path: {actual_model_path}")
+
             def load_model():
-                return HuggingFaceEmbedding(model_name=str(actual_model_path))
+                from sentence_transformers import SentenceTransformer
+                st_model = SentenceTransformer(str(actual_model_path))
+
+                # Register 'text' prompt alias that HuggingFaceEmbedding expects
+                # SentenceTransformer uses 'document' but llama_index uses 'text'
+                if hasattr(st_model, 'prompts') and st_model.prompts is not None:
+                    if 'document' in st_model.prompts and 'text' not in st_model.prompts:
+                        st_model.prompts['text'] = st_model.prompts['document']
+
+                # Construct HuggingFaceEmbedding without triggering its __init__
+                # network requests by pre-loading SentenceTransformer ourselves
+                embed_model = HuggingFaceEmbedding.__new__(HuggingFaceEmbedding)
+
+                from llama_index.core.embeddings import BaseEmbedding
+                BaseEmbedding.__init__(
+                    embed_model,
+                    embed_batch_size=10,
+                    model_name=str(actual_model_path),
+                )
+                embed_model._device = st_model.device
+                embed_model._model = st_model
+                embed_model._parallel_process = False
+                embed_model._target_devices = None
+                embed_model.show_progress_bar = False
+                embed_model.query_instruction = ""
+                embed_model.text_instruction = ""
+
+                return embed_model
 
             loop = asyncio.get_event_loop()
             model = await asyncio.wait_for(
@@ -174,50 +210,6 @@ class EmbeddingModelManager:
             error_msg = f"Failed to load embedding model from local path: {e}"
             logger.error(f"✗ {error_msg}")
             raise RuntimeError(error_msg) from e
-
-        # Try each endpoint with timeout
-        last_error = None
-        loop = asyncio.get_event_loop()
-
-        for endpoint, endpoint_name in endpoints:
-            try:
-                if endpoint:
-                    os.environ['HF_ENDPOINT'] = endpoint
-                    logger.info(f"Trying {endpoint_name}...")
-                else:
-                    # Remove HF_ENDPOINT to use official HuggingFace
-                    if 'HF_ENDPOINT' in os.environ:
-                        del os.environ['HF_ENDPOINT']
-                    logger.info(f"Trying {endpoint_name}...")
-
-                def load_model():
-                    return HuggingFaceEmbedding(model_name=model_name)
-
-                model = await asyncio.wait_for(
-                    loop.run_in_executor(None, load_model),
-                    timeout=timeout
-                )
-
-                logger.info(f"[OK] Successfully loaded model from {endpoint_name}")
-                return model
-
-            except (asyncio.TimeoutError, Exception) as e:
-                last_error = e
-                endpoint_url = endpoint if endpoint else "official HuggingFace"
-                logger.warning(f"✗ Failed to load from {endpoint_name}: {e}")
-                # Clear offline mode if set (might be interfering)
-                if 'HF_HUB_OFFLINE' in os.environ:
-                    del os.environ['HF_HUB_OFFLINE']
-                if 'TRANSFORMERS_OFFLINE' in os.environ:
-                    del os.environ['TRANSFORMERS_OFFLINE']
-                continue
-
-        # All endpoints failed
-        error_msg = f"Failed to load embedding model from all endpoints"
-        if last_error:
-            error_msg += f". Last error: {last_error}"
-        logger.error(f"✗ {error_msg}")
-        raise RuntimeError(error_msg) from last_error
 
     def get_model(self):
         """

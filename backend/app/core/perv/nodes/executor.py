@@ -10,7 +10,7 @@ run in parallel via asyncio.gather(); unsafe tools run serially.
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.messages import HumanMessage
 
@@ -26,6 +26,7 @@ from app.core.perv.scheduler import (
     adjust_parallelism,
     ExecutionLayer,
 )
+from langchain_core.tools import BaseTool
 from app.tools import CORE_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -902,12 +903,48 @@ async def _execute_step_by_step(
 # ---------------------------------------------------------------------------
 
 
+def _validate_required_args(tool: BaseTool, tool_inputs: Dict[str, Any]) -> Optional[str]:
+    """Check whether tool_inputs satisfies all required fields in args_schema.
+
+    Returns an error message string if validation fails, or None if OK.
+    """
+    args_schema = getattr(tool, "args_schema", None)
+    if args_schema is None:
+        return None
+
+    try:
+        schema = args_schema.schema()
+        required: list[str] = schema.get("required", [])
+        if not required:
+            return None
+
+        missing = [f for f in required if f not in tool_inputs or tool_inputs[f] in (None, "")]
+        if missing:
+            return (
+                f"Missing required arguments for '{tool.name}': {missing}. "
+                f"Required fields: {required}"
+            )
+    except Exception:
+        pass  # Best-effort validation
+
+    return None
+
+
 async def _invoke_tool(
     tool_name: str, tool_inputs: Dict[str, Any]
 ) -> Any:
     """Find and invoke a core tool by name, with ExecutionCache deduplication."""
     for tool in CORE_TOOLS:
         if tool.name == tool_name:
+            # Pre-execution argument validation
+            arg_error = _validate_required_args(tool, tool_inputs)
+            if arg_error:
+                logger.warning(
+                    "[PEVR Executor] Pre-validation failed for %s: %s",
+                    tool_name, arg_error,
+                )
+                return arg_error
+
             try:
                 from app.core.execution_cache import get_global_execution_cache, NON_CACHEABLE_TOOLS
 

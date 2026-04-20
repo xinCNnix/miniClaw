@@ -274,7 +274,7 @@ npm run dev
 
 ## 📚 Core Features Preview
 
-### 5 Core Tools
+### 6 Core Tools
 
 | Tool | Function | Example |
 |------|----------|---------|
@@ -282,14 +282,13 @@ npm run dev
 | **python_repl** | Run Python code | "Calculate Fibonacci sequence" |
 | **fetch_url** | Fetch web content | "Get GitHub trending page" |
 | **read_file** | Read local files | "Read README.md" |
+| **write_file** | Write files | "Create a new file" |
 | **search_kb** | Knowledge base search | "Search for relevant info" |
 
 ### Built-in Skills
 
-- **get_weather** - Weather query
 - **arxiv-search** - Academic paper search
 - **github** - GitHub operations
-- **find-skill** - Find and install skills
 - **skill-creator** - Create custom skills
 - **skill_validator** - Validate skills
 

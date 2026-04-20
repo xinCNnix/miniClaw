@@ -27,6 +27,8 @@ is handled through the ``reasoning_trace`` field in PlannerState.
 """
 
 import logging
+import sys
+import io
 
 from langgraph.graph import StateGraph, END
 
@@ -38,6 +40,7 @@ from app.core.perv.nodes import (
     replanner_node,
     finalizer_node,
     summarizer_node,
+    skill_policy_node,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,6 +126,7 @@ def build_planner_graph():
 
     # --- Nodes ---
     graph.add_node("planner", planner_node)
+    graph.add_node("skill_policy", skill_policy_node)
     graph.add_node("executor", executor_node)
     graph.add_node("summarizer", summarizer_node)
     graph.add_node("verifier", verifier_node)
@@ -133,7 +137,9 @@ def build_planner_graph():
     graph.set_entry_point("planner")
 
     # --- Linear edges ---
-    graph.add_edge("planner", "executor")
+    # planner → skill_policy → executor (skill references are compiled)
+    graph.add_edge("planner", "skill_policy")
+    graph.add_edge("skill_policy", "executor")
 
     # --- Executor 后根据风险等级分流 ---
     graph.add_conditional_edges(
@@ -159,12 +165,20 @@ def build_planner_graph():
         },
     )
 
-    # --- Loop-back edge ---
-    graph.add_edge("replanner", "executor")
+    # --- Loop-back edge (replanner → skill_policy, so new plans are also compiled) ---
+    graph.add_edge("replanner", "skill_policy")
 
     # --- Terminal edge ---
     graph.add_edge("finalize", END)
 
-    compiled = graph.compile()
-    logger.info("PEVR graph compiled successfully (6 nodes, risk-based routing)")
+    # langgraph graph.compile() may internally write to stderr (e.g. mermaid
+    # visualization), which fails with OSError on Windows uvicorn subprocess.
+    # Temporarily redirect stderr to avoid the crash.
+    _prev_stderr = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        compiled = graph.compile()
+    finally:
+        sys.stderr = _prev_stderr
+    logger.info("PEVR graph compiled successfully (7 nodes, risk-based routing, skill_policy)")
     return compiled

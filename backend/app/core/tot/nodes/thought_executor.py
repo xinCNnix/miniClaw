@@ -23,6 +23,13 @@ try:
 except ImportError:
     _SKILL_ORCHESTRATOR_AVAILABLE = False
 
+# SkillPolicy gate (optional — graceful fallback)
+try:
+    from app.core.tot.nodes.skill_policy import check_skill_policy_gate
+    _SKILL_POLICY_AVAILABLE = True
+except ImportError:
+    _SKILL_POLICY_AVAILABLE = False
+
 # Image embedding for tool output (graceful fallback)
 try:
     from app.core.streaming.image_embedder import embed_output_images_v2
@@ -397,13 +404,54 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
     except Exception:
         pass
 
-    # Skill auto-detection
+    # === SkillPolicy gate (pre-gate before legacy skill_orchestrator) ===
+    if _SKILL_POLICY_AVAILABLE and tool.name == "read_file":
+        path = args.get("path", "")
+        if is_skill_file(path):
+            skill_name = extract_skill_name(path)
+            if skill_name:
+                logger.info(
+                    "[ThoughtExecutor] SkillPolicy gate: read_file(SKILL.md) detected for '%s', "
+                    "query=%s", skill_name, user_query[:80],
+                )
+                try:
+                    from app.api.chat import get_agent_manager
+                    am = get_agent_manager()
+                    compiled = check_skill_policy_gate(
+                        skill_name, user_query, am.tools, {},
+                    )
+                    if compiled:
+                        # Execute compiled tool call instead of raw read_file
+                        logger.info(
+                            "[ThoughtExecutor] SkillPolicy compiled '%s' → executing via %s",
+                            skill_name, compiled.get("tool"),
+                        )
+                        result, images = await _execute_compiled_skill(compiled, am.tools, user_query)
+                        _cache_tool_result(tool.name, args, result, images)
+                        return result, images
+                    else:
+                        logger.info(
+                            "[ThoughtExecutor] SkillPolicy gate not passed for '%s', "
+                            "falling through to legacy path",
+                            skill_name,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "[ThoughtExecutor] SkillPolicy gate failed for '%s': %s, "
+                        "falling back to legacy", skill_name, e,
+                    )
+                # GATE not passed or error → fall through to legacy skill_orchestrator
+
+    # Skill auto-detection (legacy fallback)
     if _SKILL_ORCHESTRATOR_AVAILABLE and tool.name == "read_file":
         path = args.get("path", "")
         if is_skill_file(path):
             skill_name = extract_skill_name(path)
             if skill_name:
-                logger.info("[ThoughtExecutor] Detected SKILL.md read for '%s', auto-executing skill", skill_name)
+                logger.info(
+                    "[ThoughtExecutor] Legacy path: SKILL.md read for '%s', "
+                    "auto-executing via skill_orchestrator", skill_name,
+                )
                 try:
                     skill_content_result = await tool.ainvoke(args)
                 except AttributeError:
@@ -463,6 +511,40 @@ def _cache_tool_result(tool_name: str, args: Dict[str, Any], result: Any, gen_im
         })
     except Exception:
         pass
+
+
+async def _execute_compiled_skill(
+    compiled: Dict[str, Any],
+    tools: List[BaseTool],
+    user_query: str,
+) -> tuple[Any, list[dict]]:
+    """Execute a compiled skill tool call (output of SkillPolicy COMPILE).
+
+    Args:
+        compiled: {"tool": tool_name, "args": tool_args}
+        tools: Available tools list.
+        user_query: User query string.
+
+    Returns:
+        (result_str, generated_images) tuple.
+    """
+    tool_name = compiled["tool"]
+    tool_args = compiled["args"]
+
+    tool_map = {t.name: t for t in tools}
+    target_tool = tool_map.get(tool_name)
+    if not target_tool:
+        raise RuntimeError(f"Compiled tool '{tool_name}' not found in available tools")
+
+    try:
+        result = await target_tool.ainvoke(tool_args)
+    except AttributeError:
+        result = target_tool.invoke(tool_args)
+
+    result_str, gen_images = embed_output_images_v2(str(result))
+    if gen_images:
+        logger.info("[ThoughtExecutor] Compiled skill via %s generated %d image(s)", tool_name, len(gen_images))
+    return result_str, gen_images
 
 
 # OLD: 同步执行 fallback（保留）

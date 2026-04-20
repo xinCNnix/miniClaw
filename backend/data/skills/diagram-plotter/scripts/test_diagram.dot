@@ -1,0 +1,10 @@
+digraph G {
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor=lightblue, fontname="Microsoft YaHei"];
+    edge [fontname="Microsoft YaHei"];
+    label="三层架构";
+    fontsize=20;
+    labelloc=top;
+    "前端" -> "后端";
+    "后端" -> "数据库";
+}

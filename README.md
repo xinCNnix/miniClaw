@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Latest-green.svg)](https://fastapi.tiangolo.com/)
-[![Next.js](https://img.shields.io/badge/Next.js-14+-black.svg)](https://nextjs.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-16+-black.svg)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -54,6 +54,17 @@ miniClaw is a lightweight, highly transparent AI Agent system that combines data
   - Automatic complexity detection and mode switching
   - Real-time reasoning visualization
   - Smart stopping to balance quality and speed
+
+- **PEVR Framework (Plan-Execute-Verify-Reflect)**
+  - Structured multi-step task execution with verification loops
+  - Risk-based routing: safe tasks run in parallel, risky tasks serialized
+  - Built-in verifier and re-planner for error recovery
+  - SkillPolicy: unified skill compilation pipeline (Match → Gate → Compile → Guard)
+
+- **Auto-Learning System**
+  - LLM-powered memory extraction with confidence scoring
+  - Pattern recognition and behavioral learning
+  - Offline embedding model support for air-gapped environments
 
 - **Research Mode**
   - Deep research capabilities with structured multi-stage investigation
@@ -181,9 +192,9 @@ Access:
 
 ## Core Features
 
-### 5 Core Tools
+### 6 Core Tools
 
-miniClaw includes 5 carefully designed core tools covering the most common AI Agent scenarios:
+miniClaw includes 6 carefully designed core tools covering the most common AI Agent scenarios:
 
 | Tool | Function | Security Features | Example |
 |------|----------|-------------------|---------|
@@ -191,6 +202,7 @@ miniClaw includes 5 carefully designed core tools covering the most common AI Ag
 | **python_repl** | Python code interpreter | Timeout control + exception handling | Data analysis, computation |
 | **fetch_url** | Web scraping | HTML auto-cleaning | News fetching, API calls |
 | **read_file** | File reading | Restricted to project directory | Reading code, documentation |
+| **write_file** | File writing | Path restriction + sensitive file protection | Creating, editing files |
 | **search_kb** | RAG knowledge base retrieval | Hybrid search (semantic + keyword) | Document queries, knowledge Q&A |
 
 > 💡 All tools can be automatically invoked by Agent through instructions in System Prompt.
@@ -210,10 +222,8 @@ skill-name/
 
 **Built-in Skills:**
 
-- **get_weather** - Weather query (using wttr.in)
 - **arxiv-search** - Academic paper search (arXiv API)
 - **github** - GitHub operations (gh CLI)
-- **find-skill** - Find and install new Skills
 - **skill-creator** - Create custom Skills
 - **skill_validator** - Validate Skills integrity
 
@@ -277,9 +287,14 @@ miniclaw/
 │   │   │   ├── agent.py         # LangChain Agent wrapper
 │   │   │   ├── llm.py           # LLM model initialization
 │   │   │   ├── rag_engine.py    # RAG retrieval engine
-│   │   │   └── obfuscation.py   # API key obfuscation
+│   │   │   ├── obfuscation.py   # API key obfuscation
+│   │   │   ├── perv/            # PEVR framework (Plan-Execute-Verify-Reflect)
+│   │   │   ├── tot/             # Tree of Thoughts reasoning framework
+│   │   │   ├── skill_policy/    # Unified skill compilation pipeline
+│   │   │   ├── reflection/      # Agent reflection system
+│   │   │   └── streaming/       # Streaming response coordination
 │   │   │
-│   │   ├── tools/               # 5 core tools
+│   │   ├── tools/               # 6 core tools
 │   │   │   ├── terminal.py      # Shell command execution
 │   │   │   ├── python_repl.py   # Python code interpreter
 │   │   │   ├── fetch_url.py     # Web scraping
@@ -652,18 +667,26 @@ Contributions are welcome! Please follow this process:
 
 ## Roadmap
 
-### v0.2 (Planned)
+### v0.3 (Current)
+
+- [x] PEVR framework (Plan-Execute-Verify-Reflect)
+- [x] Tree of Thoughts (ToT) reasoning system
+- [x] SkillPolicy unified skill compilation
+- [x] Auto-learning system with pattern recognition
+- [x] Multi-LLM provider support
+- [x] 6 core tools (terminal, python_repl, fetch_url, read_file, write_file, search_kb)
+- [x] Research mode with visualization
+
+### v0.4 (Planned)
 
 - [ ] Multi-session management
 - [ ] Skill marketplace integration
-- [ ] WebRTC voice chat
 - [ ] Multimodal support (images, files)
 
-### v0.3 (Future)
+### v0.5 (Future)
 
 - [ ] Multi-Agent collaboration
 - [ ] Knowledge graph memory
-- [ ] Plugin system
 - [ ] Mobile support
 
 ---

@@ -425,6 +425,9 @@ class Settings(BaseSettings):
     perv_enable_strategy_injection: bool = True
     perv_enable_semantic_history: bool = True
 
+    # === Skill Policy (unified skill compilation for PERV & ToT) ===
+    perv_enable_skill_policy: bool = True
+
     # === Meta Policy & TCA ===
     enable_meta_policy: bool = True
     enable_tca: bool = True

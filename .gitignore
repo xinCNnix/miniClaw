@@ -200,7 +200,6 @@ backend/data/knowledge_base/*.pdf
 启动.bat
 启动-智能版.bat
 stop.bat
-start.ps1
 start-clean.bat
 
 # Backup directories
@@ -266,13 +265,50 @@ test_results.txt
 # Backup files
 *.backup
 *_backup.*
+*.backup_*
+*.before_*
+
+# Claude Code worktrees
+.claude/worktrees/
+.claude/settings.local.json
+
+# Playwright MCP
+.playwright-mcp/
+
+# Runtime / generated data
+backend/data/*.csv
+backend/data/*.svg
+backend/data/models/
+backend/data/outputs/
+backend/data/complexity_training/
+backend/data/knowledge_base/*.txt
+backend/data/knowledge_base/*.md
+backend/backend/
+backend/logs/
+backend/outputs/
+backend/frontend.pid
+backend/user_memory.json
+backend/seven_bridges.svg
+backend/plot_relu.py
+outputs/
+
+# Utility scripts (not part of the application)
+batch_translate_comments.py
+convert_comments_to_chinese.py
+find_english_comments.py
+sync_to_git.sh
+network_requests.txt
+test-upload.txt
 
 # Temporary documentation
 COMMIT_MESSAGE.txt
 TOT_TEST_PLAN.md
 
-# Skills directory (user-specific, not tracked in git)
-backend/data/skills/
+# Skills temporary / backup files
+backend/data/skills/*/*.bak
+backend/data/skills/*/*.tmp
+# Skills large data files (user-generated, not tracked)
+backend/data/skills/*/data/
 
 # Encrypted credentials (contains API keys)
 backend/data/credentials.encrypted

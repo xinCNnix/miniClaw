@@ -97,6 +97,11 @@ class RAGEngine:
 
         logger.info("RAG Engine initialized successfully (embedding model will be loaded on first use)")
 
+    @property
+    def chroma_client(self):
+        """Return the underlying ChromaDB PersistentClient."""
+        return getattr(self, "_chroma_client", None)
+
     def _get_embedding_model(self):
         """
         Get embedding model from manager.
@@ -285,10 +290,10 @@ class RAGEngine:
         logger.info(f"Initializing Chroma vector store at: {self.vector_store_dir}")
 
         # Create Chroma client
-        chroma_client = chromadb.PersistentClient(path=str(self.vector_store_dir))
+        self._chroma_client = chromadb.PersistentClient(path=str(self.vector_store_dir))
 
         # Get or create collection
-        collection = chroma_client.get_or_create_collection("knowledge_base")
+        collection = self._chroma_client.get_or_create_collection("knowledge_base")
 
         # Create vector store
         self._vector_store = ChromaVectorStore(chroma_collection=collection)
@@ -793,3 +798,16 @@ def get_rag_engine() -> RAGEngine:
                 raise RuntimeError(f"Failed to initialize RAG Engine: {e}")
 
     return _rag_engine_instance
+
+
+def get_chroma_client():
+    """Return the ChromaDB PersistentClient from the RAG engine singleton.
+
+    Convenience accessor for modules that need direct Chroma access
+    (e.g. MemoryJanitor, CaseMemory, ingest nodes).
+    """
+    engine = get_rag_engine()
+    client = engine.chroma_client
+    if client is None:
+        raise RuntimeError("Chroma client not initialized")
+    return client

@@ -38,11 +38,11 @@ def get_embedder(
     global _embedder
 
     if _embedder is None:
-        # 复用项目 embedding_manager 的本地缓存路径和离线模式
-        from pathlib import Path
         import os
         project_root = Path(__file__).parent.parent.parent.parent
         hf_cache_dir = project_root / "data" / "models" / "embedding"
+
+        # 强制离线，防止 SentenceTransformer 联网检查
         os.environ['HF_HOME'] = str(hf_cache_dir)
         os.environ['HUGGINGFACE_HUB_CACHE'] = str(hf_cache_dir / "hub")
         os.environ['HF_HUB_OFFLINE'] = '1'
@@ -51,9 +51,23 @@ def get_embedder(
         settings = get_settings()
         model_name = model_name or settings.pattern_embedder_model_name
 
-        logger.info(f"Loading sentence transformer (offline): {model_name}")
-        _embedder = SentenceTransformer(model_name)
-        logger.info("Sentence transformer loaded successfully from local cache")
+        # 优先使用本地路径加载，避免触发 HuggingFace 网络请求
+        model_cache_dir = hf_cache_dir / "hub" / f"models--sentence-transformers--{model_name}"
+        local_path = None
+        if (model_cache_dir / "snapshots" / "main").exists():
+            local_path = model_cache_dir / "snapshots" / "main"
+        elif (model_cache_dir / "snapshots").exists():
+            snapshots = list((model_cache_dir / "snapshots").glob("*"))
+            if snapshots:
+                local_path = snapshots[0]
+
+        if local_path:
+            logger.info(f"Loading sentence transformer from local: {local_path}")
+            _embedder = SentenceTransformer(str(local_path))
+        else:
+            logger.info(f"Loading sentence transformer (offline): {model_name}")
+            _embedder = SentenceTransformer(model_name)
+        logger.info("Sentence transformer loaded successfully")
 
     return _embedder
 

@@ -55,6 +55,13 @@ async def replanner_node(state: dict) -> dict:
 
     start = time.time()
 
+    # Initialize all branch variables so they are always defined
+    action = "error"
+    target_step = None
+    new_steps: List[dict] = []
+    updated_plan = copy.deepcopy(plan)
+    token_usage: Dict[str, int] = {}
+
     try:
         # --- Build replanner prompt ---
         tools_text = build_tool_list_text(CORE_TOOLS)
@@ -249,8 +256,8 @@ async def replanner_node(state: dict) -> dict:
             "[PEVR Replanner] action=%s target=%s new_steps=%d total=%d "
             "retry=%d/%d consecutive_failures=%d (%.1fms)",
             action,
-            target_step if 'target_step' in dir() else None,
-            len(new_steps) if 'new_steps' in dir() else 0,
+            target_step,
+            len(new_steps),
             len(updated_plan),
             retry_count + 1,
             state.get("max_retries", "?"),
@@ -303,13 +310,13 @@ async def replanner_node(state: dict) -> dict:
     return {
         "plan": updated_plan,
         "retry_count": retry_count + 1,
-        "consecutive_failures": consecutive_failures + (1 if (action != "repair_patch" if 'action' in dir() else True) else 0),
+        "consecutive_failures": consecutive_failures + (1 if action != "repair_patch" else 0),
         "reasoning_trace": [
             {
                 "phase": "replanning",
-                "action": action if 'action' in dir() else "error",
-                "target_step": target_step if 'target_step' in dir() else None,
-                "new_steps": new_steps if 'new_steps' in dir() else [],
+                "action": action,
+                "target_step": target_step,
+                "new_steps": new_steps,
             }
         ],
     }

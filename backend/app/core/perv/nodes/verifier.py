@@ -6,8 +6,10 @@ task.  Applies a configurable strictness level to the pass/fail decision.
 """
 
 import logging
+import os
+import re
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage
 
@@ -120,6 +122,50 @@ async def verifier_node(state: dict) -> dict:
             if isinstance(scores, dict) and scores:
                 confidence = sum(scores.values()) / (len(scores) * 10.0)
                 report["confidence"] = confidence
+
+        # --- File-existence sanity check ---
+        # When the task implies file generation (images, charts, documents),
+        # verify that output files referenced in observations actually exist.
+        # This catches cases where the LLM claims success but the file was
+        # written to a non-existent or wrong path.
+        _file_gen_keywords = [
+            "图", "chart", "plot", "image", "graph", "diagram", "png", "svg",
+            "pdf", "draw", "画", "generate", "save", "export",
+        ]
+        task_lower = task.lower()
+        needs_file_output = any(kw in task_lower for kw in _file_gen_keywords)
+
+        if needs_file_output and report.get("passed"):
+            output_paths: List[str] = []
+            _file_ext_pattern = re.compile(r'[\'""]?([\w/\\:.]+\.(?:png|svg|jpg|jpeg|pdf|dot|csv|html|txt))[\'""]?', re.IGNORECASE)
+            for obs in observations:
+                output = str(obs.get("output", ""))
+                for m in _file_ext_pattern.finditer(output):
+                    p = m.group(1).replace("\\", "/")
+                    # Filter out source/data paths; only keep output-like paths
+                    if "/data/skills/" not in p and "/knowledge_base/" not in p:
+                        output_paths.append(p)
+
+            missing_files = []
+            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            for p in output_paths:
+                # Try absolute path first, then relative to backend dir
+                candidates = [p, os.path.join(backend_dir, p)]
+                if not any(os.path.exists(c) for c in candidates):
+                    missing_files.append(p)
+
+            if missing_files and output_paths:
+                logger.warning(
+                    "[PEVR Verifier] File-existence check FAILED: %d/%d output "
+                    "files missing: %s — overriding passed=True to False",
+                    len(missing_files), len(output_paths),
+                    missing_files[:5],
+                )
+                report["passed"] = False
+                report["verdict"] = "fail"
+                report.setdefault("missing", [])
+                report["missing"].extend(f"Output file not found: {f}" for f in missing_files)
+                report["confidence"] = min(float(report.get("confidence", 0.5)), 0.3)
 
         # --- Apply strictness adjustments ---
         confidence = float(report.get("confidence", 0.0))
