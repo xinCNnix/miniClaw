@@ -114,7 +114,7 @@ echo ""
 echo "Waiting for backend to be ready..."
 
 count=0
-max_attempts=30
+max_attempts=90
 
 while [ $count -lt $max_attempts ]; do
     count=$((count + 1))
@@ -126,7 +126,7 @@ while [ $count -lt $max_attempts ]; do
 
     if [ $count -eq $max_attempts ]; then
         echo ""
-        echo "[ERROR] Backend failed to start within 60 seconds."
+        echo "[ERROR] Backend failed to start within 3 minutes."
         echo "Please check the backend output for errors."
         echo "Common issues:"
         echo "  - Missing deps: cd backend && pip install -r requirements.txt"
@@ -161,7 +161,7 @@ echo ""
 echo "Waiting for frontend to be ready..."
 
 count=0
-max_attempts=30
+max_attempts=90
 FE_PORT=""
 
 while [ $count -lt $max_attempts ]; do
@@ -176,7 +176,7 @@ while [ $count -lt $max_attempts ]; do
 
     if [ $count -eq $max_attempts ]; then
         echo ""
-        echo "[WARNING] Frontend did not respond within 60 seconds."
+        echo "[WARNING] Frontend did not respond within 3 minutes."
         echo "It may still be starting. Check the frontend output."
         FE_PORT="3000"
         break

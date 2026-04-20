@@ -113,7 +113,7 @@ echo.
 echo Waiting for backend to be ready...
 
 set "BACKEND_ATTEMPTS=0"
-set "BACKEND_MAX=30"
+set "BACKEND_MAX=90"
 
 :wait_for_backend
 set /a "BACKEND_ATTEMPTS+=1"
@@ -135,7 +135,7 @@ if !errorlevel! equ 0 (
 
 if !BACKEND_ATTEMPTS! geq !BACKEND_MAX! (
     echo.
-    echo [ERROR] Backend failed to start within 60 seconds.
+    echo [ERROR] Backend failed to start within 3 minutes.
     echo Please check the backend window for errors.
     echo Common issues:
     echo   - Missing dependencies: cd backend ^&^& pip install -r requirements.txt
@@ -167,7 +167,7 @@ echo.
 echo Waiting for frontend to be ready...
 
 set "FE_ATTEMPTS=0"
-set "FE_MAX=30"
+set "FE_MAX=90"
 set "FE_PORT="
 
 :wait_for_frontend
@@ -192,7 +192,7 @@ for %%p in (3000 3001 3002) do (
 
 if !FE_ATTEMPTS! geq !FE_MAX! (
     echo.
-    echo [WARNING] Frontend did not respond within 60 seconds.
+    echo [WARNING] Frontend did not respond within 3 minutes.
     echo It may still be starting. Check the frontend window.
     echo.
     set "FE_PORT=3000"

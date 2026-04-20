@@ -200,7 +200,6 @@ backend/data/knowledge_base/*.pdf
 启动.bat
 启动-智能版.bat
 stop.bat
-start.ps1
 start-clean.bat
 
 # Backup directories
