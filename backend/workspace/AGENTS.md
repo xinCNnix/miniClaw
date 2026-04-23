@@ -1,6 +1,13 @@
 # 核心行为准则
 
-## 何时使用工具（CRITICAL - 优先级最高）
+## 任务执行优先级（最高优先级）
+
+SKILLS_SNAPSHOT 中有匹配的 skill 时，必须先 `read_file(SKILL.md)` 按 skill 执行。无匹配 skill 时再用工具。禁止跳过 skill 自己写代码。
+
+**错误**：用户说"画sin(x)图" → 直接 `python_repl` 写 matplotlib 代码
+**正确**：用户说"画sin(x)图" → 匹配 geometry-plotter → `read_file(SKILL.md)` → 按 skill 执行
+
+## 何时使用工具（CRITICAL）
 
 ### ⚠️ 简单对话不需要工具
 
@@ -126,40 +133,14 @@
 
 ## 工具调用协议（CRITICAL）
 
-### 调用格式
-每次调用工具时，**必须**提供所有必需的参数：
+每次调用工具时必须提供所有必需参数：
+- `terminal`: `{"command": "要执行的命令"}`
+- `read_file`: `{"path": "文件路径"}`
+- `write_file`: `{"path": "文件路径", "content": "文件内容"}`
+- `fetch_url`: `{"url": "网页URL"}`
+- `python_repl`: `{"code": "Python代码"}`
 
-```json
-{
-  "name": "terminal",
-  "arguments": {
-    "command": "ls -la"
-  }
-}
-```
-
-### 常用工具参数说明
-
-#### terminal - 执行 Shell 命令
-- **command** (必需): 要执行的 shell 命令字符串
-- 示例: `{"command": "ls -la"}` 或 `{"command": "curl -s 'https://api.example.com'"}`
-
-#### read_file - 读取文件
-- **path** (必需): 文件路径
-- 示例: `{"path": "backend/workspace/AGENTS.md"}`
-
-#### write_file - 写入文件
-- **path** (必需): 文件路径
-- **content** (必需): 文件内容
-- 示例: `{"path": "test.txt", "content": "Hello World"}`
-
-#### fetch_url - 获取网页内容
-- **url** (必需): 网页 URL
-- 示例: `{"url": "https://example.com"}`
-
-### ⚠️ 常见错误
-❌ **错误**: 调用工具时参数为空 `{}` 或缺少必需字段
-✅ **正确**: 提供完整的参数对象
+禁止传空参数或缺少必需字段。
 
 ## 技能使用协议
 
@@ -186,59 +167,13 @@
 ## 工具调用优化策略
 
 ### 核心原则
-- **信息充足即停止**：收集到核心信息后立即生成回复，不要"贪多"
 - **避免重复调用**：检测到重复工具调用时自动停止
 - **智能判断**：每 2 轮评估一次是否已足够回答用户问题
 
-### 信息充足度判断
-1. **调用前评估**：这个工具调用是否必要？
-2. **调用后评估**：当前信息是否足够回答用户问题？
-3. **及时停止**：如果已足够，立即生成回复，不要继续调用工具
-
-### 避免"收集癖"
-- ❌ 不要为了"更全面"而过度调用工具
-- ✅ 收集到核心信息后立即回答
-- ✅ 如果用户需要更多细节，会主动追问
-
-### 示例
-
-#### 示例 1：简单任务（避免过度调用）
-用户："帮我查一下北京天气"
-
-✅ **正确做法**：
-1. terminal("curl -s 'wttr.in/Beijing?format=j1'")
-2. 评估：信息已足够
-3. 生成回复
-
-❌ **错误做法**：
-1. terminal("curl -s 'wttr.in/Beijing?format=j1'")
-2. terminal("curl -s 'wttr.in/Beijing?format=lines'")
-3. read_file("weather_history.txt")
-4. ... 继续调用更多工具
-
-#### 示例 2：Deep Research 任务
-用户："帮我深入研究 GPT-4 的技术架构"
-
-✅ **正确做法**：
-1. read_file("papers/gpt4_1.md")
-2. read_file("papers/gpt4_2.md")
-3. read_file("papers/gpt4_3.md")
-4. 评估：已收集到核心技术信息
-5. 生成回复："基于三篇核心论文的分析..."
-
-❌ **错误做法**：
-1. read_file("papers/gpt4_1.md")
-2. read_file("papers/gpt4_2.md")
-3. ... 读到第 10 篇论文
-4. 达到 50 轮上限被迫停止
-
-#### 示例 3：重复调用检测
-用户："帮我分析这个函数"
-
+### 重复调用检测
 如果连续 3 轮都调用 `read_file` 且文件路径相似：
 - 系统自动检测到冗余
 - 强制生成回复
-- 输出警告："检测到重复的工具调用"
 
 ## 关键原则
 

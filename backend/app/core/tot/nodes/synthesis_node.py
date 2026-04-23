@@ -45,51 +45,41 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _resolve_image_refs(text: str, state: ToTState) -> str:
-    """Post-process final answer: resolve media references via MediaRegistry.
+    """Post-process final answer: replace file paths with API URLs.
 
-    Delegates to ``MediaRegistry.resolve_text`` which handles:
-    - Replacing local file paths with data-URIs or API URLs.
-    - Appending unreferenced session media.
-    Falls back to a minimal passthrough if the media module is unavailable.
+    [IMAGE_UNIFY] Uses MediaRegistry to convert local file paths to
+    ``/api/media/{media_id}`` URLs (NOT base64 data-URIs) so that
+    ReactMarkdown renders inline images via the media API endpoint.
     """
     session_id = state.get("session_id", "")
 
-    # First, harvest base64 images from tool results and save them to disk
-    # so the registry can discover and resolve them.
+    # Only harvest images from winning path thoughts
+    active_beams = state.get("active_beams", [])
+    if active_beams and active_beams[0]:
+        winning_path_ids = set(active_beams[0])
+    else:
+        winning_path_ids = set(state.get("best_path", []))
+
     all_thoughts: List[Thought] = state.get("thoughts", [])
+    thought_map = get_thought_map(all_thoughts)
+    winning_thoughts = [thought_map[tid] for tid in winning_path_ids if tid in thought_map]
+
+    logger.info(
+        "[RESOLVE] Winning path: %s (%d thoughts), deferred_paths=%s",
+        winning_path_ids, len(winning_thoughts),
+        state.get("deferred_image_paths", []),
+    )
+
     output_dir = Path("data/outputs")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for thought in all_thoughts:
+    for thought in winning_thoughts:
         for tr in (thought.tool_results or []):
             raw = ""
             if isinstance(tr, dict):
                 raw = str(tr.get("result", "") or tr.get("output", "") or "")
             elif isinstance(tr, str):
                 raw = tr
-
-            # Extract base64 image data URIs and save to files
-            for m_b64 in re.finditer(
-                r'!\[([^\]]*)\]\(data:image/([^;]+);base64,([A-Za-z0-9+/=]+)\)',
-                raw,
-            ):
-                alt_text = m_b64.group(1)
-                ext = m_b64.group(2)
-                b64_data = m_b64.group(3)
-                if b64_data[:40] in text:
-                    continue
-                try:
-                    clean_ext = ext.split("+")[0]
-                    img_bytes = base64.b64decode(b64_data)
-                    content_hash = hashlib.sha256(b64_data.encode()).hexdigest()[:12]
-                    filename = f"tot_img_{content_hash}.{clean_ext}"
-                    filepath = output_dir / filename
-                    filepath.write_bytes(img_bytes)
-                    file_ref = f"![{alt_text}](data/outputs/{filename})"
-                    text += f"\n\n{file_ref}"
-                    logger.info(f"[RESOLVE] Saved base64 image to {filepath} ({len(img_bytes)} bytes)")
-                except Exception as exc:
-                    logger.warning(f"[RESOLVE] Failed to save base64 image: {exc}")
 
             # Extract image_path from tool results (e.g. geometry-plotter)
             if isinstance(tr, dict):
@@ -103,12 +93,29 @@ def _resolve_image_refs(text: str, state: ToTState) -> str:
                             if file_ref not in text:
                                 text += f"\n\n{file_ref}"
 
-    # Delegate to MediaRegistry for final resolution
-    if resolve_media:
-        try:
-            return resolve_media(text, session_id)
-        except Exception as exc:
-            logger.warning(f"[RESOLVE] MediaRegistry resolve failed, returning as-is: {exc}")
+    # [IMAGE_UNIFY] Replace file paths with /api/media/{media_id} URLs
+    # Do NOT use resolve_media() — it embeds base64 data-URIs for images < 10MB.
+    try:
+        from app.core.media import get_registry
+        from app.core.media.resolver import scan_text_for_paths, file_to_api_url
+        registry = get_registry()
+        paths = scan_text_for_paths(text)
+        for raw_path in paths:
+            entry = registry.lookup_by_path(raw_path)
+            if entry is None:
+                from app.core.media.resolver import find_file_in_roots
+                found = find_file_in_roots(raw_path)
+                if found is not None:
+                    try:
+                        entry = registry.register(found, source="resolve_refs", session_id=session_id or None)
+                    except Exception:
+                        continue
+            if entry is not None:
+                api_url = file_to_api_url(entry.media_id)
+                text = text.replace(raw_path, api_url)
+                logger.info("[RESOLVE] %s → %s", raw_path, api_url)
+    except Exception as exc:
+        logger.warning("[RESOLVE] API URL resolution failed: %s", exc)
 
     return text
 
@@ -495,8 +502,20 @@ async def _generic_synthesis(state: ToTState) -> str:
         )
 
     # ── Build messages ──
+    # Inject chat history context if available
+    chat_history = state.get("messages", [])
+    history_section = ""
+    if chat_history:
+        history_lines = []
+        for msg in chat_history:
+            role = "用户" if msg.type == "human" else "助手"
+            content = msg.content[:200] if msg.content else ""
+            history_lines.append(f"{role}: {content}")
+        history_section = f"**Conversation History:**\n" + "\n".join(history_lines) + "\n\n"
+
     prompt = (
         f"**User Query:** {user_query}\n\n"
+        f"{history_section}"
         f"**Reasoning Process & Tool Results:**\n{reasoning_text}\n\n"
         f"Compose the final answer based on the above."
     )
@@ -599,15 +618,19 @@ def _is_truncated(text: str) -> bool:
 
     Checks for common signals of incomplete LLM output:
     - Unclosed fenced code blocks (odd number of ``` delimiters).
-    - Text ending with a character that is not a typical sentence
-      terminator, newline, or inline code backtick.
+    - Text ending mid-sentence (not a typical terminator or structural char).
     """
     if text.count("```") % 2 != 0:
         return True
     text_stripped = text.rstrip()
-    if text_stripped and text_stripped[-1] not in ".!?。！？\n`)$:：":
-        return True
-    return False
+    if not text_stripped:
+        return False
+    last = text_stripped[-1]
+    # Broad set of valid terminators: punctuation, math symbols, brackets, etc.
+    valid_endings = set(".!?。！？\n`)$:：■□▪▫★☆—–-…>}|]{")
+    if last in valid_endings or last.isdigit():
+        return False
+    return True
 
 
 def _collect_tool_results(state: ToTState) -> List[str]:
@@ -738,7 +761,13 @@ def _embed_deferred_images_for_path(
     """
     deferred_paths = state.get("deferred_image_paths", [])
     if not deferred_paths:
+        logger.info("[Synthesis-Image] No deferred_image_paths in state, skipping")
         return
+
+    logger.info(
+        "[Synthesis-Image] Processing %d deferred paths for %d winning thoughts: %s",
+        len(deferred_paths), len(thoughts), deferred_paths,
+    )
 
     try:
         from app.core.streaming.image_embedder import embed_output_images_v2

@@ -171,55 +171,63 @@ async def planner_node(state: dict) -> dict:
             step.setdefault("skill_group", step.get("skill", None))
 
         # --- Code-level skill expansion guard ---
-        # If the LLM failed to expand skill.* references, auto-expand them
-        # into read_file + signal steps so the executor doesn't hit "Unknown tool".
-        expanded_steps: List[Dict[str, Any]] = []
-        skill_expanded_count = 0
-        for step in plan_steps:
-            tool_name = step.get("tool", "")
-            if tool_name.startswith("skill."):
-                skill_name = tool_name[6:]  # strip "skill." prefix
-                skill_expanded_count += 1
-                step_id = step.get("id", f"s_unk_{skill_expanded_count}")
+        # When SkillPolicy is enabled, skip auto-expansion: preserve raw skill.*
+        # references so SkillPolicy node can compile them. Only expand when
+        # SkillPolicy is disabled (fallback for the old executor path).
+        skill_policy_enabled = True
+        try:
+            skill_policy_enabled = getattr(get_settings(), "perv_enable_skill_policy", True)
+        except Exception:
+            pass
 
+        if not skill_policy_enabled:
+            expanded_steps: List[Dict[str, Any]] = []
+            skill_expanded_count = 0
+            for step in plan_steps:
+                tool_name = step.get("tool", "")
+                if tool_name.startswith("skill."):
+                    skill_name = tool_name[6:]  # strip "skill." prefix
+                    skill_expanded_count += 1
+                    step_id = step.get("id", f"s_unk_{skill_expanded_count}")
+
+                    logger.warning(
+                        "[PEVR Planner] LLM failed to expand skill '%s' in step %s, "
+                        "auto-inserting read_file step for SKILL.md",
+                        skill_name,
+                        step_id,
+                    )
+
+                    # Step 1: read_file to load the SKILL.md
+                    read_step_id = f"{step_id}_skill"
+                    read_step: Dict[str, Any] = {
+                        "id": read_step_id,
+                        "name": f"Read skill: {skill_name}",
+                        "tool": "read_file",
+                        "purpose": f"Load skill definition for '{skill_name}'",
+                        "inputs": {"path": f"data/skills/{skill_name}/SKILL.md"},
+                        "depends_on": list(step.get("depends_on", [])),
+                        "output_key": f"skill_{skill_name}_md",
+                        "on_fail": {"retry": 1, "fallback_tool": None, "fallback_inputs": None},
+                        "description": f"Read SKILL.md for {skill_name}",
+                        "expected": "Skill instructions",
+                        "skill": skill_name,
+                        "input": {"path": f"data/skills/{skill_name}/SKILL.md"},
+                        "skill_group": skill_name,
+                    }
+                    expanded_steps.append(read_step)
+
+                    # Drop the unexpanded skill.* step — it's not executable.
+                    # The executor will read the SKILL.md; the verifier/replanner
+                    # will see incomplete results and create proper execution steps.
+                else:
+                    expanded_steps.append(step)
+
+            if skill_expanded_count > 0:
                 logger.warning(
-                    "[PEVR Planner] LLM failed to expand skill '%s' in step %s, "
-                    "auto-inserting read_file step for SKILL.md",
-                    skill_name,
-                    step_id,
+                    "[PEVR Planner] Auto-expanded %d unexpanded skill reference(s)",
+                    skill_expanded_count,
                 )
-
-                # Step 1: read_file to load the SKILL.md
-                read_step_id = f"{step_id}_skill"
-                read_step: Dict[str, Any] = {
-                    "id": read_step_id,
-                    "name": f"Read skill: {skill_name}",
-                    "tool": "read_file",
-                    "purpose": f"Load skill definition for '{skill_name}'",
-                    "inputs": {"path": f"data/skills/{skill_name}/SKILL.md"},
-                    "depends_on": list(step.get("depends_on", [])),
-                    "output_key": f"skill_{skill_name}_md",
-                    "on_fail": {"retry": 1, "fallback_tool": None, "fallback_inputs": None},
-                    "description": f"Read SKILL.md for {skill_name}",
-                    "expected": "Skill instructions",
-                    "skill": skill_name,
-                    "input": {"path": f"data/skills/{skill_name}/SKILL.md"},
-                    "skill_group": skill_name,
-                }
-                expanded_steps.append(read_step)
-
-                # Drop the unexpanded skill.* step — it's not executable.
-                # The executor will read the SKILL.md; the verifier/replanner
-                # will see incomplete results and create proper execution steps.
-            else:
-                expanded_steps.append(step)
-
-        if skill_expanded_count > 0:
-            logger.warning(
-                "[PEVR Planner] Auto-expanded %d unexpanded skill reference(s)",
-                skill_expanded_count,
-            )
-            plan_steps = expanded_steps
+                plan_steps = expanded_steps
 
         duration = time.time() - start
         logger.info(

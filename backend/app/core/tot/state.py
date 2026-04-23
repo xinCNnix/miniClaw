@@ -69,6 +69,16 @@ class Thought(BaseModel):
         default=0,
         description="局部循环中的错误次数"
     )
+    # --- Post-execution re-evaluation fields ---
+    post_execution_score: Optional[float] = Field(
+        default=None,
+        description="Post-execution quality score based on actual results"
+    )
+    post_execution_criteria: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Post-execution criteria: result_quality, query_satisfaction, output_completeness"
+    )
+
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="扩展元数据（缓存 depth 等，不参与 JSON 序列化）"

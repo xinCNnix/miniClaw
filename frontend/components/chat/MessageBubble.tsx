@@ -160,7 +160,10 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
           </div>
         )}
 
-        {/* Generated images — native <img>, bypasses ReactMarkdown */}
+        {/* [IMAGE_UNIFY] Commented out: images now render inline via ReactMarkdown
+            using API URL markdown refs (![name](/api/media/media_id)).
+            generated_images data structure preserved in useChat.ts for debug/session.
+            To restore, uncomment this block:
         {!isUser && message.generated_images && message.generated_images.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-2">
             {message.generated_images.map((img: GeneratedImage, idx: number) => (
@@ -175,6 +178,7 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
             ))}
           </div>
         )}
+        */}
 
         {/* Timestamp */}
         {message.timestamp && (

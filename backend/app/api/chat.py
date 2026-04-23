@@ -283,6 +283,10 @@ async def chat_stream_generator(
     with AgentExecutionLogger(f"chat_{request.session_id}") as exec_logger:
         try:
             logger.info(f"New chat request - Session: {request.session_id}")
+
+            # Clear stale image tracking for fresh session
+            from app.core.streaming.image_embedder import clear_reported_images
+            clear_reported_images()
             logger.info(f"User message: {request.message[:200]}...")
 
             # Send thinking start event
@@ -389,6 +393,7 @@ async def chat_stream_generator(
             messages.append(current_message)
 
             # Log input
+            exec_logger.set_user_question(request.message)
             exec_logger.log_input(messages, system_prompt)
 
             # Stream agent response
@@ -423,12 +428,14 @@ async def chat_stream_generator(
                     output = event.get("output", "")
                     status = event.get("status", "unknown")
                     success = status == "success"
-                    exec_logger.log_tool_result(tool_name, output, success)
-                    logger.info(f"Tool output: {tool_name} - {status}")
+                    tool_duration = event.get("duration", 0.0)
+                    exec_logger.log_tool_result(tool_name, output, success, duration=tool_duration)
+                    logger.info(f"Tool output: {tool_name} - {status} ({tool_duration:.2f}s)")
                     # Collect structured generated_images from v2 pipeline
                     gen_images = event.get("generated_images")
                     if gen_images:
-                        collected_images.extend(gen_images)
+                        _seen = {img["media_id"] for img in collected_images}
+                        collected_images.extend(img for img in gen_images if img["media_id"] not in _seen and not _seen.add(img["media_id"]))
                     # Legacy compat: collect base64-embedded images
                     if output and "data:image/" in output:
                         assistant_message_parts.append(f"\n\n{output}\n\n")
@@ -439,9 +446,50 @@ async def chat_stream_generator(
                     if content:
                         assistant_message_parts.append(content)
 
+                elif event_type == "execution_summary":
+                    # Feed metrics into logger (don't forward to client)
+                    summary = event
+                    exec_logger.log_token_usage(
+                        prompt_tokens=summary.get("total_prompt_tokens", 0),
+                        completion_tokens=summary.get("total_completion_tokens", 0),
+                        total_tokens=summary.get("total_tokens", 0),
+                    )
+                    for rm in summary.get("rounds", []):
+                        exec_logger.start_round()
+                        exec_logger.log_round_metrics(
+                            llm_duration=rm.get("llm_duration", 0.0),
+                            tool_duration=rm.get("tool_duration", 0.0),
+                            tool_count=rm.get("tool_count", 0),
+                            prompt_tokens=rm.get("prompt_tokens", 0),
+                            completion_tokens=rm.get("completion_tokens", 0),
+                            total_tokens=rm.get("total_tokens", 0),
+                        )
+                    logger.info(
+                        f"[Chat] Execution summary: "
+                        f"{summary.get('total_duration', 0):.2f}s total, "
+                        f"{summary.get('total_rounds', 0)} rounds, "
+                        f"{summary.get('total_tokens', 0)} tokens"
+                    )
+                    # Forward to client so frontend can display
+                    yield format_sse_event(ChatEvent(**event))
+                    continue
+
                 yield format_sse_event(ChatEvent(**event))
 
             logger.info(f"[Chat] Stream: {tool_call_count} tool_calls, {len(collected_images)} images collected")
+
+            # [IMAGE_UNIFY] Append image markdown refs to content so ReactMarkdown renders inline
+            if collected_images and not any(
+                img.get("api_url", "") in "".join(assistant_message_parts)
+                for img in collected_images
+            ):
+                from app.core.streaming.image_embedder import build_image_markdown
+                image_md = build_image_markdown(collected_images)
+                if image_md:
+                    yield format_sse_event(ChatEvent(
+                        type="content_delta",
+                        content=image_md,
+                    ))
 
             # Save user message to session
             session_manager.add_message(
@@ -537,9 +585,39 @@ async def tot_stream_generator(
     assistant_parts = []
     collected_images = []
 
+    # ── Load session history (mirrors chat_stream_generator logic) ──
+    session_manager = get_session_manager()
+    session = session_manager.load_session(request.session_id)
+    session_messages = session.get("messages", []) if session else []
+
+    tot_messages = []
+    MAX_CONTEXT_MESSAGES = 3
+    recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
+
+    for msg in recent_messages:
+        if msg["role"] in ("user", "assistant"):
+            content_preview = msg["content"][:300] if msg["content"] else ""
+            # Safety: strip base64 and image URLs so LLM doesn't reuse old images
+            content_preview = re.sub(
+                r'data:image/[a-zA-Z+]+;base64,[A-Za-z0-9+/=\n]{50,}',
+                '[图片]', content_preview,
+            )
+            content_preview = re.sub(
+                r'!\[[^\]]*\]\([^)]*(?:/api/media/|data:image/)[^)]*\)',
+                '[图片已生成]', content_preview,
+            )
+            content_preview = re.sub(
+                r'http://localhost:\d+/api/media/[a-f0-9]+',
+                '[图片]', content_preview,
+            )
+            tot_messages.append({"role": msg["role"], "content": content_preview})
+
+    # Append current user message
+    tot_messages.append({"role": "user", "content": request.message})
+
     try:
         async for event in orchestrator.process_request(
-            messages=[{"role": "user", "content": request.message}],
+            messages=tot_messages,
             system_prompt=system_prompt,
             enable_tot=True,
         ):
@@ -556,12 +634,10 @@ async def tot_stream_generator(
             #     output = event.get("output", "")
             #     if output and "data:image/" in output:
             #         assistant_parts.append(f"\n\n{output}\n\n")
-            # BUG FIX: tot_tools_executed 事件也可能包含 generated_images（skill 生成的图片）
+            # [IMAGE_UNIFY] Don't collect images from tot_tools_executed.
+            # Images render inline via synthesis_node's _resolve_image_refs.
             elif event_type == "tot_tools_executed":
-                gen_images = event.get("generated_images")
-                if gen_images:
-                    collected_images.extend(gen_images)
-                    logger.info("[ToT] Collected %d image(s) from tot_tools_executed", len(gen_images))
+                pass
 
             yield format_sse_event(ChatEvent(**event))
 
@@ -900,10 +976,19 @@ async def chat(request: ChatRequest):
                     elif et == "tool_output":
                         gi = event.get("generated_images")
                         if gi:
-                            collected_images.extend(gi)
+                            _seen = {img["media_id"] for img in collected_images}
+                            collected_images.extend(img for img in gi if img["media_id"] not in _seen and not _seen.add(img["media_id"]))
                         out = event.get("output", "")
                         if out and "data:image/" in out:
                             assistant_parts.append(f"\n\n{out}\n\n")
+                    elif et == "pevr_execution_complete":
+                        gi = event.get("generated_images")
+                        if gi:
+                            _seen = {img["media_id"] for img in collected_images}
+                            new_imgs = [img for img in gi if img["media_id"] not in _seen]
+                            collected_images.extend(new_imgs)
+                            if new_imgs:
+                                logger.info("[PERV] Collected %d image(s) from pevr_execution_complete", len(new_imgs))
 
                     yield format_sse_event(ChatEvent(**event))
 

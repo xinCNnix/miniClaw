@@ -107,14 +107,12 @@ def _save_fig(fig, save_name: Optional[str] = None, name_seed: str = "") -> dict
     except Exception:
         pass
 
-    svg_content = output_path.read_text(encoding="utf-8")
     logger.info(f"[geometry-plotter] 成功: {output_path}")
 
     return {
         "status": "success",
         "image_path": str(data_output_path),
         "image_format": "svg",
-        "svg_content": svg_content,
     }
 
 
@@ -216,9 +214,26 @@ def draw_code(code: str, save_name: Optional[str] = None) -> dict:
 
         # 预检：检测被禁止的 import 语句，给出友好提示
         import re
+
+        # 白名单：这些库已被预注入 exec_globals，允许 import（不会加载新模块）
+        _IMPORT_WHITELIST = {
+            "matplotlib", "matplotlib.pyplot", "matplotlib.patches",
+            "numpy",
+            "mpl_toolkits", "mpl_toolkits.mplot3d",
+        }
+
+        # Strip whitelisted import lines (modules already pre-injected)
+        # Block non-whitelisted imports
+        clean_lines = []
         for line in code.split('\n'):
             stripped = line.strip()
             if re.match(r'^(import |from \S+ import )', stripped):
+                mod_match = re.match(r'^(?:from\s+(\S+)\s+import|import\s+(\S+))', stripped)
+                if mod_match:
+                    full_mod = mod_match.group(1) or mod_match.group(2)
+                    base_mod = full_mod.split('.')[0]
+                    if full_mod in _IMPORT_WHITELIST or base_mod in _IMPORT_WHITELIST:
+                        continue  # Skip whitelisted import (already pre-injected)
                 return {
                     "status": "error",
                     "result": (
@@ -227,6 +242,8 @@ def draw_code(code: str, save_name: Optional[str] = None) -> dict:
                         f"问题行: {stripped}"
                     ),
                 }
+            clean_lines.append(line)
+        code = '\n'.join(clean_lines)
 
         # 构建安全执行环境
         exec_globals = {
@@ -270,14 +287,12 @@ def draw_code(code: str, save_name: Optional[str] = None) -> dict:
         except Exception:
             pass
 
-        svg_content = output_path.read_text(encoding="utf-8")
         logger.info(f"[geometry-plotter] draw_code 成功: {output_path}")
 
         return {
             "status": "success",
             "image_path": str(data_output_path),
             "image_format": "svg",
-            "svg_content": svg_content,
         }
 
     except Exception as e:

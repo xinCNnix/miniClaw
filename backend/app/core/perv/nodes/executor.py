@@ -29,6 +29,13 @@ from app.core.perv.scheduler import (
 from langchain_core.tools import BaseTool
 from app.tools import CORE_TOOLS
 
+# Image embedding for tool output (graceful fallback)
+try:
+    from app.core.streaming.image_embedder import embed_output_images_v2
+except ImportError:
+    def embed_output_images_v2(x: str, max_age_seconds: int = 60) -> tuple[str, list[dict]]:
+        return x, []
+
 logger = logging.getLogger(__name__)
 
 
@@ -350,6 +357,7 @@ async def _execute_batch(
             if steps_completed < len(plan):
                 step_id = plan[steps_completed].get("id", step_id)
 
+            gen_images = event.get("generated_images", [])
             observation: Dict[str, Any] = {
                 "step_id": step_id,
                 "tool": tool_name,
@@ -359,6 +367,7 @@ async def _execute_batch(
                 "evidence": _extract_evidence_refs(
                     tool_name, event.get("args", {}), status
                 ),
+                "generated_images": gen_images,
             }
             new_observations.append(observation)
             steps_completed += 1
@@ -545,7 +554,7 @@ async def _execute_single_step(
     )
 
     try:
-        tool_result = await _invoke_tool(tool_name, tool_inputs)
+        tool_result, tool_images = await _invoke_tool(tool_name, tool_inputs)
 
         output_key = step.get("output_key", "")
         if output_key:
@@ -558,6 +567,7 @@ async def _execute_single_step(
             "status": "success",
             "result": str(tool_result),
             "evidence": _extract_evidence_refs(tool_name, tool_inputs, "success"),
+            "generated_images": tool_images,
         }
         logger.debug(
             "[PEVR Executor]   %s: %s OK (%d chars)",
@@ -617,7 +627,7 @@ async def _execute_parallel_steps(
         tool_inputs = _resolve_inputs(step, local_outputs)
 
         try:
-            result = await _invoke_tool(tool_name, tool_inputs)
+            result, step_images = await _invoke_tool(tool_name, tool_inputs)
             output_key = step.get("output_key", "")
             if output_key:
                 step_outputs[output_key] = result
@@ -629,6 +639,7 @@ async def _execute_parallel_steps(
                 "status": "success",
                 "result": str(result),
                 "evidence": _extract_evidence_refs(tool_name, tool_inputs, "success"),
+                "generated_images": step_images,
             }
         except Exception as e:
             logger.warning(
@@ -767,7 +778,7 @@ async def _execute_step_by_step(
                 tool_inputs = parsed.get("inputs", step.get("inputs", {}))
                 save_as = parsed.get("save_as", step.get("output_key", ""))
 
-                tool_result = await _invoke_tool(tool_name, tool_inputs)
+                tool_result, tool_images = await _invoke_tool(tool_name, tool_inputs)
 
                 output_key = step.get("output_key", save_as)
                 if output_key:
@@ -782,6 +793,7 @@ async def _execute_step_by_step(
                     "evidence": _extract_evidence_refs(
                         tool_name, tool_inputs, "success"
                     ),
+                    "generated_images": tool_images,
                 }
                 new_observations.append(obs)
                 consecutive_failures = 0
@@ -852,7 +864,7 @@ async def _execute_step_by_step(
                 )
                 tool_name = step.get("tool", "")
                 tool_inputs = step.get("inputs", {})
-                tool_result = await _invoke_tool(tool_name, tool_inputs)
+                tool_result, tool_images = await _invoke_tool(tool_name, tool_inputs)
 
                 output_key = step.get("output_key", "")
                 if output_key:
@@ -867,6 +879,7 @@ async def _execute_step_by_step(
                     "evidence": _extract_evidence_refs(
                         tool_name, tool_inputs, "success"
                     ),
+                    "generated_images": tool_images,
                 }
                 new_observations.append(obs)
                 consecutive_failures = 0
@@ -932,8 +945,12 @@ def _validate_required_args(tool: BaseTool, tool_inputs: Dict[str, Any]) -> Opti
 
 async def _invoke_tool(
     tool_name: str, tool_inputs: Dict[str, Any]
-) -> Any:
-    """Find and invoke a core tool by name, with ExecutionCache deduplication."""
+) -> Tuple[Any, List[dict]]:
+    """Find and invoke a core tool by name, with ExecutionCache deduplication.
+
+    Returns:
+        (result_str, generated_images) tuple.
+    """
     for tool in CORE_TOOLS:
         if tool.name == tool_name:
             # Pre-execution argument validation
@@ -943,7 +960,7 @@ async def _invoke_tool(
                     "[PEVR Executor] Pre-validation failed for %s: %s",
                     tool_name, arg_error,
                 )
-                return arg_error
+                return arg_error, []
 
             try:
                 from app.core.execution_cache import get_global_execution_cache, NON_CACHEABLE_TOOLS
@@ -959,15 +976,17 @@ async def _invoke_tool(
                     result = await cache.aget_or_execute_tool(
                         tool_name, tool_inputs, _execute
                     )
-                    return result
+                    result_str, gen_images = embed_output_images_v2(str(result))
+                    return result_str, gen_images
                 else:
                     result = await tool.ainvoke(tool_inputs)
-                    return result
+                    result_str, gen_images = embed_output_images_v2(str(result))
+                    return result_str, gen_images
             except Exception as e:
                 logger.error(
                     "[PEVR Executor] Tool %s failed: %s",
                     tool_name,
                     e,
                 )
-                return f"Tool error: {e}"
-    return f"Unknown tool: {tool_name}"
+                return f"Tool error: {e}", []
+    return f"Unknown tool: {tool_name}", []

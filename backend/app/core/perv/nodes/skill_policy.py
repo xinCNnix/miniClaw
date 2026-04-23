@@ -1,14 +1,20 @@
 """PERV SkillPolicyNode — planner → skill_policy → executor.
 
 Compiles skill references in the plan into concrete tool calls through
-the four-stage Match → Gate → Compile → Guard pipeline.
+the unified SkillPolicy pipeline (Match → Gate → Compile(LLM) → Guard).
 """
 
 import logging
+import time as _time
 from typing import Any, Dict, List
 
-from app.core.skill_policy.engine import match_skills, gate_skills, compile_skill, guard_compiled_plan
-from app.core.skill_policy.types import SkillPolicyReport
+from app.core.skill_policy.engine import (
+    _classify_skill_type,
+    _get_skills_dir,
+    guard_compiled_plan,
+)
+from app.core.skill_policy.types import PolicyInput, SkillPolicyReport
+from app.tools import CORE_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +22,11 @@ logger = logging.getLogger(__name__)
 def _extract_skill_refs_from_plan(plan: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Extract skill references from plan steps.
 
-    Matches steps whose tool starts with "skill." or whose skill_group is non-empty.
+    Only matches steps whose tool starts with "skill.".
     """
     refs = []
     for step in plan:
         tool = step.get("tool", "")
-        skill_group = step.get("skill_group")
-
         if tool.startswith("skill."):
             skill_name = tool.split(".", 1)[1]
             refs.append({
@@ -30,93 +34,121 @@ def _extract_skill_refs_from_plan(plan: List[Dict[str, Any]]) -> List[Dict[str, 
                 "source_steps": [step.get("id", "")],
                 "step": step,
             })
-        elif skill_group:
-            refs.append({
-                "skill_name": skill_group,
-                "source_steps": [step.get("id", "")],
-                "step": step,
-            })
     return refs
 
 
-def _build_gate_context(state: dict) -> Dict[str, Any]:
-    """Build context dict for GATE stage."""
+async def _compile_skill_step(
+    skill_name: str,
+    state: dict,
+    llm: Any,
+) -> List[Dict[str, Any]]:
+    """Compile a single skill using the unified run_skill_policy pipeline.
+
+    Returns a list of compiled plan steps (may be 1 or more if LLM
+    generates a multi-step tool_plan).
+    """
+    from app.core.skill_policy.engine import run_skill_policy
+
+    skills_dir = _get_skills_dir()
+    skill_dir = skills_dir / skill_name
+    skill_md_path = skill_dir / "SKILL.md"
+
+    if not skill_md_path.exists():
+        logger.warning("PERV SkillPolicy: SKILL.md not found for '%s'", skill_name)
+        return []
+
+    skill_type = _classify_skill_type(skill_name, skills_dir)
+    skill_content = skill_md_path.read_text(encoding="utf-8")
+
     tools = state.get("_injected_tools")
     if tools:
-        core_tools = [t.name for t in tools]
+        available_tools = [t.name for t in tools]
     else:
-        # Fallback: state 中未注入 tools 时，直接从 CORE_TOOLS 获取
-        from app.tools import CORE_TOOLS
-        core_tools = [t.name for t in CORE_TOOLS]
-        logger.debug("SkillPolicy _build_gate_context: _injected_tools empty, using CORE_TOOLS (%d tools)", len(core_tools))
+        available_tools = [t.name for t in CORE_TOOLS]
 
-    return {
-        "core_tools": core_tools,
-        "prev_report": state.get("skill_policy_report"),
-    }
+    policy_input = PolicyInput(
+        user_query=state.get("task", ""),
+        current_step={"tool": f"skill.{skill_name}"},
+        available_tools=available_tools,
+        candidate_skills=[],
+        skill_content=skill_content,
+        skill_name=skill_name,
+        skill_type=skill_type,
+        history={},
+    )
+
+    output = await run_skill_policy(policy_input, llm)
+
+    if output.get("action") != "EXECUTE_TOOL_PLAN":
+        logger.info(
+            "PERV SkillPolicy: '%s' action=%s, keeping original step",
+            skill_name, output.get("action"),
+        )
+        return []
+
+    tool_plan = output.get("tool_plan", [])
+    logger.info(
+        "PERV SkillPolicy: '%s' compiled → %d step(s), expanding plan",
+        skill_name, len(tool_plan),
+    )
+    return tool_plan
 
 
-def _compile_plan_steps(
-    plan: List[Dict[str, Any]],
-    candidates: List[Dict[str, Any]],
-    gate_results: List[Dict[str, Any]],
-    state: dict,
+def _expand_tool_plan_to_steps(
+    tool_plan: List[Dict[str, Any]],
+    original_step: Dict[str, Any],
+    skill_name: str,
 ) -> List[Dict[str, Any]]:
-    """Replace skill references in plan with compiled tool calls.
+    """Expand a tool_plan into one or more plan steps replacing the original skill.* step."""
+    if not tool_plan:
+        return []
 
-    Preserves original step structure (depends_on, output_key, etc.),
-    only replacing tool and inputs.
-    """
-    # Build map of skill_name → compiled tool call
-    allowed_skills = {}
-    for cand, gate in zip(candidates, gate_results):
-        if gate.get("allowed"):
-            compiled = compile_skill(
-                cand["skill_name"],
-                cand["skill_type"],
-                state.get("task", ""),
-            )
-            allowed_skills[cand["skill_name"]] = compiled
+    results = []
+    base_id = original_step.get("id", f"s_{skill_name}")
 
-    # Build reverse map: step_id → compiled
-    step_compile_map: Dict[str, Dict] = {}
-    for cand in candidates:
-        compiled = allowed_skills.get(cand["skill_name"])
-        if compiled:
-            for sid in cand.get("source_steps", []):
-                step_compile_map[sid] = compiled
+    for idx, tp in enumerate(tool_plan):
+        step_id = f"{base_id}_c{idx}" if len(tool_plan) > 1 else base_id
+        new_step = {
+            "id": step_id,
+            "name": f"Execute skill {skill_name}" + (f" (step {idx+1})" if len(tool_plan) > 1 else ""),
+            "tool": tp.get("tool", ""),
+            "purpose": tp.get("reason", f"Compiled from skill.{skill_name}"),
+            "inputs": tp.get("args", {}),
+            "depends_on": list(original_step.get("depends_on", [])),
+            "output_key": f"out_{step_id}",
+            "on_fail": {"retry": 1, "fallback_tool": None, "fallback_inputs": None},
+            "description": f"Compiled skill step: {tp.get('tool', '?')}",
+            "expected": "",
+            "skill": None,
+            "input": tp.get("args", {}),
+            "skill_group": None,
+        }
+        # Preserve guard metadata for PEVR guard validation
+        if "_source_skill_type" in tp:
+            new_step["_source_skill_type"] = tp["_source_skill_type"]
+        if "_source_skill_name" in tp:
+            new_step["_source_skill_name"] = tp["_source_skill_name"]
+        # Chain multi-step dependencies
+        if idx > 0:
+            new_step["depends_on"].append(f"{base_id}_c{idx-1}" if len(tool_plan) > 1 else base_id)
+        results.append(new_step)
 
-    # Apply compilations to plan
-    compiled_plan = []
-    for step in plan:
-        step_id = step.get("id", "")
-        if step_id in step_compile_map:
-            compiled = step_compile_map[step_id]
-            new_step = dict(step)  # shallow copy preserves depends_on, output_key, etc.
-            new_step["tool"] = compiled["tool"]
-            new_step["inputs"] = compiled["args"]
-            new_step["_original_skill"] = step.get("tool") or step.get("skill_group")
-            compiled_plan.append(new_step)
-        else:
-            compiled_plan.append(step)
-
-    return compiled_plan
+    return results
 
 
 async def skill_policy_node(state: dict) -> dict:
     """PERV SkillPolicyNode: planner → skill_policy → executor.
 
-    Four-stage pipeline: Match → Gate → Compile → Guard.
-    On failure, returns the original plan unchanged (PASS_THROUGH).
+    Unified pipeline via run_skill_policy. On failure, returns the original
+    plan unchanged (PASS_THROUGH).
     """
-    start = __import__("time").monotonic()
+    start = _time.monotonic()
     plan = state.get("plan", [])
-    enrichment = state.get("enrichment", {})
     retry_count = state.get("retry_count", 0)
     pevr_log = state.get("_pevr_log")
 
     logger.info(
-        "SkillPolicyNode: ENTERED at loop %d with %d plan steps, tools=[%s]",
+        "PERV SkillPolicyNode: ENTERED at loop %d with %d plan steps, tools=[%s]",
         retry_count, len(plan),
         ", ".join(s.get("tool", "?") for s in plan),
     )
@@ -131,15 +163,10 @@ async def skill_policy_node(state: dict) -> dict:
         pass
 
     if not feature_enabled:
-        duration_ms = (__import__("time").monotonic() - start) * 1000
+        duration_ms = (_time.monotonic() - start) * 1000
         report = SkillPolicyReport(
-            policy_applied=False,
-            matched_skills=[],
-            gate_results=[],
-            guard_passed=False,
-            guard_issues=[],
-            compiled_plan=None,
-            error=None,
+            policy_applied=False, matched_skills=[], gate_results=[],
+            guard_passed=False, guard_issues=[], compiled_plan=None, error=None,
         )
         _log_to_pevr(pevr_log, retry_count, {
             "policy_applied": False, "feature_enabled": False,
@@ -151,19 +178,11 @@ async def skill_policy_node(state: dict) -> dict:
         # 1. Extract skill references from plan
         skill_refs = _extract_skill_refs_from_plan(plan)
         if not skill_refs:
-            duration_ms = (__import__("time").monotonic() - start) * 1000
-            logger.info(
-                "SkillPolicyNode: no skill refs found in plan (%d steps), PASS_THROUGH",
-                len(plan),
-            )
+            duration_ms = (_time.monotonic() - start) * 1000
+            logger.info("PERV SkillPolicyNode: no skill refs found (%d steps), PASS_THROUGH", len(plan))
             report = SkillPolicyReport(
-                policy_applied=False,
-                matched_skills=[],
-                gate_results=[],
-                guard_passed=False,
-                guard_issues=[],
-                compiled_plan=None,
-                error=None,
+                policy_applied=False, matched_skills=[], gate_results=[],
+                guard_passed=False, guard_issues=[], compiled_plan=None, error=None,
             )
             _log_to_pevr(pevr_log, retry_count, {
                 "policy_applied": False, "feature_enabled": True,
@@ -172,140 +191,128 @@ async def skill_policy_node(state: dict) -> dict:
             }, duration_ms)
             return {"plan": plan, "skill_policy_report": report}
 
-        # 2. MATCH
-        candidates = match_skills(state["task"], skill_refs, enrichment)
+        # 2. Create LLM for compile
+        from app.config import get_settings
+        from app.core.llm import create_llm
+        settings = get_settings()
+        llm = create_llm(settings.llm_provider)
+
+        # 3. Compile each skill reference
+        compiled_plan = []
+        compiled_count = 0
+        for step in plan:
+            tool = step.get("tool", "")
+            if tool.startswith("skill."):
+                skill_name = tool.split(".", 1)[1]
+                tool_plan = await _compile_skill_step(skill_name, state, llm)
+
+                if tool_plan:
+                    expanded = _expand_tool_plan_to_steps(tool_plan, step, skill_name)
+                    compiled_plan.extend(expanded)
+                    compiled_count += 1
+                else:
+                    # Compilation failed → drop the step (replanner will handle)
+                    logger.warning(
+                        "PERV SkillPolicyNode: skill '%s' compilation returned empty, dropping step",
+                        skill_name,
+                    )
+                continue
+
+            compiled_plan.append(step)
+
+        # 4. Guard — validate all compiled skill steps (with tool-skill_type auto-correction)
+        skill_tool_plans = []
+        for s in compiled_plan:
+            is_compiled = (
+                any(s.get("id", "").endswith(f"_c{i}") for i in range(5))
+                or s.get("description", "").startswith("Compiled skill step")
+            )
+            if is_compiled:
+                tp = {"tool": s.get("tool", ""), "args": s.get("inputs", {})}
+                if "_source_skill_type" in s:
+                    tp["_source_skill_type"] = s["_source_skill_type"]
+                if "_source_skill_name" in s:
+                    tp["_source_skill_name"] = s["_source_skill_name"]
+                skill_tool_plans.append(tp)
+
+        guard_ok = True
+        if skill_tool_plans:
+            guard_result = guard_compiled_plan(
+                skill_tool_plans,
+                {"user_query": state.get("task", ""), **state},
+            )
+            guard_ok = guard_result.get("passed", False)
+            if not guard_ok:
+                logger.warning("SkillPolicy GUARD failed: %s", guard_result.get("issues"))
+            else:
+                # Write back auto-corrected tool/args to compiled_plan
+                idx = 0
+                for s in compiled_plan:
+                    is_compiled = (
+                        any(s.get("id", "").endswith(f"_c{i}") for i in range(5))
+                        or s.get("description", "").startswith("Compiled skill step")
+                    )
+                    if is_compiled and idx < len(skill_tool_plans):
+                        corrected = skill_tool_plans[idx]
+                        s["tool"] = corrected["tool"]
+                        s["inputs"] = corrected["args"]
+                        s["input"] = corrected["args"]
+                        s["description"] = f"Compiled skill step: {corrected['tool']}"
+                        idx += 1
+
+        duration_ms = (_time.monotonic() - start) * 1000
+
+        if not guard_ok:
+            report = SkillPolicyReport(
+                policy_applied=False, matched_skills=[], gate_results=[],
+                guard_passed=False, guard_issues=[], compiled_plan=None, error=None,
+            )
+            _log_to_pevr(pevr_log, retry_count, {
+                "policy_applied": False, "feature_enabled": True,
+                "plan_steps_in": len(plan), "skill_refs_found": len(skill_refs),
+                "compiled_count": compiled_count, "guard_passed": False,
+                "plan_steps_out": len(plan),
+            }, duration_ms)
+            return {"plan": plan, "skill_policy_report": report}
+
         logger.info(
-            "SkillPolicyNode: MATCH found %d candidates from %d refs: %s",
-            len(candidates), len(skill_refs),
-            [c["skill_name"] for c in candidates],
+            "PERV SkillPolicyNode: COMPILED %d skills, plan %d→%d steps (%.0fms)",
+            compiled_count, len(plan), len(compiled_plan), duration_ms,
         )
-        if not candidates:
-            duration_ms = (__import__("time").monotonic() - start) * 1000
-            report = SkillPolicyReport(
-                policy_applied=False,
-                matched_skills=[],
-                gate_results=[],
-                guard_passed=False,
-                guard_issues=[],
-                compiled_plan=None,
-                error=None,
-            )
-            _log_to_pevr(pevr_log, retry_count, {
-                "policy_applied": False, "feature_enabled": True,
-                "plan_steps_in": len(plan), "skill_refs_found": len(skill_refs),
-                "skill_refs": [{"name": r.get("skill_name"), "steps": r.get("source_steps")} for r in skill_refs],
-                "matched_count": 0, "plan_steps_out": len(plan),
-            }, duration_ms)
-            return {"plan": plan, "skill_policy_report": report}
-
-        # 3. GATE
-        gate_ctx = _build_gate_context(state)
-        gate_results = gate_skills(candidates, gate_ctx)
-
-        # 4. COMPILE — replace skill references in plan
-        compiled_plan = _compile_plan_steps(plan, candidates, gate_results, state)
-
-        # Collect compiled skill info for logging
-        compiled_skills = []
-        for cand, gate in zip(candidates, gate_results):
-            if gate.get("allowed"):
-                compiled_skills.append({
-                    "skill_name": cand["skill_name"],
-                    "skill_type": cand["skill_type"],
-                    "compiled_tool": next(
-                        (s.get("tool") for s in compiled_plan
-                         if s.get("_original_skill") == cand["skill_name"]
-                         or s.get("_original_skill") == f"skill.{cand['skill_name']}"),
-                        "?",
-                    ),
-                })
-
-        # 5. GUARD
-        tool_plans = [
-            {"tool": s.get("tool", ""), "args": s.get("inputs", {})}
-            for s in compiled_plan
-            if s.get("_original_skill")
-        ]
-        guard_result = guard_compiled_plan(tool_plans, state)
-
-        if not guard_result["passed"]:
-            duration_ms = (__import__("time").monotonic() - start) * 1000
-            logger.warning("SkillPolicy GUARD failed: %s", guard_result["issues"])
-            report = SkillPolicyReport(
-                policy_applied=False,
-                matched_skills=[c for c in candidates],
-                gate_results=[g for g in gate_results],
-                guard_passed=False,
-                guard_issues=guard_result["issues"],
-                compiled_plan=None,
-                error=None,
-            )
-            _log_to_pevr(pevr_log, retry_count, {
-                "policy_applied": False, "feature_enabled": True,
-                "plan_steps_in": len(plan), "skill_refs_found": len(skill_refs),
-                "skill_refs": [{"name": r.get("skill_name")} for r in skill_refs],
-                "matched_skills": candidates, "gate_results": gate_results,
-                "guard_passed": False, "guard_issues": guard_result["issues"],
-                "compiled_count": 0, "plan_steps_out": len(plan),
-            }, duration_ms)
-            return {"plan": plan, "skill_policy_report": report}
-
-        # Strip internal metadata before returning to pipeline
-        final_plan = []
-        for step in compiled_plan:
-            clean = {k: v for k, v in step.items() if not k.startswith("_")}
-            final_plan.append(clean)
 
         report = SkillPolicyReport(
-            policy_applied=True,
-            matched_skills=[c for c in candidates],
-            gate_results=[g for g in gate_results],
+            policy_applied=compiled_count > 0,
+            matched_skills=[{"skill_name": r["skill_name"]} for r in skill_refs],
+            gate_results=[],
             guard_passed=True,
             guard_issues=[],
-            compiled_plan=final_plan,
+            compiled_plan=compiled_plan if compiled_count > 0 else None,
             error=None,
         )
-
-        duration_ms = (__import__("time").monotonic() - start) * 1000
-        logger.info(
-            "SkillPolicyNode: COMPILED %d skills successfully, plan %d→%d steps (%.0fms)",
-            sum(1 for g in gate_results if g.get("allowed")),
-            len(plan), len(final_plan), duration_ms,
-        )
-
         _log_to_pevr(pevr_log, retry_count, {
-            "policy_applied": True, "feature_enabled": True,
+            "policy_applied": compiled_count > 0, "feature_enabled": True,
             "plan_steps_in": len(plan), "skill_refs_found": len(skill_refs),
-            "skill_refs": [{"name": r.get("skill_name")} for r in skill_refs],
-            "matched_skills": candidates, "gate_results": gate_results,
-            "guard_passed": True, "guard_issues": [],
-            "compiled_count": len(compiled_skills),
-            "compiled_skills": compiled_skills,
-            "plan_steps_out": len(final_plan),
+            "compiled_count": compiled_count,
+            "plan_steps_out": len(compiled_plan),
         }, duration_ms)
 
         return {
-            "plan": final_plan,
+            "plan": compiled_plan,
             "skill_policy_report": report,
             "reasoning_trace": [{
                 "phase": "skill_policy",
-                "matched": len(candidates),
-                "compiled": sum(1 for g in gate_results if g.get("allowed")),
+                "skill_refs": len(skill_refs),
+                "compiled": compiled_count,
                 "guard_passed": True,
             }],
         }
 
     except Exception as e:
-        duration_ms = (__import__("time").monotonic() - start) * 1000
-        logger.error("SkillPolicyNode failed: %s", e, exc_info=True)
+        duration_ms = (_time.monotonic() - start) * 1000
+        logger.error("PERV SkillPolicyNode failed: %s", e, exc_info=True)
         report = SkillPolicyReport(
-            policy_applied=False,
-            matched_skills=[],
-            gate_results=[],
-            guard_passed=False,
-            guard_issues=[],
-            compiled_plan=None,
-            error=str(e),
+            policy_applied=False, matched_skills=[], gate_results=[],
+            guard_passed=False, guard_issues=[], compiled_plan=None, error=str(e),
         )
         _log_to_pevr(pevr_log, retry_count, {
             "policy_applied": False, "feature_enabled": True,

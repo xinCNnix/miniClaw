@@ -107,4 +107,5 @@ async def finalizer_node(state: dict) -> dict:
                 f"obs={len(observations)}",
             )
 
+    # [IMAGE_UNIFY] Image appending moved to orchestrator (handles all loops)
     return {"final_answer": content}

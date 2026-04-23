@@ -287,6 +287,13 @@ class PythonREPLTool(BaseTool):
             code
         )
 
+        # Ensure output directory exists and set CWD so matplotlib savefig lands there
+        backend_root = Path(__file__).resolve().parent.parent.parent
+        output_dir = backend_root / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        original_cwd = os.getcwd()
+        os.chdir(str(output_dir))
+
         # Prepare local namespace with safe open() wrapper
         def safe_open(file_path, *args, **kwargs):
             return self._make_open(open, file_path, *args, **kwargs)
@@ -328,22 +335,6 @@ class PythonREPLTool(BaseTool):
                 if self._should_stop and self._execution_generation == current_gen:
                     raise Exception("Execution stopped by user")
 
-                # Monitor callback
-                if monitor_callback:
-                    elapsed = time.time() - self._execution_start_time
-                    try:
-                        # Get memory usage
-                        process = psutil.Process()
-                        memory_mb = process.memory_info().rss / 1024 / 1024
-
-                        monitor_callback({
-                            "elapsed": elapsed,
-                            "memory_mb": memory_mb,
-                            "memory_limit_mb": config["memory_limit"] / 1024 / 1024,
-                            "operations": self._operation_count,
-                        })
-                    except Exception:
-                        pass  # Ignore monitoring errors
 
             return trace_callback
 
@@ -429,6 +420,8 @@ class PythonREPLTool(BaseTool):
             import traceback
             stderr_buffer.write(traceback.format_exc())
             success = False
+        finally:
+            os.chdir(original_cwd)
 
         # Get captured output
         stdout_output = stdout_buffer.getvalue()

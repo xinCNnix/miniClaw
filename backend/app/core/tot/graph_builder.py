@@ -19,6 +19,7 @@ from app.core.tot.nodes import (
 )
 from app.core.tot.nodes.termination_checker import should_continue_reasoning
 from app.core.tot.nodes.synthesis_node import synthesis_node
+from app.core.tot.nodes.post_execution_evaluator import post_execution_evaluator_node
 
 # Research nodes imported lazily inside build_tot_graph() to avoid circular imports
 
@@ -86,6 +87,23 @@ def route_after_contradiction(state: ToTState) -> str:
     return "check_termination"
 
 
+def should_re_evaluate(state: ToTState) -> str:
+    """Route after execute_thoughts: only re-evaluate when best_score >= threshold.
+
+    Saves LLM calls by skipping re-evaluation when termination is not imminent.
+    """
+    best_score = state.get("best_score", 0.0)
+    quality_threshold = 8.0
+
+    if best_score >= quality_threshold:
+        logger.info(
+            f"[PostEval-Route] best_score={best_score:.2f} >= {quality_threshold}, "
+            f"triggering re-evaluation"
+        )
+        return "re_evaluate"
+    return "skip_to_extractor"
+
+
 # ---------------------------------------------------------------------------
 # Graph builder
 # ---------------------------------------------------------------------------
@@ -98,25 +116,33 @@ def build_tot_graph(
 
     Unified Enhanced Graph (supports both standard and research modes):
 
-    generate → evaluate → execute → extractor
-                                          │
-                            ┌─────────────┴─────────────┐
-                            │ route_after_extraction()    │
-                            │ citation_chase rounds left? │
-                            ▼                            ▼
-                      citation_planner            coverage
-                            │                            │
-                      citation_fetch            contradiction
-                            │                     ┌──────┴──────┐
-                      (回到 extractor)     write(skip?)    skip
-                                              │              │
-                                        check_termination    │
-                                         ┌────┴────┐        │
-                                  continue   finalize ───────┘
-                                     │           │
-                                  generate   synthesize_answer
-                                                 │
-                                                END
+    generate → evaluate → execute → [best_score >= 8.0?]
+                                       │              │
+                                      yes             no
+                                       │              │
+                                  re_evaluate          │
+                                       │              │
+                                       └──────┬───────┘
+                                              ▼
+                                         extractor
+                                              │
+                                ┌─────────────┴─────────────┐
+                                │ route_after_extraction()    │
+                                │ citation_chase rounds left? │
+                                ▼                            ▼
+                          citation_planner            coverage
+                                │                            │
+                          citation_fetch            contradiction
+                                │                     ┌──────┴──────┐
+                          (回到 extractor)     write(skip?)    skip
+                                                  │              │
+                                            check_termination    │
+                                             ┌────┴────┐        │
+                                      continue   finalize ───────┘
+                                         │           │
+                                      generate   synthesize_answer
+                                                     │
+                                                    END
 
     Non-research mode behavior:
     - extractor: passthrough (raw_sources → evidence_store)
@@ -148,6 +174,7 @@ def build_tot_graph(
     graph.add_node("generate_thoughts", thought_generator_node)
     graph.add_node("evaluate_thoughts", thought_evaluator_node)
     graph.add_node("execute_thoughts", thought_executor_node)
+    graph.add_node("re_evaluate", post_execution_evaluator_node)
     graph.add_node("check_termination", termination_checker_node)
     graph.add_node("synthesize_answer", synthesis_node)
 
@@ -159,7 +186,7 @@ def build_tot_graph(
     graph.add_node("citation_planner", citation_chasing_planner_node)
     graph.add_node("citation_fetch", citation_fetch_node)
 
-    logger.info("Added 11 nodes to graph (5 core + 6 research)")
+    logger.info("Added 12 nodes to graph (6 core + 6 research)")
 
     # --- Entry point ---
     graph.set_entry_point("generate_thoughts")
@@ -168,8 +195,16 @@ def build_tot_graph(
     graph.add_edge("generate_thoughts", "evaluate_thoughts")
     graph.add_edge("evaluate_thoughts", "execute_thoughts")
 
-    # execute_thoughts → extractor (research sub-graph entry)
-    graph.add_edge("execute_thoughts", "extractor")
+    # execute_thoughts → conditional: re_evaluate or skip to extractor
+    graph.add_conditional_edges(
+        "execute_thoughts",
+        should_re_evaluate,
+        {
+            "re_evaluate": "re_evaluate",
+            "skip_to_extractor": "extractor",
+        }
+    )
+    graph.add_edge("re_evaluate", "extractor")
 
     # --- Research sub-graph routing ---
     # extractor → route_after_extraction
