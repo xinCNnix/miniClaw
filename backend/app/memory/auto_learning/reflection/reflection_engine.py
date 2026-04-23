@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import JsonOutputParser
@@ -63,7 +64,14 @@ REFLECTION_PROMPT = ChatPromptTemplate.from_template("""
    - 3.0-4.9: 执行失败，但有部分正确
    - 0.0-2.9: 完全失败
 
-4. 只返回JSON，不要其他内容
+4. 评分应综合"工具执行结果"和"文字回答质量"：
+   - 工具成功完成用户请求的核心目标（如生图、计算）是基本分
+   - 文字解释是否准确、完整、有误导性，决定最终分
+   - 工具成功但文字有误：不应超过 7.0
+   - 工具失败但文字正确指出了问题：不低于 5.0
+   - 两者都好：7.0-10.0
+
+5. 只返回JSON，不要其他内容
 
 JSON:
 """)
@@ -282,7 +290,14 @@ class ReflectionEngine:
             success = tc.get("success", True)
             duration = tc.get("duration", 0.0)
             status = "成功" if success else "失败"
-            formatted.append(f"{i}. {name} - {status} ({duration:.2f}s)")
+            line = f"{i}. {name} - {status} ({duration:.2f}s)"
+
+            gen_images = tc.get("generated_images", [])
+            if gen_images:
+                filenames = [img["name"] if isinstance(img, dict) else os.path.basename(img) for img in gen_images[:3]]
+                line += f" | 生成图片: {len(gen_images)}张 ({', '.join(filenames)})"
+
+            formatted.append(line)
 
         return "\n".join(formatted)
 

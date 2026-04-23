@@ -19,6 +19,19 @@ from app.core.tot.utils import content_similarity as _content_similarity, tool_c
 logger = logging.getLogger(__name__)
 
 
+def _build_history_summary(state: ToTState) -> str:
+    """Build a compact conversation history summary from state['messages']."""
+    chat_history = state.get("messages", [])
+    if not chat_history:
+        return ""
+    lines = []
+    for msg in chat_history:
+        role = "用户" if msg.type == "human" else "助手"
+        content = msg.content[:200] if msg.content else ""
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
 async def thought_generator_node(state: ToTState) -> ToTState:
     """
     Generate multiple diverse candidate thoughts using LLM.
@@ -87,6 +100,7 @@ async def _generate_multi_beam_extensions(state: ToTState) -> ToTState:
 
         from app.core.tot.prompt_composer import compose_system_prompt
         existing_branches_summary = _collect_existing_branches_summary(state)
+        _history_summary = _build_history_summary(state)
 
         system_prompt = compose_system_prompt(
             base_system_prompt=state.get("system_prompt", ""),
@@ -95,7 +109,7 @@ async def _generate_multi_beam_extensions(state: ToTState) -> ToTState:
             variant=variant_index,
             tools=state.get("tools"),
             prompt_level="full",
-            enrichment={"existing_branches_summary": existing_branches_summary} if existing_branches_summary else None,
+            enrichment={"existing_branches_summary": existing_branches_summary, "chat_history": _history_summary} if (existing_branches_summary or _history_summary) else None,
         )
 
         prompt = _generate_combined_extension_prompt(
@@ -227,6 +241,7 @@ async def _regenerate_for_beams(state: ToTState, beam_indices: List[int]) -> ToT
 
         from app.core.tot.prompt_composer import compose_system_prompt
         existing_branches_summary = _collect_existing_branches_summary(state)
+        _history_summary = _build_history_summary(state)
 
         system_prompt = compose_system_prompt(
             base_system_prompt=state.get("system_prompt", ""),
@@ -235,7 +250,7 @@ async def _regenerate_for_beams(state: ToTState, beam_indices: List[int]) -> ToT
             variant=variant_index,
             tools=state.get("tools"),
             prompt_level="full",
-            enrichment={"existing_branches_summary": existing_branches_summary} if existing_branches_summary else None,
+            enrichment={"existing_branches_summary": existing_branches_summary, "chat_history": _history_summary} if (existing_branches_summary or _history_summary) else None,
         )
 
         parent_thoughts = [thought_map[tid] for tid in beam if tid in thought_map]
@@ -278,6 +293,28 @@ Think from a fundamentally different perspective."""
 
     # 清除回溯标记（防止无限循环）
     state["needs_regeneration"] = []
+
+    # 补充不足的 thoughts（每个 beam 不足 branching_factor 个时补 fallback）
+    parent_counts: Dict[str, int] = {}
+    for t in all_new_thoughts:
+        parent_counts[t.parent_id] = parent_counts.get(t.parent_id, 0) + 1
+
+    for beam_idx in beam_indices:
+        if beam_idx >= len(active_beams):
+            continue
+        beam = active_beams[beam_idx]
+        parent_id = beam[-1]
+        current_count = parent_counts.get(parent_id, 0)
+        if current_count < branching_factor:
+            fallback = _generate_fallback_thoughts(
+                user_query, current_depth, parent_id,
+                branching_factor - current_count
+            )
+            all_new_thoughts.extend(fallback)
+            logger.info(
+                f"[Regenerate-Beam{beam_idx}] Padded with {len(fallback)} fallback thoughts "
+                f"({current_count} → {current_count + len(fallback)})"
+            )
 
     # 去重
     unique_thoughts = _deduplicate_thoughts(all_new_thoughts)
@@ -338,6 +375,7 @@ async def _generate_single_beam(state: ToTState) -> ToTState:
             variant_index = (current_depth + hash(state.get("best_path", [""])[-1])) % 3
 
         existing_branches_summary = _collect_existing_branches_summary(state)
+        _history_summary = _build_history_summary(state)
 
         system_prompt = compose_system_prompt(
             base_system_prompt=state.get("system_prompt", ""),
@@ -346,7 +384,7 @@ async def _generate_single_beam(state: ToTState) -> ToTState:
             variant=variant_index,
             tools=state.get("tools"),
             prompt_level="full",
-            enrichment={"existing_branches_summary": existing_branches_summary} if existing_branches_summary else None,
+            enrichment={"existing_branches_summary": existing_branches_summary, "chat_history": _history_summary} if (existing_branches_summary or _history_summary) else None,
         )
 
         messages = [
@@ -418,8 +456,9 @@ async def _generate_single_beam(state: ToTState) -> ToTState:
     # Deduplicate thoughts based on content similarity
     unique_thoughts = _deduplicate_thoughts(all_new_thoughts)
 
-    # Visual skill injection is now handled by SkillPolicy MATCH stage
-    # (removed _inject_visual_skill_if_needed patch)
+    # Visual skill injection: upstream of SkillPolicy gate.
+    # Generator injects read_file(SKILL.md) → executor-side SkillPolicy gate → compile & execute
+    _inject_visual_skill_if_needed(unique_thoughts, user_query)
 
     logger.info(f"Total unique thoughts generated at depth {current_depth}: {len(unique_thoughts)}")
 
@@ -1031,6 +1070,98 @@ def _generate_fallback_thoughts(
         ))
 
     return thoughts
+
+
+def _inject_visual_skill_if_needed(thoughts: List[Thought], user_query: str) -> None:
+    """Inject read_file(SKILL.md) tool calls for visual skills when the query suggests them.
+
+    This is upstream of SkillPolicy gate in the executor:
+    generator injects read_file(SKILL.md) → executor-side SkillPolicy gate → compile & execute.
+
+    Without this injection, SkillPolicy never triggers because the LLM may not generate
+    a read_file(SKILL.md) tool call on its own for visual tasks.
+    """
+    visual_keywords = [
+        "画", "图表", "柱状图", "折线图", "饼图", "散点图", "plot", "chart",
+        "graph", "draw", "diagram", "可视化", "visualization", "geometry",
+        "几何", "svg", "几何图形",
+    ]
+    query_lower = user_query.lower()
+    needs_visual = any(kw in query_lower for kw in visual_keywords)
+    if not needs_visual:
+        return
+
+    # Try to discover visual skills dynamically
+    visual_skill_names: List[str] = []
+    try:
+        from app.skills.loader import SkillLoader
+        available = SkillLoader().list_available_skills()
+        for skill_name, skill_info in available.items():
+            tags = skill_info.get("tags", []) if isinstance(skill_info, dict) else []
+            name_lower = skill_name.lower()
+            if any(t in name_lower for t in ("plotter", "chart", "diagram", "geometry", "draw", "visual")):
+                visual_skill_names.append(skill_name)
+    except Exception:
+        # Fallback to known visual skills
+        visual_skill_names = ["chart-plotter", "diagram-plotter", "geometry-plotter"]
+
+    if not visual_skill_names:
+        return
+
+    # Pick the most relevant visual skill based on query
+    skill_name = visual_skill_names[0]
+    for candidate in visual_skill_names:
+        if "chart" in user_query.lower() or "柱状" in user_query or "折线" in user_query:
+            if "chart" in candidate:
+                skill_name = candidate
+                break
+        elif "diagram" in user_query.lower() or "图示" in user_query or "流程图" in user_query:
+            if "diagram" in candidate:
+                skill_name = candidate
+                break
+        elif "geometry" in user_query.lower() or "几何" in user_query:
+            if "geometry" in candidate:
+                skill_name = candidate
+                break
+
+    # Check if any thought already has a read_file for this skill
+    already_injected = any(
+        any(
+            tc.get("name") == "read_file" and skill_name in tc.get("args", {}).get("path", "")
+            for tc in (t.tool_calls or [])
+        )
+        for t in thoughts
+    )
+    if already_injected:
+        return
+
+    # Inject a read_file(SKILL.md) tool call into the first thought without tools
+    for thought in thoughts:
+        if not thought.tool_calls:
+            thought.tool_calls = [{
+                "name": "read_file",
+                "args": {"path": f"data/skills/{skill_name}/SKILL.md"},
+            }]
+            thought.content = f"[Auto-injected] Load visual skill '{skill_name}' for: {user_query[:100]}"
+            logger.info(
+                "[Generator] Injected read_file(SKILL.md) for visual skill '%s' into thought %s",
+                skill_name, thought.id,
+            )
+            return
+
+    # All thoughts have tools — add a new thought
+    new_thought = Thought(
+        id=f"thought_{uuid.uuid4().hex[:8]}",
+        parent_id=thoughts[0].parent_id if thoughts else None,
+        content=f"[Auto-injected] Load visual skill '{skill_name}' for: {user_query[:100]}",
+        tool_calls=[{"name": "read_file", "args": {"path": f"data/skills/{skill_name}/SKILL.md"}}],
+        status="pending",
+    )
+    thoughts.append(new_thought)
+    logger.info(
+        "[Generator] Added new thought with read_file(SKILL.md) for visual skill '%s'",
+        skill_name,
+    )
 
 
 def _collect_existing_branches_summary(state: ToTState) -> str:

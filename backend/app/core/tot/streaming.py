@@ -5,6 +5,7 @@ Enhanced streaming events for Tree of Thoughts reasoning.
 """
 
 import logging
+import re
 from typing import Dict, Any, AsyncIterator
 
 from app.core.tot.state import ToTState, Thought
@@ -96,23 +97,39 @@ class ToTEventStreamer:
 
         elif event_type == "thought_execution":
             # Phase 8: enhanced with step counts
-            generated_images = []
-            for r in trace_event.get("results", []):
-                if isinstance(r, dict) and r.get("generated_images"):
-                    generated_images.extend(r["generated_images"])
+
+            # Strip base64/SVG blobs from content to prevent MemoryError
+            # (tool results may contain embedded image data)
+            raw_content = trace_event.get("content", "")
+            if isinstance(raw_content, str):
+                raw_content = re.sub(
+                    r'data:image/[^;]+;base64,[A-Za-z0-9+/=\n]+',
+                    '[image data removed]',
+                    raw_content,
+                )
+                # Also strip large inline SVG blocks
+                raw_content = re.sub(
+                    r'<svg[^>]*>.*?</svg>',
+                    '[SVG removed]',
+                    raw_content,
+                    flags=re.DOTALL,
+                )
 
             event = {
                 "type": "tot_tools_executed",
                 "thought_id": trace_event.get("thought_id"),
-                "content": trace_event.get("content"),
+                "content": raw_content,
                 "tool_count": trace_event.get("tool_count", trace_event.get("total_steps", 0)),
                 # Phase 8: step details for local loop visualization
                 "total_steps": trace_event.get("total_steps", 0),
                 "executed_steps": trace_event.get("executed_steps", 0),
                 "errors": trace_event.get("errors", 0),
             }
-            if generated_images:
-                event["generated_images"] = generated_images
+            # [IMAGE_UNIFY] Don't send generated_images in SSE events.
+            # Images render inline via synthesis_node's _resolve_image_refs.
+            # generated_images = trace_event.get("generated_images", [])
+            # if generated_images:
+            #     event["generated_images"] = generated_images
             return event
 
         # Phase 8: backtracking events
@@ -141,6 +158,16 @@ class ToTEventStreamer:
                 "reason": trace_event.get("reason"),
                 "score": trace_event.get("score"),
                 "depth": trace_event.get("depth")
+            }
+
+        # Post-execution re-evaluation events
+        elif event_type == "post_execution_re_evaluated":
+            return {
+                "type": "tot_re_evaluated",
+                "thoughts_updated": trace_event.get("thoughts_updated", 0),
+                "best_score": trace_event.get("best_score", 0.0),
+                "score_before": trace_event.get("score_before", 0.0),
+                "details": trace_event.get("details", []),
             }
 
         # --- Research-mode SSE events ---
@@ -239,14 +266,25 @@ class ToTEventStreamer:
         """
         Build hierarchical tree structure from flat thoughts list.
 
-        Args:
-            thoughts: List of all thoughts
-
-        Returns:
-            Hierarchical tree structure
+        Deduplicates by thought ID to prevent exponential growth
+        if the reducer accidentally duplicates entries.
         """
-        # Build lookup map
-        thought_map = {t.id: t for t in thoughts}
+        # Deduplicate by id (keep first occurrence)
+        seen_ids: set[str] = set()
+        unique: list[Thought] = []
+        for t in thoughts:
+            if t.id not in seen_ids:
+                seen_ids.add(t.id)
+                unique.append(t)
+
+        if len(unique) < len(thoughts):
+            logger.warning(
+                "[TreeUpdate] Deduplicated thoughts: %d → %d",
+                len(thoughts), len(unique),
+            )
+
+        # Build lookup map from deduplicated list
+        thought_map = {t.id: t for t in unique}
 
         # Build tree recursively
         def build_node(thought_id: str) -> Dict:
@@ -254,10 +292,10 @@ class ToTEventStreamer:
             if not thought:
                 return None
 
-            # Find children
+            # Find children from deduplicated list
             children = [
                 build_node(t.id)
-                for t in thoughts
+                for t in unique
                 if t.parent_id == thought_id
             ]
             children = [c for c in children if c is not None]
@@ -278,7 +316,7 @@ class ToTEventStreamer:
         # Find root thoughts (no parent)
         roots = [
             build_node(t.id)
-            for t in thoughts
+            for t in unique
             if t.parent_id is None
         ]
 

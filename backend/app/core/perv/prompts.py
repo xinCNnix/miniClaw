@@ -438,16 +438,12 @@ def build_planner_prompt(
 - If critical information is missing and cannot be inferred, output {{"status":"need_info","reason":"describe what is missing"}} instead of fabricating data.
 - Consider cost/time constraints, failure modes and fallbacks.
 - Avoid unnecessary browsing or long reasoning.
-- When a skill is needed, expand into explicit steps:
-  Step 1: read_file("backend/data/skills/<skill-name>/SKILL.md")
-  Step 2+: follow skill instructions using core tools
-- Each skill's steps form a self-contained group:
-  - The read_file(SKILL.md) step has depends_on: []
-  - Subsequent skill steps depend on the read_file step and/or earlier steps within the same skill
+- When a skill is needed, use tool: "skill.<skill-name>" as a single step. Do NOT expand into read_file + follow-up steps. The skill policy node will handle compilation automatically.
+- Each skill is a single step with tool: "skill.<skill-name>", depends_on: [], skill_group: "<skill-name>"
 - When multiple skills are needed:
-  - Independent skills (no data flow between them) → ALL their read_file steps have depends_on: []
-  - This allows the DAG scheduler to run them in parallel
-  - Only add cross-skill depends_on when one skill's output feeds another's input
+  - Independent skills → all have depends_on: [] (parallel)
+  - Sequential skills → second skill depends_on the first skill's step ID
+  - The skill policy node compiles skill.* references into concrete tool calls before execution
 
 ## Task
 {task}
@@ -467,27 +463,21 @@ Strict requirements:
 - Steps with empty depends_on can run in parallel
 - Steps that only need the task context (not another step's output) should have depends_on: []
 - output_key must be unique across all steps
-- skill_group identifies which skill a step belongs to (null if no skill)
+- skill_group identifies which skill a step belongs to (match the skill name, null if no skill)
 - Respond ONLY with valid JSON — no markdown fences, no commentary
 
 ## Parallel Execution Examples
 
 Example 1 — Multiple independent skills:
-  s1: read_file("get_weather/SKILL.md")   depends_on: [], skill_group: "get_weather"
-  s2: terminal("curl wttr.in/Beijing")    depends_on: ["s1"], skill_group: "get_weather"
-  s3: read_file("arxiv-search/SKILL.md")  depends_on: [], skill_group: "arxiv-search"
-  s4: python_repl(search papers)           depends_on: ["s3"], skill_group: "arxiv-search"
-  → Layer 0: [s1, s3] parallel
-  → Layer 1: [s2, s4] parallel
+  s1: skill.get_weather      depends_on: [], skill_group: "get_weather"
+  s2: skill.arxiv-search     depends_on: [], skill_group: "arxiv-search"
+  → Layer 0: [s1, s2] parallel
 
 Example 2 — Skills with data dependency:
-  s1: read_file("arxiv-search/SKILL.md")  depends_on: [], skill_group: "arxiv-search"
-  s2: python_repl(search papers)           depends_on: ["s1"], skill_group: "arxiv-search"
-  s3: read_file("chart-plotter/SKILL.md")  depends_on: [], skill_group: "chart-plotter"
-  s4: python_repl(plot with search data)   depends_on: ["s2", "s3"], skill_group: "chart-plotter"
-  → Layer 0: [s1, s3] parallel
+  s1: skill.arxiv-search     depends_on: [], skill_group: "arxiv-search"
+  s2: skill.chart-plotter    depends_on: ["s1"], skill_group: "chart-plotter"
+  → Layer 0: [s1]
   → Layer 1: [s2]
-  → Layer 2: [s4]
 """
 
 
@@ -550,7 +540,8 @@ def build_executor_messages(
         "- DO NOT produce a final user-facing answer.\n"
         "- Use memory ONLY to fill missing parameters, never to alter intent.\n"
         "- Do NOT use any skill. Planner has already expanded all skills into "
-        "explicit tool-call steps.\n\n"
+        "explicit tool-call steps, or the skill policy node has pre-compiled "
+        "them. Execute steps as specified.\n\n"
         f"{tool_whitelist}"
     )
 

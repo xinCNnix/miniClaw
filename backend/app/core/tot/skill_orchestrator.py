@@ -168,6 +168,24 @@ def extract_cli_template(skill_content: str) -> Optional[str]:
     return None
 
 
+def _extract_usage_params(skill_content: str) -> Dict[str, str]:
+    """从 SKILL.md 的 Usage/示例部分提取脚本参数。
+
+    解析 ```bash 代码块中的 --key value 对，作为 extra_args 传入。
+    只提取静态参数（如 --type bar），不提取动态参数（如 --input data.csv）。
+    """
+    params: Dict[str, str] = {}
+    bash_blocks = re.findall(r'```bash\s*\n(.*?)```', skill_content, re.DOTALL)
+    for block in bash_blocks:
+        # 提取所有 --key value 对
+        for match in re.finditer(r'--([\w-]+)\s+([\w-]+)', block):
+            key, value = match.group(1), match.group(2)
+            # 只保留非动态的参数（排除 input, output, query 等）
+            if key not in ("input", "output", "output-svg", "output-png", "query", "content"):
+                params[key] = value
+    return params
+
+
 def build_cli_command(
     script_path: str,
     query: str,
@@ -364,11 +382,19 @@ async def _execute_script_skill(
             "skill_name": skill_name,
         }
 
-    # 确保用户查询作为参数传递给脚本
+    # 构造 CLI 命令：不再盲目添加 --content，交给 LLM 或用户 extra_args 决定参数
     if extra_args is None:
         extra_args = {}
+    # 仅在 SKILL.md 明确声明接受 content 参数时才自动传入
     if "content" not in extra_args and user_query:
-        extra_args["content"] = user_query
+        # 检查 SKILL.md 中是否有 usage 部分提示需要的参数
+        _usage_hint = _extract_usage_params(skill_content)
+        if _usage_hint:
+            # SKILL.md 有明确的参数说明，让 LLM 提取参数
+            extra_args.update(_usage_hint)
+        else:
+            # 无明确参数说明，作为 positional arg 或 query 传递
+            extra_args["query"] = user_query
 
     # 构造 CLI 命令
     cmd = build_cli_command(script_path, user_query, extra_args)

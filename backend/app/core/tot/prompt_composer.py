@@ -586,6 +586,11 @@ def compose_system_prompt(
     if tca_decision and tca_decision.get("injection_text"):
         composed += f"\n\n[Task Decomposition Guidance]\n{tca_decision['injection_text']}"
 
+    # -- Chat history injection -----------------------------------------------
+    chat_history = (enrichment or {}).get("chat_history")
+    if chat_history:
+        composed += f"\n\n[Conversation History]\n{chat_history}"
+
     logger.info(
         f"[ToT PromptComposer] role={role}, prompt_level={level}, "
         f"total_len={len(composed)}, base_len={len(filtered_base)}, "

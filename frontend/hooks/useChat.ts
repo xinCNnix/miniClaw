@@ -42,6 +42,14 @@ function extractBase64Images(text: string): GeneratedImage[] {
   return images
 }
 
+/** Append images to collectedImages, deduplicating by media_id. */
+function appendImagesDedup(target: GeneratedImage[], incoming: GeneratedImage[]): number {
+  const existingIds = new Set(target.map((img) => img.media_id))
+  const unique = incoming.filter((img) => !existingIds.has(img.media_id))
+  target.push(...unique)
+  return unique.length
+}
+
 export function useChat(options: UseChatOptions = {}): UseChatReturn {
   const { apiUrl, onError } = options
 
@@ -228,11 +236,12 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   break
 
                 case "tot_tools_executed":
-                  // BUG FIX: ToT 模式下需要收集 generated_images
-                  if (data.generated_images && data.generated_images.length > 0) {
-                    collectedImages.push(...data.generated_images)
-                    console.log(`[SSE] tot_tools_executed: ${data.generated_images.length} generated_images received`)
-                  }
+                  // [IMAGE_UNIFY] Backend no longer sends generated_images in tot_tools_executed.
+                  // Images render inline via synthesis_node's _resolve_image_refs.
+                  // if (data.generated_images && data.generated_images.length > 0) {
+                  //   const n = appendImagesDedup(collectedImages, data.generated_images)
+                  //   if (n > 0) console.log(`[SSE] tot_tools_executed: ${n} new generated_images`)
+                  // }
                   // 去重：同一 thought_id 只保留最新
                   setThinkingEvents((prev) => {
                     const filtered = prev.filter(e =>
@@ -323,27 +332,27 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                       timestamp: new Date().toISOString(),
                     },
                   ])
-                  // BUG FIX: ToT 完成时把收集到的图片附到最终消息
-                  if (collectedImages.length > 0) {
-                    setMessages((prev) => {
-                      const lastMessage = prev[prev.length - 1]
-                      if (lastMessage?.role === "assistant") {
-                        return [
-                          ...prev.slice(0, -1),
-                          { ...lastMessage, generated_images: [...collectedImages] },
-                        ]
-                      }
-                      return [
-                        ...prev,
-                        {
-                          role: "assistant" as const,
-                          content: assistantContent,
-                          generated_images: [...collectedImages],
-                          timestamp: new Date().toISOString(),
-                        },
-                      ]
-                    })
-                  }
+                  // [IMAGE_UNIFY] Commented out: images now render inline via content.
+                  // if (collectedImages.length > 0) {
+                  //   setMessages((prev) => {
+                  //     const lastMessage = prev[prev.length - 1]
+                  //     if (lastMessage?.role === "assistant") {
+                  //       return [
+                  //         ...prev.slice(0, -1),
+                  //         { ...lastMessage, generated_images: [...collectedImages] },
+                  //       ]
+                  //     }
+                  //     return [
+                  //       ...prev,
+                  //       {
+                  //         role: "assistant" as const,
+                  //         content: assistantContent,
+                  //         generated_images: [...collectedImages],
+                  //         timestamp: new Date().toISOString(),
+                  //       },
+                  //     ]
+                  //   })
+                  // }
                   break
 
                 case "tool_call":
@@ -401,9 +410,15 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                     // New pipeline: structured generated_images from v2 backend
                     const eventImages: GeneratedImage[] = data.generated_images || []
                     if (eventImages.length > 0) {
-                      collectedImages.push(...eventImages)
-                      console.log(`[SSE] tool_output: ${eventImages.length} generated_images received`)
+                      const n = appendImagesDedup(collectedImages, eventImages)
+                      if (n > 0) console.log(`[SSE] tool_output: ${n} new generated_images`)
                     }
+
+                    // [IMAGE_UNIFY] Detect API URL image refs (from build_image_markdown)
+                    // Do NOT append tool_output with /api/media/ to assistantContent —
+                    // the LLM's final response will include image references inline.
+                    // Appending here causes double rendering (tool_output + LLM response).
+                    const hasApiMediaRef = outputStr.includes("/api/media/")
 
                     // Legacy compat: detect base64 in output
                     const hasImage = outputStr.includes("data:image/")
@@ -436,20 +451,13 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                         timestamp: new Date().toISOString(),
                       },
                     ])
-                    // Update message with generated_images
+                    // [IMAGE_UNIFY] Update message content only (images render inline via ReactMarkdown)
                     setMessages((prev) => {
                       const lastMessage = prev[prev.length - 1]
-                      const updatedMsg = lastMessage?.role === "assistant"
-                        ? { ...lastMessage, content: assistantContent, generated_images: [...collectedImages] }
-                        : {
-                            role: "assistant" as const,
-                            content: assistantContent,
-                            generated_images: [...collectedImages],
-                            timestamp: new Date().toISOString(),
-                          }
-                      return lastMessage?.role === "assistant"
-                        ? [...prev.slice(0, -1), updatedMsg]
-                        : [...prev, updatedMsg]
+                      if (lastMessage?.role === "assistant") {
+                        return [...prev.slice(0, -1), { ...lastMessage, content: assistantContent }]
+                      }
+                      return [...prev, { role: "assistant" as const, content: assistantContent, timestamp: new Date().toISOString() }]
                     })
                   }
                   break
@@ -462,7 +470,23 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                 case "error":
                   throw new Error(data.error || "Unknown error")
 
+                case "pevr_execution_complete":
+                  if (data.generated_images && data.generated_images.length > 0) {
+                    appendImagesDedup(collectedImages, data.generated_images)
+                  }
+                  break
+
                 case "done":
+                  // [IMAGE_UNIFY] Commented out: images render inline via ReactMarkdown
+                  // if (collectedImages.length > 0) {
+                  //   setMessages(prev => {
+                  //     const last = prev[prev.length - 1]
+                  //     if (last?.role === "assistant") {
+                  //       return [...prev.slice(0, -1), { ...last, generated_images: [...collectedImages] }]
+                  //     }
+                  //     return prev
+                  //   })
+                  // }
                   break
 
                 case "self_correction":

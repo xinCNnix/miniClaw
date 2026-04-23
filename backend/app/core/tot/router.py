@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from typing import List, Dict, Any, AsyncIterator, Literal
 
 from langchain_core.messages import BaseMessage
@@ -20,6 +21,23 @@ from app.core.tot.state import ToTState, Thought
 from app.core.agent import AgentManager
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_base64_from_text(text: str) -> str:
+    """清理 LLM 回答中自行嵌入的 base64 图片数据。"""
+    if "data:image/" not in text and not re.search(r'[A-Za-z0-9+/=]{2000,}', text):
+        return text
+    text = re.sub(
+        r'!\[[^\]]*\]\(data:image/[^)]{100,}\)',
+        '[图片已在上方显示]',
+        text,
+    )
+    text = re.sub(
+        r'(?:[A-Za-z0-9+/]{4}){500,}={0,2}',
+        '[base64 数据已移除]',
+        text,
+    )
+    return text
 
 
 def get_settings_lazy():
@@ -223,7 +241,9 @@ class ToTOrchestrator:
             SSE event dicts (same format as existing agent)
         """
         user_query = messages[-1]["content"] if messages else ""
-        session_context = {}  # TODO: Extract from messages if needed
+        # Extract conversation history (everything except the last message)
+        chat_history = messages[:-1] if len(messages) > 1 else []
+        session_context = {"chat_history": chat_history}
 
         # Classify task complexity
         if enable_tot:
@@ -265,6 +285,9 @@ class ToTOrchestrator:
         max_depth: int
     ) -> AsyncIterator[Dict[str, Any]]:
         """Execute ToT reasoning with streaming."""
+        # Extract chat history (all messages except the last)
+        chat_history_dicts = messages[:-1] if len(messages) > 1 else []
+
         # Initialize ToT lifecycle logger
         from app.core.tot.tot_logger import ToTExecutionLogger
         tot_log = ToTExecutionLogger(
@@ -279,7 +302,7 @@ class ToTOrchestrator:
 
         with tot_log:
             async for event in self._stream_tot_reasoning_inner(
-                query, messages, system_prompt, max_depth, tot_log
+                query, messages, chat_history_dicts, system_prompt, max_depth, tot_log
             ):
                 yield event
 
@@ -287,6 +310,7 @@ class ToTOrchestrator:
         self,
         query: str,
         messages: List[Dict[str, str]],
+        chat_history_dicts: List[Dict[str, str]],
         system_prompt: str,
         max_depth: int,
         tot_log,
@@ -350,11 +374,22 @@ class ToTOrchestrator:
         tot_log.config["task_type"] = task_type
         tot_log.config["route_details"] = route_details
 
+        # Convert chat history dicts to LangChain BaseMessage objects
+        from langchain_core.messages import HumanMessage, AIMessage
+        chat_history: List[BaseMessage] = []
+        for msg in chat_history_dicts:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "user":
+                chat_history.append(HumanMessage(content=content))
+            elif role == "assistant":
+                chat_history.append(AIMessage(content=content))
+
         # Initialize ToT state
         initial_state: ToTState = {
             "user_query": query,
-            "session_context": {},
-            "messages": [],  # Will be populated from messages
+            "session_context": {"chat_history": chat_history_dicts},
+            "messages": chat_history,
             "thoughts": [],
             "current_depth": 0,
             "max_depth": max_depth,
@@ -429,6 +464,7 @@ class ToTOrchestrator:
                 "synthesis": "正在合成最终答案...",
             }
             _sent_nodes: set[str] = set()
+            _last_heartbeat = asyncio.get_event_loop().time()
 
             # Execute graph with streaming (no checkpointer, so no config needed)
             # Add timeout protection
@@ -441,6 +477,11 @@ class ToTOrchestrator:
                 streamed_trace_count = 0
                 last_tree_hash = ""
                 async for graph_output in self.graph.astream(initial_state):
+                    # Heartbeat: 如果距上次输出超过 15s，发送心跳保持 SSE 连接
+                    now = asyncio.get_event_loop().time()
+                    if now - _last_heartbeat > 15:
+                        _last_heartbeat = now
+                        yield {"type": "heartbeat", "message": "ToT reasoning in progress..."}
                     # graph_output is a dict {node_name: state_dict}
                     if isinstance(graph_output, dict):
                         # Get the state from the dict
@@ -586,6 +627,9 @@ class ToTOrchestrator:
                 # 如果有补正内容，追加到 final_answer
                 if tot_correction:
                     final_answer += f"\n\n**自我修正：**\n{tot_correction}"
+
+                # Clean LLM-embedded base64 data before yielding
+                final_answer = _clean_base64_from_text(final_answer)
 
                 yield {
                     "type": "content_delta",

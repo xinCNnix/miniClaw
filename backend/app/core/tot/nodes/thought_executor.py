@@ -18,7 +18,7 @@ from app.core.tot.state import ToTState, Thought, get_thought_map
 
 # Skill orchestrator integration (optional — graceful fallback)
 try:
-    from app.core.tot.skill_orchestrator import is_skill_file, extract_skill_name, execute_skill_from_skillmd
+    from app.core.tot.skill_orchestrator import is_skill_file, extract_skill_name, execute_skill_from_skillmd, _register_embedded_images
     _SKILL_ORCHESTRATOR_AVAILABLE = True
 except ImportError:
     _SKILL_ORCHESTRATOR_AVAILABLE = False
@@ -197,6 +197,11 @@ async def thought_executor_node(state: ToTState) -> ToTState:
             state["raw_sources"] = raw_sources
 
         # ---- reasoning trace ----
+        gen_images_for_trace = []
+        for r in results:
+            if isinstance(r, dict) and r.get("generated_images"):
+                gen_images_for_trace.extend(r["generated_images"])
+
         state["reasoning_trace"].append({
             "type": "thought_execution",
             "thought_id": thought.id,
@@ -204,6 +209,7 @@ async def thought_executor_node(state: ToTState) -> ToTState:
             "total_steps": len(thought.tool_calls),
             "executed_steps": thought.local_step_count,
             "errors": thought.local_error_count,
+            "generated_images": gen_images_for_trace,
         })
 
         # ---- tool_records for tot_logger ----
@@ -321,9 +327,12 @@ def _extract_and_defer_images(thought: Thought, state: ToTState) -> None:
     """探索阶段: 提取图片路径但不嵌入。"""
     for r in (thought.tool_results or []):
         result_text = str(r.get("result", ""))
-        paths = re.findall(r'(?:outputs/|data/outputs/)\S+\.(?:png|jpg|jpeg|svg)', result_text)
+        paths = re.findall(r'(?:outputs[/\\]|data[/\\]outputs[/\\])\S+\.(?:png|jpg|jpeg|svg)', result_text)
         if paths:
+            logger.info("[DeferImages] Thought %s: found %d image path(s): %s", thought.id, len(paths), paths)
             state.setdefault("deferred_image_paths", []).extend(paths)
+        else:
+            logger.debug("[DeferImages] Thought %s: no image paths in result (%d chars)", thought.id, len(result_text))
 
 
 # ---------------------------------------------------------------------------
@@ -416,17 +425,23 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
                 )
                 try:
                     from app.api.chat import get_agent_manager
+                    from app.config import get_settings
+                    from pathlib import Path as _Path
                     am = get_agent_manager()
-                    compiled = check_skill_policy_gate(
-                        skill_name, user_query, am.tools, {},
+                    skills_dir = _Path(get_settings().skills_dir)
+                    tool_plan = await check_skill_policy_gate(
+                        skill_name, user_query, am.tools, am.llm, skills_dir,
                     )
-                    if compiled:
-                        # Execute compiled tool call instead of raw read_file
+                    if tool_plan:
+                        # Execute all compiled tool plan steps
                         logger.info(
-                            "[ThoughtExecutor] SkillPolicy compiled '%s' → executing via %s",
-                            skill_name, compiled.get("tool"),
+                            "[ThoughtExecutor] SkillPolicy compiled '%s' → %d step(s): %s",
+                            skill_name, len(tool_plan),
+                            [s.get("tool", "?") for s in tool_plan],
                         )
-                        result, images = await _execute_compiled_skill(compiled, am.tools, user_query)
+                        result, images = await _execute_compiled_skill_plan(
+                            tool_plan, am.tools, user_query,
+                        )
                         _cache_tool_result(tool.name, args, result, images)
                         return result, images
                     else:
@@ -470,6 +485,7 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
                     )
                     result_str = skill_result.get("result", "")
                     gen_images = skill_result.get("generated_images") or []
+                    _cache_tool_result(tool.name, args, result_str, gen_images)
                     if gen_images:
                         logger.info("[ThoughtExecutor] Skill '%s' generated %d image(s)", skill_name, len(gen_images))
                     return result_str, gen_images
@@ -479,20 +495,34 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
 
     try:
         result = await tool.ainvoke(args)
-        result, gen_images = embed_output_images_v2(str(result))
+        result_str = str(result)
+        logger.info(
+            "[SingleTool] %s result: %d chars, preview: %s",
+            tool.name, len(result_str), result_str[:200],
+        )
+        result_str, gen_images = embed_output_images_v2(result_str)
         if gen_images:
             logger.info("[ThoughtExecutor] %s generated %d image(s)", tool.name, len(gen_images))
-        _cache_tool_result(tool.name, args, result, gen_images)
-        return result, gen_images
+        else:
+            logger.info("[SingleTool] %s: embed_output_images_v2 found 0 images", tool.name)
+        _cache_tool_result(tool.name, args, result_str, gen_images)
+        return result_str, gen_images
 
     except AttributeError:
         try:
             result = tool.invoke(args)
-            result, gen_images = embed_output_images_v2(str(result))
+            result_str = str(result)
+            logger.info(
+                "[SingleTool-fallback] %s result: %d chars, preview: %s",
+                tool.name, len(result_str), result_str[:200],
+            )
+            result_str, gen_images = embed_output_images_v2(result_str)
             if gen_images:
                 logger.info("[ThoughtExecutor] %s generated %d image(s)", tool.name, len(gen_images))
-            _cache_tool_result(tool.name, args, result, gen_images)
-            return result, gen_images
+            else:
+                logger.info("[SingleTool-fallback] %s: embed_output_images_v2 found 0 images", tool.name)
+            _cache_tool_result(tool.name, args, result_str, gen_images)
+            return result_str, gen_images
         except Exception as e:
             raise Exception(f"Tool execution failed: {str(e)}")
 
@@ -518,7 +548,7 @@ async def _execute_compiled_skill(
     tools: List[BaseTool],
     user_query: str,
 ) -> tuple[Any, list[dict]]:
-    """Execute a compiled skill tool call (output of SkillPolicy COMPILE).
+    """Execute a single compiled skill tool call.
 
     Args:
         compiled: {"tool": tool_name, "args": tool_args}
@@ -531,6 +561,14 @@ async def _execute_compiled_skill(
     tool_name = compiled["tool"]
     tool_args = compiled["args"]
 
+    # [DEBUG-LOG] Log the actual code being executed for python_repl
+    if tool_name == "python_repl" and "code" in tool_args:
+        code_preview = tool_args["code"][:500]
+        logger.info(
+            "[CompiledSkill] python_repl code (%d chars):\n---\n%s\n---",
+            len(tool_args["code"]), code_preview,
+        )
+
     tool_map = {t.name: t for t in tools}
     target_tool = tool_map.get(tool_name)
     if not target_tool:
@@ -541,10 +579,73 @@ async def _execute_compiled_skill(
     except AttributeError:
         result = target_tool.invoke(tool_args)
 
-    result_str, gen_images = embed_output_images_v2(str(result))
+    result_str = str(result)
+    # [DEBUG-LOG] Log raw result before image embedding
+    logger.info(
+        "[CompiledSkill] %s raw result: %d chars, preview: %s",
+        tool_name, len(result_str), result_str[:300],
+    )
+    # [DEBUG-LOG] Check for file paths in result
+    import re as _re
+    file_paths = _re.findall(
+        r'(?:outputs?[/\\]|data[/\\]outputs?[/\\])\S+\.(?:png|jpg|jpeg|svg|webp)',
+        result_str, _re.IGNORECASE,
+    )
+    if file_paths:
+        logger.info("[CompiledSkill] Found file paths in result: %s", file_paths)
+    else:
+        logger.info("[CompiledSkill] No image file paths found in result")
+
+    result_str, gen_images = embed_output_images_v2(result_str)
+    # [DEBUG-LOG] Log image embedding results
+    logger.info(
+        "[CompiledSkill] embed_output_images_v2: %d images found, result now %d chars",
+        len(gen_images), len(result_str),
+    )
+    if _SKILL_ORCHESTRATOR_AVAILABLE:
+        _register_embedded_images(result_str)
     if gen_images:
         logger.info("[ThoughtExecutor] Compiled skill via %s generated %d image(s)", tool_name, len(gen_images))
     return result_str, gen_images
+
+
+async def _execute_compiled_skill_plan(
+    tool_plan: List[Dict[str, Any]],
+    tools: List[BaseTool],
+    user_query: str,
+) -> tuple[str, list[dict]]:
+    """Execute a multi-step compiled skill tool_plan.
+
+    Args:
+        tool_plan: List of {"tool": tool_name, "args": tool_args}
+        tools: Available tools list.
+        user_query: User query string.
+
+    Returns:
+        (combined_result_str, all_generated_images) tuple.
+    """
+    all_results = []
+    all_images = []
+
+    logger.info("[CompiledPlan] Starting %d step(s) for skill plan", len(tool_plan))
+    for step_idx, step in enumerate(tool_plan):
+        logger.info(
+            "[CompiledPlan] Step %d/%d: tool=%s, args_keys=%s",
+            step_idx + 1, len(tool_plan),
+            step.get("tool", "?"), list(step.get("args", {}).keys()),
+        )
+        try:
+            result_str, gen_images = await _execute_compiled_skill(step, tools, user_query)
+            all_results.append(result_str)
+            all_images.extend(gen_images)
+        except Exception as e:
+            logger.error("[ThoughtExecutor] Compiled skill plan step failed: %s", e)
+            all_results.append(f"Error: {e}")
+
+    combined = "\n".join(all_results)
+    if _SKILL_ORCHESTRATOR_AVAILABLE:
+        _register_embedded_images(combined)
+    return combined, all_images
 
 
 # OLD: 同步执行 fallback（保留）

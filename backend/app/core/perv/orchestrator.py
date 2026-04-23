@@ -497,11 +497,21 @@ class PlannerOrchestrator:
                     "tool": obs.get("tool", ""),
                 }
 
-            yield {
+            # Collect generated_images from all observations
+            all_gen_images = []
+            for obs in observations:
+                gi = obs.get("generated_images")
+                if gi:
+                    all_gen_images.extend(gi)
+
+            exec_complete_event = {
                 "type": "pevr_execution_complete",
                 "steps_completed": len(observations),
                 "parallel": len(observations) > 1,
             }
+            if all_gen_images:
+                exec_complete_event["generated_images"] = all_gen_images
+            yield exec_complete_event
 
             # Collect observations for post-execution learning
             self._final_observations.extend(observations)
@@ -545,6 +555,26 @@ class PlannerOrchestrator:
             )
             final_answer = state_update.get("final_answer")
             if final_answer:
+                # [IMAGE_UNIFY] Append images from ALL loops, not just current
+                all_images = []
+                for obs in self._final_observations:
+                    gi = obs.get("generated_images")
+                    if gi:
+                        all_images.extend(gi)
+                # Also include images already appended by finalizer (current loop)
+                # Dedup by media_id
+                seen = set()
+                unique = []
+                for img in all_images:
+                    mid = img.get("media_id")
+                    if mid and mid not in seen:
+                        seen.add(mid)
+                        unique.append(img)
+                if unique:
+                    from app.core.streaming.image_embedder import build_image_markdown
+                    # Avoid double-appending if finalizer already added some
+                    if not any(img.get("api_url", "") in final_answer for img in unique):
+                        final_answer += build_image_markdown(unique)
                 self._final_answer = final_answer
                 yield {"type": "content_delta", "content": final_answer}
             else:

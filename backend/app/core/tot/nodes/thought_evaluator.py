@@ -219,7 +219,7 @@ async def _update_beam_selection(state: ToTState) -> None:
 
     if current_depth == 0:
         # Depth 0: 所有 root thought 按分数排序，取 top-B
-        root_thoughts = [t for t in all_thoughts if t.parent_id is None and t.status == "evaluated"]
+        root_thoughts = [t for t in all_thoughts if t.parent_id is None and t.status in ("evaluated", "done")]
         root_thoughts.sort(key=lambda t: t.evaluation_score or 0.0, reverse=True)
         selected = root_thoughts[:beam_width]
 
@@ -232,7 +232,7 @@ async def _update_beam_selection(state: ToTState) -> None:
             parent_id = beam[-1]
             children = [
                 t for t in all_thoughts
-                if t.parent_id == parent_id and t.status == "evaluated"
+                if t.parent_id == parent_id and t.status in ("evaluated", "done")
             ]
             beam_base_score = beam_scores[beam_idx] if beam_idx < len(beam_scores) else 0.0
             for child in children:

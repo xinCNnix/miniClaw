@@ -5,6 +5,7 @@ This module provides the core Agent functionality using direct LLM tool calling.
 """
 
 import json
+import os
 import asyncio
 import logging
 import time
@@ -15,7 +16,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 # Image embedding for tool output (graceful fallback)
 try:
-    from app.core.streaming.image_embedder import embed_output_images, embed_output_images_v2
+    from app.core.streaming.image_embedder import embed_output_images, embed_output_images_v2, build_image_markdown
 except ImportError:
     def embed_output_images(x: str) -> str: return x
     def embed_output_images_v2(x: str, max_age_seconds: int = 60) -> tuple[str, list[dict]]: return x, []
@@ -24,6 +25,11 @@ from app.core.llm import create_llm, LLMProvider
 from app.config import get_settings
 from app.logging_config import get_agent_logger
 from app.core.smart_stopping import should_stop_tool_calling
+
+
+def _get_skills_dir():
+    from pathlib import Path
+    return Path(get_settings().skills_dir)
 
 # Multi-round tool calling configuration
 MAX_TOOL_ROUNDS = 10  # Maximum rounds of tool calling (prevents infinite loops)
@@ -271,6 +277,13 @@ class AgentManager:
         start_time = time.time()
         _last_tool_calls: list[dict] = []  # 工具调用追踪（供反思评估使用）
 
+        # --- Token & timing metrics ---
+        from app.core.perv.pevr_logger import extract_token_usage
+        _round_metrics: list[dict] = []
+        _total_tool_duration = 0.0
+        _total_prompt_tokens = 0
+        _total_completion_tokens = 0
+
         try:
             logger.info("=== Agent astream START ===")
             logger.debug(f"Messages count: {len(messages)}")
@@ -448,11 +461,31 @@ class AgentManager:
 
                 llm_duration = time.time() - llm_start
 
-                logger.info(f"[Round {round_count + 1}] LLM response received in {llm_duration:.2f}s")
+                # Extract token usage from response
+                _tokens = extract_token_usage(response)
+                _round_prompt = _tokens["prompt_tokens"]
+                _round_completion = _tokens["completion_tokens"]
+                _total_prompt_tokens += _round_prompt
+                _total_completion_tokens += _round_completion
+
+                logger.info(
+                    f"[Round {round_count + 1}] LLM response in {llm_duration:.2f}s, "
+                    f"tokens: prompt={_round_prompt}, completion={_round_completion}"
+                )
 
                 # Check if LLM wants to call tools
                 if not hasattr(response, 'tool_calls') or not response.tool_calls:
                     logger.info(f"[Round {round_count + 1}] No tool calls, returning final response")
+                    # Record metrics for final round (direct answer)
+                    _round_metrics.append({
+                        "round_number": round_count + 1,
+                        "llm_duration": llm_duration,
+                        "tool_count": 0,
+                        "tool_duration": 0.0,
+                        "prompt_tokens": _round_prompt,
+                        "completion_tokens": _round_completion,
+                        "total_tokens": _round_prompt + _round_completion,
+                    })
                     # Debug: Log response content
                     if hasattr(response, 'content'):
                         content_len = len(response.content) if response.content else 0
@@ -543,6 +576,8 @@ class AgentManager:
                                 "name": event.get("tool_name", "unknown"),
                                 "success": event.get("status") == "success",
                                 "duration": event.get("duration", 0.0),
+                                "generated_images": event.get("generated_images") or [],
+                                "output_preview": event.get("output", "")[:200],
                             })
                         yield event
 
@@ -568,16 +603,51 @@ class AgentManager:
                         }
 
                         try:
-                            # Guard against empty tool arguments (LLM sometimes sends {} for python_repl etc.)
-                            if not tool_args or tool_args == {}:
+                            # Guard against empty or incomplete tool arguments
+                            _is_empty = (
+                                not tool_args
+                                or tool_args == {}
+                                or all(v in (None, "", []) for v in tool_args.values())
+                            )
+                            if _is_empty:
+                                logger.warning(
+                                    "[Round %d] Tool '%s' called with empty/invalid args: %s",
+                                    round_count + 1, tool_name, tool_args,
+                                )
+                                # Provide tool-specific hints so LLM can self-correct
+                                _hints = {
+                                    "terminal": "You must provide {'command': 'your shell command here'}. Example: {'command': 'python script.py --arg value'}",
+                                    "python_repl": "You must provide {'code': 'your python code here'}. Example: {'code': 'import matplotlib.pyplot as plt\\nplt.plot([1,2,3])\\nplt.savefig(\"outputs/chart.png\")'}",
+                                    "write_file": "You must provide {'path': 'file path', 'content': 'file content'}.",
+                                    "read_file": "You must provide {'path': 'file path to read'}.",
+                                    "fetch_url": "You must provide {'url': 'https://example.com'}.",
+                                    "search_kb": "You must provide {'query': 'your search query'}.",
+                                }
+                                _hint = _hints.get(tool_name, f"Provide the required parameters for {tool_name}.")
                                 raise ValueError(
-                                    f"Tool '{tool_name}' requires arguments but received none. "
-                                    f"Please provide the required parameters."
+                                    f"Tool '{tool_name}' was called without arguments. {_hint}"
                                 )
                             tool_start = time.time()
                             tool_output = await self._aexecute_tool(tool_name, tool_args)
                             tool_duration = time.time() - tool_start
-                            tool_output_str, gen_images = embed_output_images_v2(str(tool_output))
+
+                            # Skip secondary image processing if SkillIntercept
+                            # already appended markdown image links
+                            tool_output_str = str(tool_output)
+                            if "/api/media/" in tool_output_str:
+                                gen_images = []
+                                # Clean residual dicts from SkillIntercept output
+                                if "'status': 'success'" in tool_output_str and "'image_path'" in tool_output_str:
+                                    import re as _re_clean
+                                    tool_output_str = _re_clean.sub(
+                                        r"\{[^}]*'status':\s*'success'[^}]*'image_path'[^}]*\}",
+                                        '',
+                                        tool_output_str,
+                                    ).strip()
+                            else:
+                                tool_output_str, gen_images = embed_output_images_v2(tool_output_str)
+                                if gen_images:
+                                    tool_output_str += build_image_markdown(gen_images)
 
                             logger.info(f"[Round {round_count + 1}] Tool {tool_name} completed, {len(gen_images)} image(s)")
 
@@ -585,6 +655,8 @@ class AgentManager:
                                 "name": tool_name,
                                 "success": True,
                                 "duration": tool_duration,
+                                "generated_images": gen_images if gen_images else [],
+                                "output_preview": tool_output_str[:200],
                             })
 
                             yield {
@@ -592,15 +664,20 @@ class AgentManager:
                                 "tool_name": tool_name,
                                 "output": tool_output_str,
                                 "status": "success",
+                                "duration": tool_duration,
                                 "generated_images": gen_images if gen_images else None,
                             }
                         except Exception as e:
                             logger.error(f"[Round {round_count + 1}] Tool {tool_name} failed: {e}")
 
+                            tool_output_str = str(e)
+
                             _last_tool_calls.append({
                                 "name": tool_name,
                                 "success": False,
                                 "duration": 0.0,
+                                "generated_images": [],
+                                "output_preview": str(e)[:200],
                             })
 
                             yield {
@@ -608,6 +685,7 @@ class AgentManager:
                                 "tool_name": tool_name,
                                 "output": str(e),
                                 "status": "error",
+                                "duration": 0.0,
                             }
 
                         # Add tool result to conversation
@@ -620,11 +698,34 @@ class AgentManager:
                                 '[图片已生成]',
                                 llm_facing_output
                             )
+                        # Clean image generation result dicts — LLM sees summary, not raw dict
+                        if "'status': 'success'" in llm_facing_output and "'image_path'" in llm_facing_output:
+                            import re as _re
+                            match = _re.search(r"'image_path':\s*'([^']+\.\w+)'", llm_facing_output)
+                            filename = os.path.basename(match.group(1)) if match else "图片"
+                            llm_facing_output = f"[图片已成功生成: {filename}]"
                         lc_messages.append(ToolMessage(
                             content=llm_facing_output,
                             tool_call_id=tool_id
                         ))
                 # === Phase 2 并发执行结束 ===
+
+                # Accumulate tool duration for this round
+                _round_tool_duration = sum(
+                    tc.get("duration", 0.0) for tc in _last_tool_calls
+                )
+                _total_tool_duration += _round_tool_duration
+
+                # Record round metrics
+                _round_metrics.append({
+                    "round_number": round_count + 1,
+                    "llm_duration": llm_duration,
+                    "tool_count": len(valid_tool_calls),
+                    "tool_duration": _round_tool_duration,
+                    "prompt_tokens": _round_prompt,
+                    "completion_tokens": _round_completion,
+                    "total_tokens": _round_prompt + _round_completion,
+                })
 
                 # Increment round count and continue
                 round_count += 1
@@ -708,6 +809,15 @@ class AgentManager:
                     if hasattr(locals().get("response"), "content"):
                         agent_output = response.content or ""
 
+                    # Append image generation summary for reflection context
+                    all_gen_images = [
+                        img for tc in _last_tool_calls
+                        for img in tc.get("generated_images", [])
+                    ]
+                    if all_gen_images:
+                        filenames = [img["name"] if isinstance(img, dict) else os.path.basename(img) for img in all_gen_images[:5]]
+                        agent_output += f"\n\n[生成的图片: {len(all_gen_images)}张 ({', '.join(filenames)})]"
+
                     if agent_output:
                         result = await evaluate_and_correct(
                             user_query=user_query,
@@ -736,6 +846,23 @@ class AgentManager:
                 "error": str(e),
             }
 
+        # Emit execution summary for trajectory logging
+        total_duration = time.time() - start_time
+        yield {
+            "type": "execution_summary",
+            "total_duration": total_duration,
+            "total_rounds": len(_round_metrics),
+            "total_prompt_tokens": _total_prompt_tokens,
+            "total_completion_tokens": _total_completion_tokens,
+            "total_tokens": _total_prompt_tokens + _total_completion_tokens,
+            "total_tool_duration": _total_tool_duration,
+            "tools_executed": [
+                {"name": tc["name"], "success": tc["success"], "duration": tc["duration"]}
+                for tc in _last_tool_calls
+            ],
+            "rounds": _round_metrics,
+        }
+
         yield {"type": "done"}
 
     def _convert_messages(
@@ -752,6 +879,8 @@ class AgentManager:
 
             if role == "user":
                 lc_messages.append(HumanMessage(content=content))
+                # Store last user query for skill interception
+                self._last_user_query = content
             elif role == "assistant":
                 lc_messages.append(AIMessage(content=content))
 
@@ -760,24 +889,165 @@ class AgentManager:
     def _execute_tool(self, name: str, arguments: dict) -> Any:
         """Execute a tool synchronously."""
         logger.debug(f"Executing tool (sync): {name} with args: {arguments}")
+
+        # ---- Skill auto-interception ----
+        if name == "read_file":
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop and loop.is_running():
+                # We're inside an async context — schedule the coroutine
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    skill_result = pool.submit(
+                        asyncio.run, self._try_skill_intercept(arguments)
+                    ).result()
+            else:
+                skill_result = asyncio.run(self._try_skill_intercept(arguments))
+            if skill_result is not None:
+                return skill_result
+
         tool = self._get_tool_by_name(name)
         if tool:
-            # Use LangChain's standard invoke method (new API)
             result = tool.invoke(arguments)
             logger.debug(f"Tool {name} result size: {len(str(result))} chars")
             return result
         raise ValueError(f"Tool not found: {name}")
 
     async def _aexecute_tool(self, name: str, arguments: dict) -> Any:
-        """Execute a tool asynchronously."""
+        """Execute a tool asynchronously.
+
+        When read_file targets a SKILL.md, automatically intercept and
+        execute the skill via SkillPolicy instead of returning raw content
+        to the LLM (which often fails to construct correct tool args).
+        """
         logger.debug(f"Executing tool (async): {name} with args: {arguments}")
-        logger.debug(f"Arguments type: {type(arguments)}, keys: {arguments.keys() if isinstance(arguments, dict) else 'N/A'}")
+
+        # ---- Skill auto-interception for normal agent mode ----
+        if name == "read_file":
+            skill_result = await self._try_skill_intercept(arguments)
+            if skill_result is not None:
+                return skill_result
+
         tool = self._get_tool_by_name(name)
         if tool:
-            # Use LangChain's standard ainvoke method (new API)
             result = await tool.ainvoke(arguments)
             logger.debug(f"Tool {name} result size: {len(str(result))} chars")
             return result
+        raise ValueError(f"Tool not found: {name}")
+
+    async def _try_skill_intercept(self, arguments: dict) -> Optional[str]:
+        """Intercept read_file(SKILL.md) and auto-execute skill via SkillPolicy.
+
+        Uses the unified run_skill_policy entry point. Returns the skill result
+        string if intercepted, or None to fall through to normal read_file.
+        """
+        path = arguments.get("path", "")
+        if not path.endswith("SKILL.md"):
+            return None
+
+        import re
+        m = re.search(r'(?:data[\\/])?skills[\\/](\w[\w-]+)[\\/]SKILL\.md', path)
+        if not m:
+            return None
+        skill_name = m.group(1)
+
+        try:
+            from app.core.skill_policy.engine import run_skill_policy, _classify_skill_type
+            from app.core.skill_policy.types import PolicyInput
+        except ImportError:
+            logger.debug("[SkillIntercept] SkillPolicy not available, skipping")
+            return None
+
+        user_query = getattr(self, "_last_user_query", "")
+
+        skills_dir = _get_skills_dir()
+        skill_dir = skills_dir / skill_name
+        if not (skill_dir / "SKILL.md").exists():
+            return None
+
+        skill_type = _classify_skill_type(skill_name, skills_dir)
+
+        logger.debug("Agent skill intercept: detected skill '%s' type=%s", skill_name, skill_type)
+
+        # Read SKILL.md content for LLM compile
+        try:
+            skill_content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        except Exception:
+            return None
+
+        policy_input = PolicyInput(
+            user_query=user_query,
+            current_step={"tool": "read_file", "args": arguments},
+            available_tools=[t.name for t in self.tools],
+            candidate_skills=[],
+            skill_content=skill_content,
+            skill_name=skill_name,
+            skill_type=skill_type,
+            history={},
+        )
+
+        try:
+            output = await run_skill_policy(policy_input, self.llm)
+        except Exception as e:
+            logger.error("[SkillIntercept] run_skill_policy failed for '%s': %s", skill_name, e)
+            return None
+
+        action = output.get("action", "")
+        tool_plan = output.get("tool_plan", [])
+
+        if action != "EXECUTE_TOOL_PLAN" or not tool_plan:
+            logger.info(
+                "Agent skill intercept: '%s' action=%s, skipping",
+                skill_name, action,
+            )
+            return None
+
+        # Execute all steps in tool_plan via direct tool call (no re-interception)
+        logger.info(
+            "Agent skill intercept: '%s' compiled → %d step(s)",
+            skill_name, len(tool_plan),
+        )
+
+        results = []
+        for i, step in enumerate(tool_plan):
+            logger.info(
+                "Agent skill intercept: executing step %d/%d: %s",
+                i + 1, len(tool_plan), step.get("tool"),
+            )
+            try:
+                result = await self._aexecute_tool_direct(step["tool"], step["args"])
+                results.append(str(result))
+            except Exception as e:
+                logger.error("Agent skill intercept: step %d failed: %s", i + 1, e)
+                results.append(f"Error: {e}")
+
+        combined = "\n".join(results)
+        combined, gen_images = embed_output_images_v2(combined)
+        if gen_images:
+            logger.info("[SkillIntercept] '%s' generated %d image(s)", skill_name, len(gen_images))
+            combined += build_image_markdown(gen_images)
+        # Clean image generation result dicts from output
+        if "'status': 'success'" in combined and "'image_path'" in combined:
+            import re as _re_si
+            combined = _re_si.sub(
+                r"\{[^}]*'status':\s*'success'[^}]*'image_path'[^}]*\}",
+                '',
+                combined,
+            ).strip()
+        return combined
+
+    async def _aexecute_tool_direct(self, name: str, arguments: dict) -> Any:
+        """Execute a tool directly, bypassing skill interception.
+
+        Used by _try_skill_intercept to execute compiled tool_plan steps
+        without triggering recursive skill interception.
+        """
+        tool = self._get_tool_by_name(name)
+        if tool:
+            return await tool.ainvoke(arguments)
         raise ValueError(f"Tool not found: {name}")
 
     async def _execute_tool_with_tracking(
@@ -802,6 +1072,8 @@ class AgentManager:
         try:
             result = await self._aexecute_tool(tool_name, tool_args)
             result_str, gen_images = embed_output_images_v2(str(result))
+            if gen_images and "/api/media/" not in result_str:
+                result_str += build_image_markdown(gen_images)
             duration = time.time() - start
 
             logger.info(f"Tool {tool_name} completed in {duration:.2f}s, {len(gen_images)} image(s)")
@@ -869,6 +1141,7 @@ class AgentManager:
                     "tool_name": tool_calls[idx]["name"],
                     "output": str(result),
                     "status": "error",
+                    "duration": 0.0,
                 }
                 # Add error message to conversation
                 lc_messages.append(
@@ -919,6 +1192,11 @@ class AgentManager:
                     '[图片已生成]',
                     llm_output
                 )
+            # Clean image generation result dicts — LLM sees summary, not raw dict
+            if "'status': 'success'" in llm_output and "'image_path'" in llm_output:
+                match = re.search(r"'image_path':\s*'([^']+\.\w+)'", llm_output)
+                filename = os.path.basename(match.group(1)) if match else "图片"
+                llm_output = f"[图片已成功生成: {filename}]"
             lc_messages.append(
                 ToolMessage(
                     content=llm_output,
