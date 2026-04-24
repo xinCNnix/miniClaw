@@ -3,7 +3,7 @@ Chat Models - Pydantic models for chat API
 """
 
 from typing import List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Message(BaseModel):
@@ -34,6 +34,11 @@ class Message(BaseModel):
         description="Image attachments (for multimodal LLMs)",
     )
 
+    attachments: Optional[List[dict]] = Field(
+        default=None,
+        description="File attachments (image/document/audio/video)",
+    )
+
 
 class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
@@ -58,10 +63,22 @@ class ChatRequest(BaseModel):
         description="Additional context for the Agent",
     )
 
+    attachments: Optional[List[dict]] = Field(
+        default=None,
+        description="File attachments (image/document/audio/video)",
+    )
+
     images: Optional[List[dict]] = Field(
         default=None,
-        description="Image attachments for multimodal LLMs",
+        description="Legacy image attachments (mapped to attachments)",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _map_legacy_images(cls, values: dict) -> dict:
+        if values.get("images") and not values.get("attachments"):
+            values["attachments"] = values["images"]
+        return values
 
 
 class ToolCall(BaseModel):

@@ -9,19 +9,31 @@ export interface GeneratedImage {
   mime_type: string;
 }
 
+export type FileCategory = 'image' | 'document' | 'audio' | 'video'
+
+export interface FileAttachment {
+  type: FileCategory
+  content: string       // base64 data
+  mime_type: string
+  filename: string
+}
+
+export interface ActionButton {
+  id: string
+  label: string
+  variant: 'primary' | 'secondary' | 'danger'
+}
+
 export interface Message {
-  role: 'user' | 'assistant' | 'tool';
+  role: 'user' | 'assistant' | 'tool' | 'system';
   content: string;
   tool_calls?: ToolCall[];
   timestamp?: string;
-  images?: ImageAttachment[];
+  images?: FileAttachment[];
+  attachments?: FileAttachment[];
   generated_images?: GeneratedImage[];
-}
-
-export interface ImageAttachment {
-  type: 'image';
-  content: string; // base64 data
-  mime_type: string; // e.g. "image/png", "image/jpeg"
+  actions?: ActionButton[];
+  onAction?: (actionId: string) => void
 }
 
 export interface ToolCall {

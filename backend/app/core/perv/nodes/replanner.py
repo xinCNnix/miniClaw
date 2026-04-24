@@ -18,7 +18,8 @@ from app.core.llm import create_llm
 from app.core.llm_retry import retry_llm_call
 from app.core.perv.json_repair import repair_json_or_none
 from app.core.perv.prompts import build_replanner_prompt, build_tool_list_text, build_skills_list_text, extract_system_core
-from app.core.perv.pevr_logger import PEVRLogger, extract_token_usage
+from app.core.execution_trace.perv_trace import PEVRTrace as PEVRLogger
+from app.core.execution_trace.token_utils import extract_token_usage
 from app.tools import CORE_TOOLS
 
 logger = logging.getLogger(__name__)

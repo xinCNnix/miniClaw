@@ -289,7 +289,7 @@ class ToTOrchestrator:
         chat_history_dicts = messages[:-1] if len(messages) > 1 else []
 
         # Initialize ToT lifecycle logger
-        from app.core.tot.tot_logger import ToTExecutionLogger
+        from app.core.execution_trace.tot_trace import ToTTrace as ToTExecutionLogger
         tot_log = ToTExecutionLogger(
             task_name=query[:100],
             session_id="no-session",
@@ -677,6 +677,30 @@ class ToTOrchestrator:
 
         # Final done event（必须先发送，后续 TCA/Meta recording 可能卡住）
         yield {"type": "done"}
+
+        # === Async pattern learning (fire-and-forget, after done) ===
+        try:
+            _tot_tool_calls = []
+            for _thought in (final_state.get("thoughts", []) if final_state else []):
+                if hasattr(_thought, "tool_calls") and _thought.tool_calls:
+                    for _tc in _thought.tool_calls:
+                        _tot_tool_calls.append({
+                            "name": _tc.get("name", "unknown") if isinstance(_tc, dict) else "unknown"
+                        })
+            _tot_output = final_answer if final_answer else ""
+            if _tot_output:
+                from app.core.reflection.helpers import post_execution_learning
+                asyncio.create_task(
+                    post_execution_learning(
+                        user_query=query,
+                        agent_output=_tot_output,
+                        tool_calls=_tot_tool_calls,
+                        execution_time=0.0,
+                        execution_mode="tot",
+                    )
+                )
+        except Exception as _le:
+            logger.debug("[Learning] ToT post-learning trigger failed: %s", _le)
 
         # === TCA post-execution data recording（done 之后，不阻塞前端）===
         try:

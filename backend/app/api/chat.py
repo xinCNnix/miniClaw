@@ -23,14 +23,53 @@ from app.skills.bootstrap import bootstrap_skills
 from app.core.trajectory import AgentExecutionLogger
 from app.logging_config import get_agent_logger
 from app.core.tot.router import ToTOrchestrator
-from app.core.perv.orchestrator import get_orchestrator as get_perv_orchestrator
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
+
+# Lazy import to avoid circular dependency
+def _get_perv_orchestrator(**kwargs):
+    from app.core.perv.orchestrator import get_orchestrator
+    return get_orchestrator(**kwargs)
 agent_logger = get_agent_logger("api.chat")
 
 
 router = APIRouter(tags=["chat"])
+
+
+def _format_attachments(attachments: list[dict]) -> list[dict]:
+    """Convert attachments to LLM multimodal content format.
+
+    Frontend sends: [{type, content (data URL), mime_type, filename}]
+    Returns: list of content blocks for the LLM.
+    """
+    content_blocks = []
+    for att in attachments:
+        category = att.get("type", "document")
+        data_url = att.get("content", "")
+        mime_type = att.get("mime_type", "")
+        filename = att.get("filename", "")
+
+        if category == "image":
+            content_blocks.append({
+                "type": "image_url",
+                "image_url": {"url": data_url},
+            })
+        elif category == "audio":
+            # Extract raw base64 from data URL
+            base64_data = data_url.split(",", 1)[-1] if "," in data_url else data_url
+            audio_format = mime_type.split("/")[-1] if "/" in mime_type else "wav"
+            content_blocks.append({
+                "type": "input_audio",
+                "input_audio": {"data": base64_data, "format": audio_format},
+            })
+        else:
+            # video/document: include as text description
+            content_blocks.append({
+                "type": "text",
+                "text": f"[Attached file: {filename} ({mime_type})]",
+            })
+    return content_blocks
 
 # Global agent manager (singleton)
 _agent_manager: AgentManager = None
@@ -381,14 +420,10 @@ async def chat_stream_generator(
                 "role": "user",
                 "content": request.message,
             }
-            # Add images from current request if present
-            if request.images:
+            # Add attachments from current request if present
+            if request.attachments:
                 content_list = [{"type": "text", "text": request.message}]
-                for img in request.images:
-                    content_list.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                    })
+                content_list.extend(_format_attachments(request.attachments))
                 current_message["content"] = content_list
             messages.append(current_message)
 
@@ -496,7 +531,7 @@ async def chat_stream_generator(
                 session_id=request.session_id,
                 role="user",
                 content=request.message,
-                images=request.images,
+                images=request.attachments,
             )
 
             # Save assistant response to session (if any)
@@ -649,7 +684,7 @@ async def tot_stream_generator(
     session_manager = get_session_manager()
     session_manager.add_message(
         session_id=request.session_id, role="user",
-        content=request.message, images=request.images,
+        content=request.message, images=request.attachments,
     )
     if assistant_parts:
         assistant_full_response = "".join(assistant_parts)
@@ -954,7 +989,7 @@ async def chat(request: ChatRequest):
     # ── Tier 2: PERV（深度规划模式，用户手动触发）──
     elif deep_planning:
         try:
-            perv_orch = get_perv_orchestrator(
+            perv_orch = _get_perv_orchestrator(
                 agent_manager=agent,
                 session_id=request.session_id or "default",
             )
@@ -996,7 +1031,7 @@ async def chat(request: ChatRequest):
                 session_manager = get_session_manager()
                 session_manager.add_message(
                     session_id=request.session_id, role="user",
-                    content=request.message, images=request.images,
+                    content=request.message, images=request.attachments,
                 )
                 if assistant_parts:
                     full_resp = "".join(assistant_parts)

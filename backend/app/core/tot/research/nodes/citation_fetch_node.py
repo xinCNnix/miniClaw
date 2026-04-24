@@ -69,7 +69,8 @@ async def citation_fetch_node(state: ToTState) -> Dict:
 
     if not targets:
         logger.debug("citation_fetch_node: no citation targets, skipping")
-        return {}
+        chase_rounds = int(state.get("citation_chase_rounds", 0)) + 1
+        return {"citation_chase_rounds": chase_rounds}
 
     tools: List[BaseTool] = state.get("tools") or []
     existing_sources: List[Dict] = state.get("raw_sources") or []

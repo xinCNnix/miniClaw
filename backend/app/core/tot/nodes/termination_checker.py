@@ -83,6 +83,22 @@ async def termination_checker_node(state: ToTState) -> ToTState:
         })
         return state
 
+    # Check for low scores → backtrack and regenerate (before diminishing returns check)
+    backtrack_count = state.get("backtrack_count", 0) or 0
+    if current_score < 5.0 and backtrack_count < 1:
+        logger.info(
+            f"Score too low ({current_score:.2f} < 5.0), triggering regeneration "
+            f"instead of terminating (backtrack {backtrack_count}/1)"
+        )
+        state["needs_regeneration"] = [0]  # regenerate beam 0
+        state["backtrack_count"] = backtrack_count + 1
+        state["reasoning_trace"].append({
+            "type": "regeneration",
+            "reason": "low_score_backtrack",
+            "score": current_score,
+        })
+        return state
+
     # Check for diminishing returns (beam-aware)
     if beam_width:
         if _check_diminishing_returns_beam_aware(state):
@@ -194,12 +210,30 @@ def _check_diminishing_returns_beam_aware(state: ToTState) -> bool:
         logger.info(f"Beam score range {score_range:.2f} > 1.0, alternatives exist")
         return False
 
-    # 所有束分数接近且都低 → 收益递减
     avg_score = sum(beam_scores) / len(beam_scores)
-    if avg_score < 5.0:
+
+    # 分数较高且接近 → 已收敛，可以终止
+    if avg_score >= 7.0:
         return True
 
-    # 检查历史趋势
+    # 分数中等 → 检查历史趋势
+    if avg_score >= 5.0:
+        return _check_diminishing_returns(state)
+
+    # 分数很低且接近 → 初始想法不好，应回溯而非终止
+    # 但每个 depth 只允许回溯一次，避免死循环
+    backtrack_count = state.get("backtrack_count", 0) or 0
+    if backtrack_count < 1:
+        logger.info(
+            f"Beam scores low (avg={avg_score:.2f}), not terminating — "
+            f"initial thoughts may be poor, allowing backtrack ({backtrack_count}/1)"
+        )
+        return False
+
+    logger.info(
+        f"Beam scores low (avg={avg_score:.2f}) but backtrack limit reached "
+        f"({backtrack_count}/1), continuing exploration"
+    )
     return _check_diminishing_returns(state)
 
 

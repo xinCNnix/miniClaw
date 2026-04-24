@@ -371,6 +371,15 @@ async def _execute_script_skill(
     settings = get_settings()
     skills_dir = Path(settings.skills_dir)
 
+    # 从 Settings 中读取 skill 需要的环境变量并临时设置到系统环境变量
+    _env_backup = {}
+    _skill_env_keys = ["BAIDU_API_KEY", "ARXIV_API_KEY", "GITHUB_TOKEN"]
+    for key in _skill_env_keys:
+        val = getattr(settings, key.lower(), None) or getattr(settings, key, None)
+        if val:
+            _env_backup[key] = os.environ.get(key)
+            os.environ[key] = str(val)
+
     # 提取脚本路径
     script_path = extract_script_path(skill_name, skill_content, skills_dir)
 

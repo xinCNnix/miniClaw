@@ -165,10 +165,10 @@ const zhTranslations = {
     try_kb: '搜索知识库',
     try_skills: '使用可用技能',
     type_message: '输入消息...',
-    upload_image: '上传图片',
-    upload_image_title: '上传图片',
-    upload_only_images: '请只上传图片文件',
-    upload_too_large: '图片 {name} 太大，请上传小于 10MB 的图片',
+    upload_file_title: '上传文件',
+    upload_size_warning: '文件 \'{name}\' 大小为 {size}，上传可能较慢。是否继续？',
+    upload_confirm: '确认上传',
+    upload_cancel: '取消',
   },
   // Research Mode
   research_mode: {
@@ -363,10 +363,10 @@ const enTranslations = {
     try_kb: 'Search the knowledge base',
     try_skills: 'Use available skills',
     type_message: 'Type your message...',
-    upload_image: 'Upload image',
-    upload_image_title: 'Upload image',
-    upload_only_images: 'Please upload only image files',
-    upload_too_large: 'Image {name} is too large, please upload images smaller than 10MB',
+    upload_file_title: 'Upload file',
+    upload_size_warning: 'File \'{name}\' is {size}, upload may be slow. Continue?',
+    upload_confirm: 'Confirm upload',
+    upload_cancel: 'Cancel',
   },
   // Research Mode
   research_mode: {

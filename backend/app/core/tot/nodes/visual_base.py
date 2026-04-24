@@ -23,6 +23,32 @@ VISUAL_ROUTES = {
 }
 
 
+def _extract_json_array(text: str) -> list:
+    """Extract JSON array from LLM response, handling code blocks and mixed content."""
+    # 去掉 markdown code block
+    if "```" in text:
+        parts = text.split("```")
+        for part in parts:
+            s = part.strip()
+            if s.startswith("json"):
+                s = s[4:].strip()
+            if s.startswith("["):
+                return json.loads(s)
+
+    # 直接解析
+    text = text.strip()
+    if text.startswith("["):
+        return json.loads(text)
+
+    # 从文本中找第一个 JSON 数组
+    start = text.find("[")
+    end = text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(text[start:end + 1])
+
+    raise json.JSONDecodeError("No JSON array found", text, 0)
+
+
 async def generate_visuals(
     reduced_json: dict,
     user_query: str,
@@ -89,16 +115,20 @@ async def _analyze_visual_needs(
 
     response = await bound_llm.ainvoke([HumanMessage(content=prompt)])
 
-    try:
-        # 提取 JSON
+    text = response.content.strip()
+    if not text:
+        logger.warning("LLM returned empty response for visual analysis, retrying")
+        response = await bound_llm.ainvoke([HumanMessage(content=prompt)])
         text = response.content.strip()
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        return json.loads(text)
-    except (json.JSONDecodeError, IndexError) as e:
-        logger.warning(f"Failed to parse visual requests: {e}")
+
+    if not text:
+        logger.warning("LLM still returned empty after retry, skipping visuals")
+        return []
+
+    try:
+        return _extract_json_array(text)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(f"Failed to parse visual requests: {e}, raw text: {text[:200]}")
         return []
 
 

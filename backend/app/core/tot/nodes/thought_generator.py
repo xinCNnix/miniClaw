@@ -539,6 +539,25 @@ Focus on practical solutions with some creative elements."""
     return variants[variant % len(variants)]
 
 
+def _get_skill_hints_for_prompt() -> str:
+    """动态生成包含 skills 的工具列表，用于 user prompt。
+
+    Returns:
+        格式化的工具 + skill 提示文本。
+    """
+    try:
+        from app.core.tot.skill_orchestrator import build_skill_hints
+        return build_skill_hints()
+    except Exception:
+        # 回退到基础工具列表
+        return """Available tools:
+- search_kb: Search the knowledge base
+- fetch_url: Fetch content from a URL
+- read_file: Read a local file
+- python_repl: Execute Python code
+- terminal: Execute shell commands"""
+
+
 def _generate_combined_root_prompt(query: str, count: int, domain_profile: dict | None = None) -> str:
     """
     Generate a single combined prompt for root-level thoughts.
@@ -573,6 +592,9 @@ def _generate_combined_root_prompt(query: str, count: int, domain_profile: dict 
 
     requirements_text = "\n".join(branch_requirements)
 
+    # 动态生成包含 skills 的工具列表
+    skill_hints = _get_skill_hints_for_prompt()
+
     return f"""User query: "{query}"
 
 {tool_requirement}
@@ -580,21 +602,7 @@ CRITICAL INSTRUCTION: You MUST generate exactly {count} SEPARATE tool calls, one
 
 {requirements_text}
 
-Available tools:
-- search_kb: Search the knowledge base for relevant information
-  Example: search_kb(query="quantum computing", top_k=5)
-
-- fetch_url: Fetch content from a URL
-  Example: fetch_url(url="https://arxiv.org/search/?query=AI")
-
-- read_file: Read a local file
-  Example: read_file(path="document.txt")
-
-- python_repl: Execute Python code for analysis
-  Example: python_repl(code="print('analysis')")
-
-- terminal: Execute shell commands
-  Example: terminal(command="ls -la")
+{skill_hints}
 
 YOUR TASK - Generate {count} different tool calls for this query:
 
@@ -645,6 +653,9 @@ def _generate_combined_extension_prompt(
 {existing_branches_summary}
 新分支必须与已有思路显著不同。"""
 
+    # 动态生成包含 skills 的工具列表
+    skill_hints = _get_skill_hints_for_prompt()
+
     return f"""User query: "{query}"
 
 Previous reasoning steps (our current best path):
@@ -660,17 +671,13 @@ You should:
 2. Analyze previous results
 3. Continue reasoning toward the answer
 
-Available tools:
-- search_kb: Search the knowledge base
-- fetch_url: Fetch content from a URL (requires url parameter)
-- read_file: Read a local file (requires path parameter)
-- python_repl: Execute Python code
-- terminal: Execute shell commands
+{skill_hints}
 
 IMPORTANT: If you need to use tools, call them directly with proper arguments.
 For example:
 - search_kb(query="specific topic")
 - fetch_url(url="https://example.com")
+- read_file(path="data/skills/arxiv-search/SKILL.md")  # 触发 skill 自动执行
 
 Provide your next steps and use tools as appropriate."""
 

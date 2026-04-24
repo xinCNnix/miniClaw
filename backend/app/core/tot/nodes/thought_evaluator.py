@@ -166,8 +166,12 @@ def _select_with_subtree_diversity(
     candidates: List[Dict],
     beam_width: int,
     is_last_layer: bool,
+    min_per_beam: int = 2,
 ) -> List[Dict]:
-    """从候选中选择 top-B，确保子树多样性（最后一层除外）。"""
+    """从候选中选择 top-B，确保子树多样性（最后一层除外）。
+
+    中间层保证每个 beam 至少 min_per_beam 个子树入选。
+    """
     if is_last_layer:
         # 最后一层：纯粹按分数
         return candidates[:beam_width]
@@ -175,28 +179,27 @@ def _select_with_subtree_diversity(
     # 防御性排序：确保高分候选优先处理
     sorted_candidates = sorted(candidates, key=lambda c: c["path_score"], reverse=True)
 
-    unique_parents = len(set(c["parent_id"] for c in sorted_candidates))
-    max_per_parent = max(1, beam_width // max(1, unique_parents))
-    parent_count: Dict[str, int] = {}
-    selected = []
+    # 按 beam 分组
+    by_beam: Dict[int, List[Dict]] = {}
+    for c in sorted_candidates:
+        idx = c.get("parent_beam_idx", -1)
+        by_beam.setdefault(idx, []).append(c)
 
-    for cand in sorted_candidates:
-        pid = cand["parent_id"]
-        current_count = parent_count.get(pid, 0)
-        if current_count < max_per_parent:
-            selected.append(cand)
-            parent_count[pid] = current_count + 1
-            if len(selected) >= beam_width:
-                break
+    # 第一轮：每个 beam 保 top-min_per_beam 个
+    selected: List[Dict] = []
+    selected_ids: set = set()
+    for beam_idx, group in by_beam.items():
+        for cand in group[:min_per_beam]:
+            if id(cand["thought"]) not in selected_ids:
+                selected.append(cand)
+                selected_ids.add(id(cand["thought"]))
 
-    # 如果因多样性约束导致不足，从剩余候选中补充
-    if len(selected) < beam_width:
-        selected_ids = {id(s["thought"]) for s in selected}
-        remaining = [c for c in sorted_candidates if id(c["thought"]) not in selected_ids]
-        for cand in remaining:
-            selected.append(cand)
-            if len(selected) >= beam_width:
-                break
+    # 第二轮：剩余名额按分数全局分配
+    remaining = [c for c in sorted_candidates if id(c["thought"]) not in selected_ids]
+    for cand in remaining:
+        if len(selected) >= beam_width:
+            break
+        selected.append(cand)
 
     return selected[:beam_width]
 
@@ -225,6 +228,23 @@ async def _update_beam_selection(state: ToTState) -> None:
 
         state["active_beams"] = [[t.id] for t in selected]
         state["beam_scores"] = [t.evaluation_score or 0.0 for t in selected]
+
+        # 非最后一层：低分 thought 标记回溯而非剪枝
+        is_last_layer = current_depth >= max_depth - 1
+        if not is_last_layer:
+            backtrack_threshold = state.get("backtrack_score_threshold", 5.0)
+            low_score_beams = []
+            for i, thought in enumerate(selected):
+                score = thought.evaluation_score or 0.0
+                if score < backtrack_threshold:
+                    low_score_beams.append(i)
+                    logger.info(
+                        f"[Depth0-Backtrack] Beam {i} score {score:.2f} < {backtrack_threshold}, "
+                        f"marking for regeneration"
+                    )
+            if low_score_beams:
+                state["needs_regeneration"] = low_score_beams
+                state["backtrack_count"] = state.get("backtrack_count", 0) + len(low_score_beams)
     else:
         # Depth > 0: 收集所有活跃束尖端的新子节点 → B*k 候选
         candidates = []

@@ -537,7 +537,7 @@ def _load_skill_content(skill_name: str) -> Optional[str]:
 
 
 _COMPILE_SYSTEM_PROMPT = """\
-You are a Tool Policy Compiler. You MUST output a JSON tool_plan only — no markdown, no commentary.
+You are a Tool Policy Compiler. You MUST output a JSON tool_plan only — no markdown, no commentary, no Chinese text.
 
 RULES:
 - Only use tools from the [AVAILABLE_TOOLS] list.
@@ -545,6 +545,11 @@ RULES:
 - Output a JSON array. Nothing else.
 - Never exceed [MAX_TOOL_CALLS] total tool calls.
 - Each tool call should serve the [STEP_INTENT] purpose.
+- 禁止输出任何中文解释，只输出纯 JSON 数组。
+
+OUTPUT FORMAT (MANDATORY):
+Output ONLY a raw JSON array. No markdown fences. No explanation.
+Example: [{{"tool": "python_repl", "args": {{"code": "import importlib.util\\n..."}}}}]
 
 TYPE-SPECIFIC RULES:
 - For **instruction** type: Read the skill instructions carefully. Generate the ACTUAL tool calls described in the instructions, with parameters extracted from the user query. For example, if the skill says to run a curl command, generate a terminal tool call with that curl command. NEVER output read_file — that step is already done.
@@ -635,7 +640,14 @@ async def _llm_compile(
 
     logger.info("SkillPolicy COMPILE: '%s' (%s) → calling LLM", skill_name, skill_type)
 
-    response = await llm.ainvoke([
+    # Bind response_format to force JSON output (provider-dependent)
+    compile_llm = llm
+    try:
+        compile_llm = llm.bind(response_format={"type": "json_object"})
+    except Exception:
+        pass  # Provider may not support response_format
+
+    response = await compile_llm.ainvoke([
         SystemMessage(content=system_msg),
         HumanMessage(content=user_msg),
     ])
@@ -831,9 +843,11 @@ def _remap_args(
             code = re.sub(r'\bhandler\.', 'mod.', code)
             # Build alias assignments: draw = mod.draw
             aliases = "\n".join(f"{n} = mod.{n}" for n in imported_names) + "\n" if imported_names else ""
-            # Escape backslashes in LLM code to prevent Python string escapes
-            # corrupting LaTeX (e.g. \times → tab+imes, \frac → formfeed+rac)
-            code = code.replace('\\', '\\\\')
+            # NOTE: Disabled backslash escaping — too fragile for code containing
+            # LaTeX.  The LLM is responsible for correct Python string escaping;
+            # handler.py's _safe_text() catches mathtext parse failures.
+            # if "r'" not in code and 'r"' not in code:
+            #     code = re.sub(r'\\(?=[tnrfvba xuU0-7])', r'\\\\', code)
             code = importlib_preamble + "\n" + aliases + code
         else:
             # No usable code from LLM — inject discovery template as fallback

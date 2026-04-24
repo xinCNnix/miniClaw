@@ -83,12 +83,16 @@ async def extractor_node(state: ToTState) -> Dict:
 
         async with sem:
             try:
-                from app.skills.loader import execute_skill
+                import importlib.util
+                from pathlib import Path as _P
+                _handler = _P("data/skills/deep_source_extractor/scripts/handler.py").resolve()
+                _spec = importlib.util.spec_from_file_location("deep_source_extractor", _handler)
+                _mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
 
                 is_citation_chase = source_type == "citation_chase"
 
-                result = await execute_skill(
-                    "deep_source_extractor",
+                result = await _mod.run(
                     inputs={
                         "source_id": source_id,
                         "source_text": source_text,

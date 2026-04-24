@@ -2,36 +2,57 @@
 
 import { useState, KeyboardEvent, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Send, Loader2, Image as ImageIcon, X } from "lucide-react"
+import { Send, Loader2, X, FileText, Music, Video } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useTranslation } from "@/hooks/use-translation.hook"
+import type { FileCategory } from "@/types/chat"
 
-interface ImageAttachment {
+export interface PendingAttachment {
   file: File
   preview: string
   base64?: string
+  category: FileCategory
+  filename: string
 }
 
 interface InputBoxProps {
   className?: string
-  onSend: (content: string, images?: ImageAttachment[]) => void
+  onSend: (content: string, attachments?: PendingAttachment[]) => void
   disabled?: boolean
   placeholder?: string
+  onFileSizeWarning?: (file: File, pendingIndex: number) => void
 }
+
+function classifyFile(file: File): FileCategory {
+  const mime = file.type || ''
+  if (mime.startsWith('image/')) return 'image'
+  if (mime.startsWith('video/')) return 'video'
+  if (mime.startsWith('audio/')) return 'audio'
+  return 'document'
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+}
+
+const SIZE_WARNING = 20 * 1024 * 1024 // 20MB
+const MAX_ATTACHMENTS = 10
 
 export function InputBox({
   className,
   onSend,
   disabled,
   placeholder,
+  onFileSizeWarning,
 }: InputBoxProps) {
   const { t } = useTranslation()
   const [content, setContent] = useState("")
-  const [images, setImages] = useState<ImageAttachment[]>([])
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
@@ -41,10 +62,10 @@ export function InputBox({
 
   const handleSend = () => {
     const trimmed = content.trim()
-    if ((trimmed || images.length > 0) && !disabled) {
-      onSend(trimmed, images)
+    if ((trimmed || attachments.length > 0) && !disabled) {
+      onSend(trimmed, attachments)
       setContent("")
-      setImages([])
+      setAttachments([])
     }
   }
 
@@ -55,78 +76,98 @@ export function InputBox({
     }
   }
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
 
-    const newImages: ImageAttachment[] = []
+    const slotLeft = MAX_ATTACHMENTS - attachments.length
+    const toProcess = Array.from(files).slice(0, slotLeft)
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      if (!file.type.startsWith("image/")) {
-        alert(t('chat.upload_only_images'))
-        continue
+    let loadedCount = 0
+    const newAttachments: PendingAttachment[] = []
+
+    for (const file of toProcess) {
+      const category = classifyFile(file)
+      const preview = category === 'image' ? URL.createObjectURL(file) : ''
+      const pendingIndex = attachments.length + newAttachments.length
+
+      if (file.size > SIZE_WARNING && onFileSizeWarning) {
+        onFileSizeWarning(file, pendingIndex)
       }
 
-      // Limit size to 10MB
-      if (file.size > 10 * 1024 * 1024) {
-        alert(t('chat.upload_too_large', { name: file.name }))
-        continue
-      }
-
-      // 创建预览
-      const preview = URL.createObjectURL(file)
-
-      // 转换为 base64
       const reader = new FileReader()
       reader.onload = () => {
-        const base64 = reader.result as string
-        newImages.push({
+        newAttachments.push({
           file,
           preview,
-          base64,
+          base64: reader.result as string,
+          category,
+          filename: file.name,
         })
-
-        // 所有图片处理完成后更新状态
-        if (newImages.length === images.length + i) {
-          setImages(prev => [...prev, ...newImages])
+        loadedCount++
+        if (loadedCount === toProcess.length) {
+          setAttachments(prev => [...prev, ...newAttachments])
         }
       }
       reader.readAsDataURL(file)
     }
 
-    // 重置 input
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
   }
 
-  const handleRemoveImage = (index: number) => {
-    setImages(prev => {
-      const newImages = [...prev]
-      URL.revokeObjectURL(newImages[index].preview)
-      newImages.splice(index, 1)
-      return newImages
+  const handleRemove = (index: number) => {
+    setAttachments(prev => {
+      const next = [...prev]
+      if (next[index].preview) URL.revokeObjectURL(next[index].preview)
+      next.splice(index, 1)
+      return next
     })
+  }
+
+  const renderPreview = (att: PendingAttachment, index: number) => {
+    if (att.category === 'image' && att.preview) {
+      return (
+        <img
+          src={att.preview}
+          alt={att.filename}
+          className="h-20 w-20 object-cover"
+        />
+      )
+    }
+    const icons: Record<FileCategory, typeof FileText> = {
+      image: FileText,
+      video: Video,
+      audio: Music,
+      document: FileText,
+    }
+    const Icon = icons[att.category]
+    return (
+      <div className="h-20 w-20 flex flex-col items-center justify-center bg-gray-50 gap-1 px-1">
+        <Icon className="w-6 h-6 text-gray-400" />
+        <span className="text-[10px] text-gray-500 text-center truncate w-full">
+          {att.filename}
+        </span>
+        <span className="text-[9px] text-gray-400">
+          {formatSize(att.file.size)}
+        </span>
+      </div>
+    )
   }
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>
-      {/* Images Preview */}
-      {images.length > 0 && (
+      {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {images.map((image, index) => (
+          {attachments.map((att, index) => (
             <div
               key={index}
               className="relative group rounded-md overflow-hidden border border-gray-200"
             >
-              <img
-                src={image.preview}
-                alt={`Upload ${index + 1}`}
-                className="h-20 w-20 object-cover"
-              />
+              {renderPreview(att, index)}
               <button
-                onClick={() => handleRemoveImage(index)}
+                onClick={() => handleRemove(index)}
                 className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
               >
                 <X className="w-3 h-3" />
@@ -136,26 +177,24 @@ export function InputBox({
         </div>
       )}
 
-      {/* Input Area */}
       <div className={cn("flex gap-2 items-end", className)}>
-        {/* Image Upload Button */}
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
           multiple
           className="hidden"
-          onChange={handleImageUpload}
+          onChange={handleFileUpload}
         />
         <Button
-          variant="secondary"
+          variant="primary"
           size="md"
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
-          title={t('chat.upload_image_title')}
-          data-testid="image-upload-button"
+          title={t('chat.upload_file_title')}
+          data-testid="file-upload-button"
+          className="bg-white hover:bg-gray-50 border border-gray-200"
         >
-          <ImageIcon className="w-5 h-5" />
+          <span className="text-5xl leading-none font-bold -mt-1.5 text-[var(--ink-green)]">+</span>
         </Button>
 
         <textarea
@@ -177,7 +216,7 @@ export function InputBox({
         <Button
           variant="primary"
           onClick={handleSend}
-          disabled={disabled || (!content.trim() && images.length === 0)}
+          disabled={disabled || (!content.trim() && attachments.length === 0)}
           data-testid="send-button"
         >
           {disabled ? (

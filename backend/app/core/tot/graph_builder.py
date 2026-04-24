@@ -49,7 +49,7 @@ def route_after_extraction(state: ToTState) -> str:
     coverage_map = state.get("coverage_map")
     coverage_score = 0.0
     if coverage_map and isinstance(coverage_map, dict):
-        coverage_score = coverage_map.get("score", 0.0)
+        coverage_score = coverage_map.get("coverage_score", 0.0)
 
     if citation_rounds < citation_max and coverage_score < 0.7:
         return "citation_planner"
@@ -74,7 +74,7 @@ def route_after_contradiction(state: ToTState) -> str:
     coverage_map = state.get("coverage_map")
     coverage_score = 0.0
     if coverage_map and isinstance(coverage_map, dict):
-        coverage_score = coverage_map.get("score", 0.0)
+        coverage_score = coverage_map.get("coverage_score", 0.0)
 
     prev_score = state.get("prev_coverage_score", 0.0)
     min_delta = state.get("writer_min_delta", 0.15)
@@ -217,8 +217,19 @@ def build_tot_graph(
         }
     )
 
-    # citation_planner → citation_fetch → extractor (loop back)
-    graph.add_edge("citation_planner", "citation_fetch")
+    # citation_planner → citation_fetch (conditional) / coverage (escape hatch)
+    def _route_after_citation_planner(state):
+        targets = state.get("citation_targets")
+        if not targets:
+            logger.info("citation_planner returned no targets → routing to coverage")
+            return "coverage"
+        return "citation_fetch"
+
+    graph.add_conditional_edges(
+        "citation_planner",
+        _route_after_citation_planner,
+        {"citation_fetch": "citation_fetch", "coverage": "coverage"},
+    )
     graph.add_edge("citation_fetch", "extractor")
 
     # coverage → contradiction

@@ -37,6 +37,12 @@ export interface ChatRequest {
   session_id?: string;
   stream?: boolean;
   context?: Record<string, any>;
+  attachments?: Array<{
+    type: string;
+    content: string;
+    mime_type: string;
+    filename: string;
+  }>;
 }
 
 export interface ChatResponse {

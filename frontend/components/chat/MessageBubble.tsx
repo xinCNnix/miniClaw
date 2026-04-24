@@ -11,6 +11,15 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import type { Message, GeneratedImage } from "@/types/chat"
 
+const _BOX_DRAWING_RE = /[\u2500-\u257F\u2580-\u259F\u2190-\u21FF\u2B00-\u2BFF▶►]/
+
+function _isBoxDrawingText(text: string): boolean {
+  if (!text) return false
+  const lines = text.split('\n')
+  const boxLines = lines.filter((l) => _BOX_DRAWING_RE.test(l))
+  return boxLines.length >= 2
+}
+
 interface MessageBubbleProps {
   message: Message
   thinkingEvents?: unknown[]
@@ -152,6 +161,44 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
                       {children}
                     </blockquote>
                   )
+                },
+                table({ children }) {
+                  return (
+                    <div className="overflow-x-auto my-2">
+                      <table className="min-w-full border-collapse border border-gray-300 text-sm">
+                        {children}
+                      </table>
+                    </div>
+                  )
+                },
+                thead({ children }) {
+                  return <thead className="bg-gray-50 dark:bg-gray-800">{children}</thead>
+                },
+                th({ children }) {
+                  return (
+                    <th className="border border-gray-300 px-3 py-1.5 text-left font-semibold">
+                      {children}
+                    </th>
+                  )
+                },
+                td({ children }) {
+                  return (
+                    <td className="border border-gray-300 px-3 py-1.5">{children}</td>
+                  )
+                },
+                pre({ children }) {
+                  const text = String(children)
+                  if (_isBoxDrawingText(text)) {
+                    return (
+                      <pre
+                        className="my-2 p-3 rounded-md bg-gray-50 dark:bg-gray-900 border border-gray-200 overflow-x-auto text-sm leading-tight"
+                        style={{ fontFamily: 'var(--font-mono)' }}
+                      >
+                        {children}
+                      </pre>
+                    )
+                  }
+                  return <pre className="my-2">{children}</pre>
                 },
               }}
             >

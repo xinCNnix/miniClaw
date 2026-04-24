@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     custom_model: str = Field(default="", env="CUSTOM_MODEL")
     custom_base_url: str = Field(default="", env="CUSTOM_BASE_URL")
 
+    # Skill API Keys
+    baidu_api_key: str = Field(default="", env="BAIDU_API_KEY")
+
     # LangSmith Tracing (Optional)
     # ⚠️ 警告：启用 tracing 会将 API Key 和对话内容上传到 LangSmith 服务器
     # 仅在开发和调试时启用，生产环境务必保持为 false

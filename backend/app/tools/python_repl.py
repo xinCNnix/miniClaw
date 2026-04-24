@@ -287,16 +287,33 @@ class PythonREPLTool(BaseTool):
             code
         )
 
-        # Ensure output directory exists and set CWD so matplotlib savefig lands there
+        # Resolve paths: keep CWD at backend_root so relative sys.path entries
+        # (e.g. data/skills/...) resolve correctly. Redirect image output separately.
         backend_root = Path(__file__).resolve().parent.parent.parent
         output_dir = backend_root / "outputs"
         output_dir.mkdir(parents=True, exist_ok=True)
         original_cwd = os.getcwd()
-        os.chdir(str(output_dir))
+        os.chdir(str(backend_root))
 
         # Prepare local namespace with safe open() wrapper
         def safe_open(file_path, *args, **kwargs):
             return self._make_open(open, file_path, *args, **kwargs)
+
+        # Wrap matplotlib.pyplot.savefig so images always land in outputs/
+        # regardless of CWD. Injected into the namespace so user code calls
+        # our wrapper transparently.
+        _real_savefig = None
+
+        def _patched_savefig(fname, **kwargs):
+            """savefig wrapper: if fname is a bare filename or relative path
+            without directory separators, redirect to outputs/."""
+            import os as _os
+            if _real_savefig is None:
+                return  # shouldn't happen
+            # If fname has no directory component, save to outputs/
+            if _os.path.dirname(str(fname)) == "":
+                fname = str(output_dir / fname)
+            _real_savefig(fname, **kwargs)
 
         local_namespace = {
             "__name__": "__main__",
@@ -306,12 +323,14 @@ class PythonREPLTool(BaseTool):
 
         # Set matplotlib to non-interactive backend BEFORE any user code imports it
         # This prevents plt.show() from opening GUI windows and blocking the process
-        # original_backend = None  # preserved for reference
         try:
             import matplotlib
-            # matplotlib.use('Agg')  # original: could cause issues if already imported
             if matplotlib.get_backend() != 'agg':
                 matplotlib.use('Agg')
+            import matplotlib.pyplot as _plt
+            _real_savefig = _plt.savefig
+            _plt.savefig = _patched_savefig
+            local_namespace["plt"] = _plt
         except ImportError:
             pass
 
@@ -358,10 +377,6 @@ class PythonREPLTool(BaseTool):
                         # Not an expression, execute as statement
                         exec(code, local_namespace)
 
-                # Restore old trace
-                if config["max_operations"] > 0:
-                    sys.settrace(old_trace)
-
                 # Update persistent namespace with new variables
                 for key, value in local_namespace.items():
                     if key not in ["__name__", "__builtins__"]:
@@ -372,6 +387,11 @@ class PythonREPLTool(BaseTool):
             except (OperationLimitError, Exception) as e:
                 stderr_buffer.write(str(e))
                 return False
+            finally:
+                # Always clear trace so it doesn't fire during cleanup
+                # (e.g. in run_with_timeout's finally or the outer finally)
+                if config["max_operations"] > 0:
+                    sys.settrace(None)
 
         def run_with_timeout():
             """Execute code with timeout monitoring."""
@@ -422,6 +442,13 @@ class PythonREPLTool(BaseTool):
             success = False
         finally:
             os.chdir(original_cwd)
+            # Restore original matplotlib.pyplot.savefig if we patched it
+            if _real_savefig is not None:
+                try:
+                    import matplotlib.pyplot as _plt
+                    _plt.savefig = _real_savefig
+                except Exception:
+                    pass
 
         # Get captured output
         stdout_output = stdout_buffer.getvalue()

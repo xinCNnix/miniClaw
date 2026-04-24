@@ -166,8 +166,12 @@ def get_agent_logger(name: str = "agent") -> logging.Logger:
     return logger
 
 
-# --- 旧版 AgentExecutionLogger 已迁移到 core/trajectory/logger.py ---
-from app.core.trajectory import AgentExecutionLogger  # backward compat
+# --- 旧版 AgentExecutionLogger 已迁移到 core/execution_trace/ ---
+def __getattr__(name):
+    if name == "AgentExecutionLogger":
+        from app.core.execution_trace.normal_trace import NormalTrace
+        return NormalTrace
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 #
 # 以下为旧版代码（保留供参考）：
 #

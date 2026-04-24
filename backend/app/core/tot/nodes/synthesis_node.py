@@ -13,6 +13,7 @@ Generates the final answer based on task_mode / task_type:
 import asyncio
 import base64
 import hashlib
+import importlib.util
 import json
 import logging
 import re
@@ -30,6 +31,21 @@ from app.core.tot.research.prompts import (
     parse_json_output,
 )
 from app.core.tot.research.evidence_utils import format_evidence_for_prompt
+
+logger = logging.getLogger(__name__)
+
+_skills_dir = Path("data/skills")
+
+
+async def _call_skill_handler(skill_name: str, inputs: dict, context: dict):
+    """Load a skill's handler.py via importlib and call its run() function."""
+    handler_path = (_skills_dir / skill_name / "scripts" / "handler.py").resolve()
+    if not handler_path.exists():
+        raise FileNotFoundError(f"handler.py not found for skill '{skill_name}' at {handler_path}")
+    spec = importlib.util.spec_from_file_location(skill_name, handler_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return await mod.run(inputs=inputs, context=context)
 
 # MediaRegistry integration (optional — graceful fallback if unavailable)
 try:
@@ -240,7 +256,7 @@ async def _research_mode_synthesis(state: ToTState) -> str:
         ])
 
         # Extract token usage from synthesis LLM call
-        from app.core.perv.pevr_logger import extract_token_usage
+        from app.core.execution_trace.token_utils import extract_token_usage
         synthesis_token_usage = extract_token_usage(response)
 
         final_report = response.content
@@ -310,7 +326,7 @@ async def _verify_and_repair(
         ])
 
         # Extract token usage from verifier LLM call
-        from app.core.perv.pevr_logger import extract_token_usage as _etu
+        from app.core.execution_trace.token_utils import extract_token_usage as _etu
         verifier_token_usage = _etu(verifier_response)
 
         audit_result = parse_json_output(verifier_response.content)
@@ -362,7 +378,7 @@ async def _verify_and_repair(
         ])
 
         # Extract token usage from repair LLM call
-        from app.core.perv.pevr_logger import extract_token_usage as _etu2
+        from app.core.execution_trace.token_utils import extract_token_usage as _etu2
         repair_token_usage = _etu2(repair_response)
 
         repaired_report = repair_response.content
@@ -389,7 +405,6 @@ async def _research_writing_synthesis(state: ToTState) -> str:
     Stage B:  research_report_writer + visual_base (并行)
     Stage C:  doc-creator (组装最终文档)
     """
-    from app.skills.loader import execute_skill
     from app.core.tot.nodes.visual_base import generate_visuals
 
     llm = state["llm"]
@@ -409,7 +424,7 @@ async def _research_writing_synthesis(state: ToTState) -> str:
     extracted_list = await _extract_all_sources(sources, user_query, llm)
 
     # Stage A2: cluster reduce
-    reduced = await execute_skill(
+    reduced = await _call_skill_handler(
         "cluster_reduce_synthesis",
         inputs={
             "extracted_list": extracted_list,
@@ -421,7 +436,7 @@ async def _research_writing_synthesis(state: ToTState) -> str:
     reduced_json = reduced["reduced_json"]
 
     # Stage B: 并行生成文字报告 + 视觉内容
-    report_task = execute_skill(
+    report_task = _call_skill_handler(
         "research_report_writer",
         inputs={
             "reduced_json": reduced_json,
@@ -498,6 +513,9 @@ async def _generic_synthesis(state: ToTState) -> str:
             "IMPORTANT: If the tool results contain file paths (e.g., images, documents), "
             "you MUST include them in the final answer using markdown image syntax ![...](path) "
             "or markdown link syntax [file](path) so the user can see the output.\n"
+            "CRITICAL: NEVER generate or embed base64 data, data: URIs, SVG/XML code, "
+            "or raw image data in your output. Only reference images by their file paths or URLs. "
+            "Violating this rule will corrupt the output.\n"
             "Output in the same language as the user query."
         )
 
@@ -528,7 +546,7 @@ async def _generic_synthesis(state: ToTState) -> str:
     response = await llm.bind(max_tokens=16384).ainvoke(messages)
 
     # Extract token usage
-    from app.core.perv.pevr_logger import extract_token_usage
+    from app.core.execution_trace.token_utils import extract_token_usage
     generic_token_usage = extract_token_usage(response)
 
     result = response.content
@@ -549,8 +567,6 @@ async def _extract_all_sources(
     max_concurrent: int = 3,
 ) -> List[Dict]:
     """Concurrent extraction with hash-based dedup."""
-    from app.skills.loader import execute_skill
-
     sem = asyncio.Semaphore(max_concurrent)
     cache: Dict[str, Dict] = {}
 
@@ -563,7 +579,7 @@ async def _extract_all_sources(
             return cache[content_hash]
 
         async with sem:
-            result = await execute_skill(
+            result = await _call_skill_handler(
                 "deep_source_extractor",
                 inputs={**src, "user_query": user_query},
                 context={"llm": llm}
@@ -594,9 +610,7 @@ async def _assemble_document(
     output_format: str = "docx",
 ) -> str:
     """调用 doc-creator skill 组装最终文档。"""
-    from app.skills.loader import execute_skill
-
-    result = await execute_skill(
+    result = await _call_skill_handler(
         "doc-creator",
         inputs={
             "doc_type": output_format,
@@ -703,8 +717,8 @@ def _summarize_tool_result(r: dict) -> str:
         return f"[{r.get('tool','?')}] {text[:2000]}"
 
     # ---- Truncate very long text ----
-    if len(text) > 3000:
-        text = text[:3000] + "...[truncated]"
+    if len(text) > 5000:
+        text = text[:5000] + "...[truncated]"
 
     return f"[{r.get('tool','?')}] {text}"
 

@@ -127,3 +127,44 @@ async def _generate_correction(
     except Exception as e:
         logger.warning(f"[Reflection] Correction generation failed: {e}")
         return None
+
+
+async def post_execution_learning(
+    user_query: str,
+    agent_output: str,
+    tool_calls: list[dict],
+    execution_time: float,
+    execution_mode: str = "normal",
+) -> None:
+    """Fire-and-forget post-execution pattern learning for Normal/ToT agents.
+
+    Unified entry point that mirrors PERV's _post_execution_learning but
+    works without self/session_id attributes.  Called via asyncio.create_task
+    so it must never raise.
+    """
+    try:
+        from app.config import get_settings as _get_settings
+        settings = _get_settings()
+        if not getattr(settings, "enable_reflection_learning", False):
+            return
+
+        from app.core.tracking_context import get_session_id
+        from app.memory.auto_learning.reflection.learner import get_pattern_learner
+
+        session_id = get_session_id() or f"{execution_mode}_unknown"
+        learner = get_pattern_learner()
+        result = await learner.learn_from_execution(
+            session_id=session_id,
+            user_query=user_query,
+            agent_output=agent_output,
+            tool_calls=tool_calls,
+            execution_time=execution_time,
+        )
+
+        logger.info(
+            "[Learning] Post-execution learning completed: mode=%s, pattern=%s",
+            execution_mode,
+            bool(result),
+        )
+    except Exception as e:
+        logger.warning("[Learning] Post-execution learning failed: %s", e)

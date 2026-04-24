@@ -20,7 +20,8 @@ from app.core.llm import create_llm
 from app.core.llm_retry import retry_llm_call
 from app.core.perv.json_repair import repair_json_or_none
 from app.core.perv.prompts import build_executor_messages
-from app.core.perv.pevr_logger import PEVRLogger, extract_token_usage
+from app.core.execution_trace.perv_trace import PEVRTrace as PEVRLogger
+from app.core.execution_trace.token_utils import extract_token_usage
 from app.core.perv.scheduler import (
     build_execution_layers,
     adjust_parallelism,

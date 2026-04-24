@@ -19,7 +19,7 @@ min_confidence: 0.7
 - User prefers visual explanations with diagrams and illustrations (图示), including mathematical explanations with labeled elements and proofs (confidence: 0.95)
 - User prefers mathematical/scientific visualizations with diagrams (confidence: 0.95)
 - User expects diagrams to accurately match text descriptions, valuing accuracy and consistency between diagrams and explanatory text (confidence: 0.90)
-- User likes detailed mathematical explanations with diagrams and step-by-step reasoning (confidence: 0.90)
+- User likes detailed mathematical explanations with diagrams, formulas, and step-by-step reasoning (confidence: 0.90)
 - User frequently requests data visualization tasks including mathematical function visualizations (e.g., trigonometric functions, polynomial functions), graphs, charts, and bar charts (confidence: 0.95)
 - User prefers separate/individual plots when requesting multiple function graphs (confidence: 0.95)
 - User prefers using skill functionality (e.g., geometry-plotter, chart-plotter) for drawing graphs, plots, and charts, especially for mathematical function images, rather than directly writing Python code (confidence: 0.95)

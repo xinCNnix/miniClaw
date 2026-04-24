@@ -278,7 +278,7 @@ class AgentManager:
         _last_tool_calls: list[dict] = []  # 工具调用追踪（供反思评估使用）
 
         # --- Token & timing metrics ---
-        from app.core.perv.pevr_logger import extract_token_usage
+        from app.core.execution_trace.token_utils import extract_token_usage
         _round_metrics: list[dict] = []
         _total_tool_duration = 0.0
         _total_prompt_tokens = 0
@@ -631,11 +631,12 @@ class AgentManager:
                             tool_output = await self._aexecute_tool(tool_name, tool_args)
                             tool_duration = time.time() - tool_start
 
-                            # Skip secondary image processing if SkillIntercept
-                            # already appended markdown image links
+                            # SkillIntercept returns inline markdown + structured images
                             tool_output_str = str(tool_output)
                             if "/api/media/" in tool_output_str:
-                                gen_images = []
+                                # Pick up images stored by _try_skill_intercept
+                                gen_images = getattr(self, "_last_skill_images", []) or []
+                                self._last_skill_images = []  # clear after use
                                 # Clean residual dicts from SkillIntercept output
                                 if "'status': 'success'" in tool_output_str and "'image_path'" in tool_output_str:
                                     import re as _re_clean
@@ -865,6 +866,28 @@ class AgentManager:
 
         yield {"type": "done"}
 
+        # === Async pattern learning (fire-and-forget, after done) ===
+        try:
+            _user_query = messages[-1].get("content", "") if messages else ""
+            _agent_output = ""
+            if hasattr(locals().get("response"), "content"):
+                _agent_output = response.content or ""
+            if hasattr(locals().get("final_response"), "content") and not _agent_output:
+                _agent_output = final_response.content or ""
+            if _agent_output:
+                from app.core.reflection.helpers import post_execution_learning
+                asyncio.create_task(
+                    post_execution_learning(
+                        user_query=_user_query,
+                        agent_output=_agent_output,
+                        tool_calls=_last_tool_calls,
+                        execution_time=total_duration,
+                        execution_mode="normal",
+                    )
+                )
+        except Exception as _le:
+            logger.debug("[Learning] Agent post-learning trigger failed: %s", _le)
+
     def _convert_messages(
         self,
         messages: List[dict],
@@ -1037,6 +1060,8 @@ class AgentManager:
                 '',
                 combined,
             ).strip()
+        # Store gen_images for the serial execution path to pick up
+        self._last_skill_images = gen_images if gen_images else []
         return combined
 
     async def _aexecute_tool_direct(self, name: str, arguments: dict) -> Any:

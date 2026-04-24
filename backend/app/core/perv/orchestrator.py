@@ -17,7 +17,7 @@ import time
 from typing import AsyncIterator, Dict, Any, List, Optional
 
 from app.core.perv.graph import build_planner_graph
-from app.core.perv.pevr_logger import PEVRLogger, get_pevr_logger
+from app.core.execution_trace.perv_trace import PEVRTrace as PEVRLogger, get_pevr_logger
 
 logger = logging.getLogger(__name__)
 

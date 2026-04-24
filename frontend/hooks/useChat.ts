@@ -15,7 +15,7 @@ interface UseChatReturn {
   thinkingEvents: ThinkingEvent[]
   isLoading: boolean
   currentSessionId: string | null
-  sendMessage: (content: string, images?: any[], context?: Record<string, any>) => Promise<void>
+  sendMessage: (content: string, attachments?: any[], context?: Record<string, any>) => Promise<void>
   stopGeneration: () => void
   clearMessages: () => void
   loadMessages: (messages: Message[]) => void
@@ -59,17 +59,20 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  const sendMessage = useCallback(async (content: string, images: any[] = [], context: Record<string, any> = {}) => {
+  const sendMessage = useCallback(async (content: string, attachments: any[] = [], context: Record<string, any> = {}) => {
+    const mappedAttachments = attachments.map(att => ({
+      type: att.category || 'image',
+      content: att.base64,
+      mime_type: att.file.type,
+      filename: att.filename || att.file.name,
+    }))
+
     // Add user message
     const userMessage: Message = {
       role: "user",
       content,
       timestamp: new Date().toISOString(),
-      ...(images.length > 0 && { images: images.map(img => ({
-        type: "image",
-        content: img.base64,
-        mime_type: img.file.type,
-      })) }),
+      ...(mappedAttachments.length > 0 && { attachments: mappedAttachments }),
     }
     setMessages((prev) => [...prev, userMessage])
 
@@ -86,11 +89,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         session_id: currentSessionId || "default",
         stream: true,
         context: Object.keys(context).length > 0 ? context : undefined,
-        ...(images.length > 0 && { images: images.map(img => ({
-          type: "image",
-          content: img.base64,
-          mime_type: img.file.type,
-        })) }),
+        ...(mappedAttachments.length > 0 && { attachments: mappedAttachments }),
       }
 
       let assistantContent = ""
@@ -581,7 +580,8 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         content: msg.content,
         timestamp: msg.timestamp,
         ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
-        ...(msg.images && { images: msg.images }),
+        ...(msg.attachments && { attachments: msg.attachments }),
+        ...(msg.images && !msg.attachments && { attachments: msg.images }),
         ...(msg.generated_images && { generated_images: msg.generated_images }),
       }))
 
