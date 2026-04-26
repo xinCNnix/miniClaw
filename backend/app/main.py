@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
+from fastapi.staticfiles import StaticFiles
 import asyncio
 import logging
 import re
@@ -332,6 +333,11 @@ app.include_router(websocket_api.router, prefix="/api")
 app.include_router(embedding_api.router, prefix="/api/embedding")
 app.include_router(media_api.router, prefix="/api/media")
 app.include_router(wiki_api.router, prefix="/api")
+
+# Serve frontend static files (Docker deployment only)
+_static_dir = Path(__file__).resolve().parent.parent.parent / "static"
+if _static_dir.is_dir():
+    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="frontend")
 
 
 if __name__ == "__main__":

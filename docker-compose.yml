@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  backend:
+  miniclaw:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
-    container_name: miniclaw-backend
+    container_name: miniclaw
     ports:
       - "8002:8002"
     environment:
@@ -25,20 +25,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: miniclaw-frontend
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8002
-      - NODE_ENV=production
-    depends_on:
-      - backend
-    restart: unless-stopped
 
 volumes:
   data:
