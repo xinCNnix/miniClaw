@@ -738,6 +738,26 @@ export class APIClient {
 
     return response.json();
   }
+
+  async cancelRun(runId: string): Promise<{ success: boolean; message: string }> {
+    const response = await fetch(`${this.baseUrl}/api/chat/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: runId }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to cancel run: ${await response.text()}`);
+    }
+    return response.json();
+  }
+
+  async getRunStatus(runId: string): Promise<Record<string, unknown>> {
+    const response = await fetch(`${this.baseUrl}/api/chat/runs/${runId}`);
+    if (!response.ok) {
+      throw new Error(`Failed to get run status: ${await response.text()}`);
+    }
+    return response.json();
+  }
 }
 
 // Export singleton instance

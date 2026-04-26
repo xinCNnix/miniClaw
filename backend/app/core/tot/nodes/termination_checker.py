@@ -85,10 +85,11 @@ async def termination_checker_node(state: ToTState) -> ToTState:
 
     # Check for low scores → backtrack and regenerate (before diminishing returns check)
     backtrack_count = state.get("backtrack_count", 0) or 0
-    if current_score < 5.0 and backtrack_count < 1:
+    max_depth = state.get("max_depth", 3)
+    if current_score < 5.0 and backtrack_count < max_depth:
         logger.info(
             f"Score too low ({current_score:.2f} < 5.0), triggering regeneration "
-            f"instead of terminating (backtrack {backtrack_count}/1)"
+            f"instead of terminating (backtrack {backtrack_count}/{max_depth})"
         )
         state["needs_regeneration"] = [0]  # regenerate beam 0
         state["backtrack_count"] = backtrack_count + 1

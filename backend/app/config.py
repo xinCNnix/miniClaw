@@ -505,6 +505,29 @@ class Settings(BaseSettings):
     session_retention_days: int = 30            # Session file retention period
     session_archive_on_delete: bool = True      # Archive to EventLog before deletion
 
+    # === Watchdog 配置 ===
+    enable_watchdog: bool = Field(default=True, env="ENABLE_WATCHDOG")
+    watchdog_heartbeat_timeout: int = Field(
+        default=60, env="WATCHDOG_HEARTBEAT_TIMEOUT",
+        description="心跳超时秒数，超过则认为 run 卡死"
+    )
+    watchdog_poll_interval: int = Field(
+        default=5, env="WATCHDOG_POLL_INTERVAL",
+        description="Watchdog 扫描间隔秒数"
+    )
+    watchdog_stuck_threshold: int = Field(
+        default=4, env="WATCHDOG_STUCK_THRESHOLD",
+        description="连续相同状态哈希次数，超过则判定卡死"
+    )
+    watchdog_repeat_threshold: int = Field(
+        default=10, env="WATCHDOG_REPEAT_THRESHOLD",
+        description="连续相同动作次数，超过则判定循环"
+    )
+    watchdog_max_runtime: int = Field(
+        default=1800, env="WATCHDOG_MAX_RUNTIME",
+        description="最大运行时间秒数（默认30分钟兜底）"
+    )
+
 
 def _load_obfuscated_config() -> None:
     """

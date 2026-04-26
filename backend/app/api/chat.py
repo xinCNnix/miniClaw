@@ -9,6 +9,7 @@ import re
 import asyncio
 import logging
 import time
+import uuid
 from typing import AsyncIterator
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -290,7 +291,7 @@ def detect_task_boundary(msg1: dict, msg2: dict) -> bool:
             if (time2 - time1).total_seconds() > 60:  # 1 minute
                 logger.info("Task boundary: other topic → weather (after gap)")
                 return True
-        except:
+        except Exception:
             pass
 
     # Paper/Code/File switches
@@ -439,9 +440,19 @@ async def chat_stream_generator(
             collected_images = []  # Collect generated_images from tool outputs
 
             # ── 直接流式输出（无自动 PERV 重路由）──
+            # === Watchdog: 注册 run ===
+            from app.core.watchdog import get_registry as _wd_get_reg
+            _wd_registry = _wd_get_reg()
+            _wd_run_id = str(uuid.uuid4())
+            _wd_info = _wd_registry.register(_wd_run_id, session_id=request.session_id)
+            _wd_cancel = _wd_info.cancel_event
+            yield format_sse_event(ChatEvent(type="run_id", run_id=_wd_run_id))
+
             async for event in agent.astream(
                 messages=messages,
                 system_prompt=system_prompt,
+                cancel_event=_wd_cancel,
+                run_id=_wd_run_id,
             ):
                 event_count += 1
 
@@ -597,12 +608,17 @@ async def chat_stream_generator(
                 logging.warning(f"Failed to trigger memory extraction: {e}")
 
             # Send done event
+            _wd_registry.set_result(_wd_run_id, {"status": "completed"})
             yield format_sse_event(
                 ChatEvent(type="done")
             )
 
         except Exception as e:
             # Send error event
+            try:
+                _wd_registry.set_error(_wd_run_id, str(e))
+            except Exception:
+                pass
             yield format_sse_event(
                 ChatEvent(
                     type="error",
@@ -651,10 +667,20 @@ async def tot_stream_generator(
     tot_messages.append({"role": "user", "content": request.message})
 
     try:
+        # === Watchdog: 注册 ToT run ===
+        from app.core.watchdog import get_registry as _wd_get_reg
+        _wd_registry = _wd_get_reg()
+        _wd_run_id = str(uuid.uuid4())
+        _wd_info = _wd_registry.register(_wd_run_id, session_id=request.session_id)
+        _wd_cancel = _wd_info.cancel_event
+        yield format_sse_event(ChatEvent(type="run_id", run_id=_wd_run_id))
+
         async for event in orchestrator.process_request(
             messages=tot_messages,
             system_prompt=system_prompt,
             enable_tot=True,
+            cancel_event=_wd_cancel,
+            run_id=_wd_run_id,
         ):
             event_type = event.get("type", "unknown")
 
@@ -995,15 +1021,26 @@ async def chat(request: ChatRequest):
             )
             logger.info("[Routing] Tier 2: PERV Deep Planning (user-triggered)")
 
+            # === Watchdog: 注册 PERV run ===
+            from app.core.watchdog import get_registry as _wd_get_reg
+            _wd_registry = _wd_get_reg()
+            _wd_run_id = str(uuid.uuid4())
+            _wd_info = _wd_registry.register(_wd_run_id, session_id=request.session_id)
+            _wd_cancel = _wd_info.cancel_event
+
             async def _perv_stream():
                 """PERV 深度规划模式流（用户主动触发，不自动降级）。"""
                 assistant_parts = []
                 collected_images = []
 
+                yield format_sse_event(ChatEvent(type="run_id", run_id=_wd_run_id))
+
                 async for event in perv_orch.process_request(
                     [{"role": "user", "content": request.message}],
                     system_prompt,
                     force_mode="plan_execute",
+                    cancel_event=_wd_cancel,
+                    run_id=_wd_run_id,
                 ):
                     et = event.get("type", "")
                     if et == "content_delta":
@@ -1103,7 +1140,7 @@ async def health_check():
     try:
         agent = get_agent_manager()
         agent_initialized = True
-    except:
+    except Exception:
         agent_initialized = False
 
     # Count skills
@@ -1111,7 +1148,7 @@ async def health_check():
         bootstrap = bootstrap_skills()
         bootstrap.scan_skills()
         skills_count = bootstrap.get_skill_count()
-    except:
+    except Exception:
         skills_count = 0
 
     return {
@@ -1189,4 +1226,47 @@ async def _background_memory_extraction(session_id: str) -> None:
 
     except Exception as e:
         logger.error(f"Background memory extraction failed for {session_id}: {e}", exc_info=True)
+
+
+# === Watchdog: 取消和状态查询端点 ===
+
+from pydantic import BaseModel
+
+
+class CancelRequest(BaseModel):
+    run_id: str
+
+
+@router.post("/cancel")
+async def cancel_run(request: CancelRequest):
+    """取消正在运行的 Agent 执行。"""
+    from app.core.watchdog import get_registry
+    registry = get_registry()
+    info = registry.get(request.run_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Run {request.run_id} 不存在")
+    if info.is_terminal:
+        return {"success": True, "message": f"Run 已处于 {info.status} 状态"}
+    registry.request_cancel(request.run_id)
+    logger.info(f"[Watchdog] 用户请求取消 run {request.run_id}")
+    return {"success": True, "message": "Cancel requested"}
+
+
+@router.get("/runs/{run_id}")
+async def get_run_status(run_id: str):
+    """查询指定 run 的状态。"""
+    from app.core.watchdog import get_registry
+    registry = get_registry()
+    info = registry.get(run_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} 不存在")
+    return info.to_dict()
+
+
+@router.get("/runs")
+async def list_active_runs():
+    """列出所有活跃的 run。"""
+    from app.core.watchdog import get_registry
+    registry = get_registry()
+    return {"runs": [r.to_dict() for r in registry.list_active()]}
 

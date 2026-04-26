@@ -208,6 +208,20 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Failed to start MemoryJanitor: {e}")
 
+    # 启动 Watchdog 运行监控服务
+    try:
+        from app.config import get_settings as _get_ws
+        _ws = _get_ws()
+        if getattr(_ws, "enable_watchdog", True):
+            from app.core.watchdog import get_watchdog_service
+            _wd_service = get_watchdog_service()
+            await _wd_service.start()
+            logger.info("[Watchdog] 服务已启动")
+        else:
+            logger.info("[Watchdog] 已通过配置禁用")
+    except Exception as e:
+        logger.warning(f"[Watchdog] 启动失败: {e}")
+
 
 async def _warmup_embedding_model(embedding_manager, timeout: int):
     """
@@ -234,6 +248,15 @@ async def _warmup_embedding_model(embedding_manager, timeout: int):
 @app.on_event("shutdown")
 async def shutdown_event():
     """Run application shutdown tasks."""
+    # 停止 Watchdog 服务
+    try:
+        from app.core.watchdog import get_watchdog_service
+        service = get_watchdog_service()
+        if service.is_running:
+            await service.stop()
+    except Exception as e:
+        logger.warning(f"[Watchdog] 停止失败: {e}")
+
     logger.info(f"Shutting down {settings.app_name}")
 
 

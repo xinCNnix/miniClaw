@@ -151,7 +151,7 @@ class ToolMetrics(BaseModel):
             ToolMetrics instance
         """
         total = len(tool_calls)
-        successful = sum(1 for tc in tool_calls if tc.get("success", False))
+        successful = sum(1 for tc in tool_calls if tc.get("success", True))
         failed = total - successful
         duration = sum(tc.get("duration", 0.0) for tc in tool_calls)
         tool_names = [tc.get("name", "unknown") for tc in tool_calls]

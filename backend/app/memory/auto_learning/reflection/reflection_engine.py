@@ -251,10 +251,11 @@ class ReflectionEngine:
 
             except ValidationError as e:
                 logger.error(f"Invalid reflection output: {e}")
-                # Return fallback on validation error
-                return self._get_fallback_reflection(
-                    user_query, agent_output, tool_calls
-                )
+                if attempt >= 1:
+                    return self._get_fallback_reflection(
+                        user_query, agent_output, tool_calls
+                    )
+                # Allow 1 retry for validation errors
 
             except Exception as e:
                 logger.error(

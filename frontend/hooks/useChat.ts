@@ -58,6 +58,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   const [isLoading, setIsLoading] = useState(false)
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const currentRunIdRef = useRef<string | null>(null)
 
   const sendMessage = useCallback(async (content: string, attachments: any[] = [], context: Record<string, any> = {}) => {
     const mappedAttachments = attachments.map(att => ({
@@ -466,6 +467,23 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   setCurrentSessionId(sessionId)
                   break
 
+                case "run_id":
+                  currentRunIdRef.current = data.run_id
+                  break
+
+                case "cancelled":
+                  console.warn(`Run cancelled: ${data.reason}`)
+                  setIsLoading(false)
+                  abortControllerRef.current = null
+                  currentRunIdRef.current = null
+                  setMessages(prev => [...prev, {
+                    id: `cancelled-${Date.now()}`,
+                    role: 'assistant',
+                    content: `[执行已取消: ${data.reason}]`,
+                    timestamp: new Date().toISOString(),
+                  }])
+                  return
+
                 case "error":
                   throw new Error(data.error || "Unknown error")
 
@@ -547,10 +565,20 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   }, [currentSessionId, apiUrl, onError])
 
   const stopGeneration = useCallback(() => {
+    if (currentRunIdRef.current) {
+      const runId = currentRunIdRef.current
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8002'
+      fetch(`${baseUrl}/api/chat/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_id: runId }),
+      }).catch(e => console.error('Cancel request failed:', e))
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
       abortControllerRef.current = null
     }
+    currentRunIdRef.current = null
     setIsLoading(false)
   }, [])
 

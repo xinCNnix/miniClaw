@@ -178,12 +178,20 @@ class WikiStore:
             session.execute(text("""
                 UPDATE wiki_pages
                 SET content_hash = :chash,
+                    title = :title,
+                    aliases = :aliases,
+                    tags = :tags,
+                    confidence = :confidence,
                     summary = :summary,
                     evidence = :evidence,
                     updated_at = :now
                 WHERE page_id = :pid
             """), {
                 "chash": page.content_hash,
+                "title": page.title,
+                "aliases": json.dumps(page.aliases) if page.aliases else "[]",
+                "tags": json.dumps(page.tags) if page.tags else "[]",
+                "confidence": page.confidence,
                 "summary": page.summary,
                 "evidence": evidence_json,
                 "now": page.updated_at,

@@ -270,12 +270,17 @@ class AgentManager:
         self,
         messages: List[dict],
         system_prompt: str,
+        cancel_event: Optional[asyncio.Event] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         """
         Async stream agent responses.
         """
         start_time = time.time()
         _last_tool_calls: list[dict] = []  # 工具调用追踪（供反思评估使用）
+
+        # 重置 watchdog 追踪器
+        self._wd_tracker = None
 
         # --- Token & timing metrics ---
         from app.core.execution_trace.token_utils import extract_token_usage
@@ -343,6 +348,16 @@ class AgentManager:
             # Multi-round tool calling loop
             round_count = 0
             while round_count < max_tool_rounds:
+                # === Watchdog 取消检查 ===
+                if cancel_event and cancel_event.is_set():
+                    logger.info(f"[Watchdog] Run 在第 {round_count} 轮被取消")
+                    yield {
+                        "type": "cancelled",
+                        "reason": "cancelled_by_user",
+                        "round": round_count,
+                    }
+                    return
+
                 llm_start = time.time()
 
                 # === 流式响应开关 ===
@@ -727,6 +742,42 @@ class AgentManager:
                     "completion_tokens": _round_completion,
                     "total_tokens": _round_prompt + _round_completion,
                 })
+
+                # === Watchdog 心跳 + 进度 ===
+                if run_id:
+                    from app.core.watchdog import get_registry, ProgressTracker
+                    _wd_registry = get_registry()
+                    _wd_registry.heartbeat(run_id)
+                    if self._wd_tracker is None:
+                        self._wd_tracker = ProgressTracker()
+                    for tc in valid_tool_calls:
+                        self._wd_tracker.record_action({
+                            "type": "tool",
+                            "name": tc.get("name", "unknown"),
+                            "args": tc.get("args", {}),
+                        })
+                    self._wd_tracker.record_state({
+                        "round": round_count,
+                        "tool_count": len(_last_tool_calls),
+                        "last_tools": [tc.get("name") for tc in _last_tool_calls[-3:]],
+                    })
+                    _wd_registry.update_progress(run_id, self._wd_tracker.snapshot())
+                    if self._wd_tracker.is_state_stuck():
+                        logger.warning(f"[Watchdog] 状态卡死，第 {round_count} 轮")
+                        yield {
+                            "type": "cancelled",
+                            "reason": "state_stuck",
+                            "round": round_count,
+                        }
+                        return
+                    if self._wd_tracker.is_action_repeating():
+                        logger.warning(f"[Watchdog] 动作重复，第 {round_count} 轮")
+                        yield {
+                            "type": "cancelled",
+                            "reason": "action_repeating",
+                            "round": round_count,
+                        }
+                        return
 
                 # Increment round count and continue
                 round_count += 1

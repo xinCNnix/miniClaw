@@ -9,7 +9,7 @@ import hashlib
 import json
 import logging
 import re
-from typing import List, Dict, Any, AsyncIterator, Literal
+from typing import List, Dict, Any, AsyncIterator, Literal, Optional
 
 from langchain_core.messages import BaseMessage
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -226,7 +226,9 @@ class ToTOrchestrator:
         messages: List[Dict[str, str]],
         system_prompt: str,
         enable_tot: bool = False,
-        max_depth: int = 3
+        max_depth: int = 3,
+        cancel_event: Optional["asyncio.Event"] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Route request to simple agent or ToT agent.
@@ -264,7 +266,9 @@ class ToTOrchestrator:
                 user_query,
                 messages,
                 system_prompt,
-                max_depth
+                max_depth,
+                cancel_event=cancel_event,
+                run_id=run_id,
             ):
                 yield event
 
@@ -282,7 +286,9 @@ class ToTOrchestrator:
         query: str,
         messages: List[Dict[str, str]],
         system_prompt: str,
-        max_depth: int
+        max_depth: int,
+        cancel_event: Optional["asyncio.Event"] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Execute ToT reasoning with streaming."""
         # Extract chat history (all messages except the last)
@@ -302,7 +308,9 @@ class ToTOrchestrator:
 
         with tot_log:
             async for event in self._stream_tot_reasoning_inner(
-                query, messages, chat_history_dicts, system_prompt, max_depth, tot_log
+                query, messages, chat_history_dicts, system_prompt, max_depth, tot_log,
+                cancel_event=cancel_event,
+                run_id=run_id,
             ):
                 yield event
 
@@ -314,8 +322,11 @@ class ToTOrchestrator:
         system_prompt: str,
         max_depth: int,
         tot_log,
+        cancel_event: Optional["asyncio.Event"] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Inner ToT reasoning with logging. Called by _stream_tot_reasoning."""
+        self._wd_tracker = None
         # --- Route classification (LLM first, keywords fallback) ---
         task_mode, task_type, route_details = await self.classifier.classify_route(
             query, llm=self.agent_manager.llm
@@ -482,6 +493,17 @@ class ToTOrchestrator:
                     if now - _last_heartbeat > 15:
                         _last_heartbeat = now
                         yield {"type": "heartbeat", "message": "ToT reasoning in progress..."}
+
+                    # === Watchdog 取消检查 ===
+                    if cancel_event and cancel_event.is_set():
+                        logger.info(f"[Watchdog] ToT run 在节点 '{node_name}' 被取消")
+                        yield {
+                            "type": "cancelled",
+                            "reason": "cancelled_by_user",
+                            "node": node_name,
+                        }
+                        return
+
                     # graph_output is a dict {node_name: state_dict}
                     if isinstance(graph_output, dict):
                         # Get the state from the dict
@@ -529,6 +551,34 @@ class ToTOrchestrator:
                                         )
                             except Exception as e:
                                 logger.debug(f"[reflection] Micro eval trigger check failed: {e}")
+
+                    # === Watchdog 心跳 + 进度 ===
+                    if run_id and node_name:
+                        from app.core.watchdog import get_registry, ProgressTracker
+                        _wd_reg = get_registry()
+                        _wd_reg.heartbeat(run_id)
+                        if self._wd_tracker is None:
+                            self._wd_tracker = ProgressTracker()
+                        self._wd_tracker.record_action({
+                            "type": "node",
+                            "name": node_name,
+                        })
+                        state_fingerprint = {
+                            "node": node_name,
+                            "depth": state.get("current_depth") if isinstance(state, dict) else None,
+                        }
+                        if isinstance(state, dict) and "thoughts" in state:
+                            state_fingerprint["thought_count"] = len(state["thoughts"])
+                        self._wd_tracker.record_state(state_fingerprint)
+                        _wd_reg.update_progress(run_id, self._wd_tracker.snapshot())
+                        if self._wd_tracker.is_state_stuck():
+                            logger.warning(f"[Watchdog] ToT 状态卡死，节点 '{node_name}'")
+                            yield {"type": "cancelled", "reason": "state_stuck", "node": node_name}
+                            return
+                        if self._wd_tracker.is_action_repeating():
+                            logger.warning(f"[Watchdog] ToT 动作重复，节点 '{node_name}'")
+                            yield {"type": "cancelled", "reason": "action_repeating", "node": node_name}
+                            return
 
                     # 增量发送新增的 trace 事件
                     trace = state.get("reasoning_trace", [])

@@ -116,6 +116,7 @@ def setup_logging(
     # Also add to root if needed
     if log_to_console:
         agent_logger.addHandler(console_handler)
+    agent_logger.propagate = False
 
     # Configure specific loggers
     _configure_specific_loggers()

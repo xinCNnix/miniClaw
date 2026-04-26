@@ -50,7 +50,7 @@ export interface ChatState {
 }
 
 export interface SSEEvent {
-  type: 'thinking_start' | 'tool_call' | 'content_delta' | 'tool_output' | 'error' | 'done' | 'self_correction';
+  type: 'thinking_start' | 'tool_call' | 'content_delta' | 'tool_output' | 'error' | 'done' | 'self_correction' | 'run_id' | 'cancelled';
   content?: string;
   tool_calls?: ToolCall[];
   error?: string;
@@ -61,6 +61,10 @@ export interface SSEEvent {
   generated_images?: GeneratedImage[];
   correction?: string;
   quality_score?: number;
+  run_id?: string;
+  reason?: string;
+  round?: number;
+  node?: string;
 }
 
 export interface ThoughtTreeNode {

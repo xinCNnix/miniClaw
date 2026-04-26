@@ -281,7 +281,7 @@ class RewardModel:
         if tool_metrics.total_calls > 0:
             success_rate = tool_metrics.successful_calls / tool_metrics.total_calls
         else:
-            success_rate = 1.0  # No tools used, assume success
+            success_rate = 0.5  # No tools used, neutral default
         breakdown["tool_success_rate"] = success_rate * 0.5
 
         # 2. Tool diversity bonus (0.3 weight)

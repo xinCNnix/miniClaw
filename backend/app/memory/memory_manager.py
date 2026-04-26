@@ -301,7 +301,10 @@ class MemoryManager:
 
             # Anti-hallucination validation
             if self.settings.wiki_evidence_required:
-                await judge.validate_evidence(decision, conversation_text)
+                evidence_valid = await judge.validate_evidence(decision, conversation_text)
+                if not evidence_valid:
+                    logger.info("Wiki write skipped: evidence validation failed")
+                    return
 
             if decision.is_new_page:
                 # Create new page
@@ -362,7 +365,14 @@ class MemoryManager:
             if not conversation_text.strip():
                 return
 
-            pipeline = KGWritePipeline()
+            from app.memory.kg.extractor import KGExtractor
+            from app.memory.kg.entity_resolver import EntityResolver
+            from app.memory.kg.conflict_resolver import ConflictResolver
+
+            extractor = KGExtractor()
+            entity_resolver = EntityResolver(kg_store)
+            conflict_resolver = ConflictResolver(kg_store)
+            pipeline = KGWritePipeline(kg_store, extractor, entity_resolver, conflict_resolver)
             await pipeline.process_conversation(conversation_text, session_id)
             logger.info(f"KG write pipeline completed for session {session_id}")
 

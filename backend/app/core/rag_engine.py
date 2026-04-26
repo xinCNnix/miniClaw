@@ -413,11 +413,19 @@ class RAGEngine:
         doc_info = self._documents[doc_id]
         logger.info(f"Deleting document: {doc_info['filename']} (id: {doc_id})")
 
-        # Delete from vector store
-        # Note: Chroma doesn't support direct deletion by doc_id in the current version
-        # We'll need to rebuild the index without this document
+        # Delete vectors from ChromaDB
+        try:
+            collection = self._chroma_client.get_or_create_collection("knowledge_base")
+            results = collection.get(
+                where={"filename": doc_info["filename"]},
+                include=[]
+            )
+            if results and results.get("ids"):
+                collection.delete(ids=results["ids"])
+                logger.info(f"Deleted {len(results['ids'])} vectors for document {doc_id}")
+        except Exception as e:
+            logger.warning(f"Failed to delete vectors for document {doc_id}: {e}")
 
-        # For now, just remove from metadata
         del self._documents[doc_id]
         self._save_documents_metadata()
 

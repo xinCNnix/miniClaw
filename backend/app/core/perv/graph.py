@@ -29,6 +29,7 @@ is handled through the ``reasoning_trace`` field in PlannerState.
 import logging
 import sys
 import io
+import threading
 
 from langgraph.graph import StateGraph, END
 
@@ -44,6 +45,7 @@ from app.core.perv.nodes import (
 )
 
 logger = logging.getLogger(__name__)
+_stderr_lock = threading.Lock()
 
 
 def _should_verify(state: dict) -> str:
@@ -174,11 +176,12 @@ def build_planner_graph():
     # langgraph graph.compile() may internally write to stderr (e.g. mermaid
     # visualization), which fails with OSError on Windows uvicorn subprocess.
     # Temporarily redirect stderr to avoid the crash.
-    _prev_stderr = sys.stderr
-    sys.stderr = io.StringIO()
-    try:
-        compiled = graph.compile()
-    finally:
-        sys.stderr = _prev_stderr
+    with _stderr_lock:
+        _prev_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            compiled = graph.compile()
+        finally:
+            sys.stderr = _prev_stderr
     logger.info("PEVR graph compiled successfully (7 nodes, risk-based routing, skill_policy)")
     return compiled

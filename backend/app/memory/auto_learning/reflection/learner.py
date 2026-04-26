@@ -1,5 +1,6 @@
 """Pattern learner - main coordinator for reflection-driven learning."""
 
+import hashlib
 import logging
 import uuid
 
@@ -177,13 +178,13 @@ class PatternLearner:
 
                     # Encode state from user query
                     # Use simple hash-based encoding for now (production should use embedding manager)
-                    state_embedding = torch.randn(256)  # Placeholder for actual embedding
+                    state_embedding = torch.randn(384)  # Placeholder for actual embedding
 
                     # Map suggestion to action ID
                     if reflection.suggestions:
                         # Use first suggestion to determine action
                         suggestion_text = reflection.suggestions[0]
-                        action_id = hash(suggestion_text) % 20  # Map to 0-19
+                        action_id = int(hashlib.md5(suggestion_text.encode()).hexdigest(), 16) % 20  # Deterministic mapping to 0-19
                     else:
                         action_id = 0  # Default action
 
@@ -338,7 +339,7 @@ def get_pattern_learner() -> PatternLearner:
                 from app.memory.auto_learning.nn import get_pattern_nn
                 nn_model = get_pattern_nn()
                 buffer = EnhancedReplayBuffer(
-                    capacity=getattr(settings, "rl_batch_size", 32),
+                    capacity=getattr(settings, "rl_replay_buffer_capacity", 500),
                     enable_trajectory=True,
                     prioritized=True,
                 )

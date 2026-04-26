@@ -57,6 +57,7 @@ async def planner_node(state: dict) -> dict:
     enrichment: dict = state.get("enrichment") or {}
 
     start = time.time()
+    token_usage: dict = {}
 
     try:
         # --- Gather context for the prompt ---
@@ -264,7 +265,7 @@ async def planner_node(state: dict) -> dict:
             exc_info=True,
         )
         plan_steps = []
-        token_usage = locals().get("token_usage")
+        # token_usage already initialized before try block
         if pevr_log:
             pevr_log.log_planning(
                 loop_index=retry_count,

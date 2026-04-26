@@ -1,6 +1,6 @@
 # Available Skills
 This document lists all available skills that the Agent can use.
-**Total Skills**: 17
+**Total Skills**: 22
 ---
 
 ### agent-papers
@@ -60,6 +60,12 @@ This document lists all available skills that the Agent can use.
 **Location**: `data/skills/diagram-plotter`
 **Version**: 1.0.0
 
+### distill-persona
+**Description**: 从人物样本中蒸馏可复用的 Agent 技能 profile。当需要：(1) 从一组问答样本提取某人的决策风格和表达习惯， (2) 生成可执行的 skill profile (profile.json + skill.md + skill.py)，(3) 自动评判和修复 profile 质量， (4) 批量蒸馏多个 persona 为独立 skill 时使用。输入为人物名称 + 样本列表，输出为完整 skill 包。
+
+**Location**: `data/skills/distill-persona`
+**Version**: 1.0.0
+
 ### doc-creator
 **Description**: Create professional DOCX/XLSX/PPTX documents with embedded images, tables, and formatted text. Use when user asks to: (1) 'create a Word/Excel/PowerPoint document'; (2) 'generate a report with charts'; (3) 'export data to Office format'; (4) 'make a presentation with slides'; (5) insert charts/images into documents.
 **Location**: `data/skills/doc-creator`
@@ -94,6 +100,16 @@ This document lists all available skills that the Agent can use.
 **Location**: `data/skills/research_report_writer`
 **Version**: 1.0
 
+### scale_down_fix_bug
+**Description**: No description
+**Location**: `data/skills/scale_down_fix_bug`
+**Version**: 1.0.0
+
+### scale_down_refactor_module
+**Description**: No description
+**Location**: `data/skills/scale_down_refactor_module`
+**Version**: 1.0.0
+
 ### skill-creator
 **Description**: Create or update skills. Use when designing, structuring, validating, or packaging skills with scripts, references, and assets.
 **Location**: `data/skills/skill-creator`
@@ -102,5 +118,15 @@ This document lists all available skills that the Agent can use.
 ### skill_validator
 **Description**: Validate skill files before use. Use when: loading new skills, verifying skill integrity, checking skill metadata. Checks for: required fields, valid syntax, security issues.
 **Location**: `data/skills/skill_validator`
+**Version**: 1.0.0
+
+### tool_restricted_analyze_python
+**Description**: No description
+**Location**: `data/skills/tool_restricted_analyze_python`
+**Version**: 1.0.0
+
+### tool_restricted_fix_bug
+**Description**: No description
+**Location**: `data/skills/tool_restricted_fix_bug`
 **Version**: 1.0.0
 

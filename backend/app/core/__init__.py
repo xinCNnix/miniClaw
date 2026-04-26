@@ -7,6 +7,7 @@ Components:
 - Agent Manager: Creates and manages LangChain Agents
 - LLM Provider: Multi-LLM support (OpenAI/DeepSeek/Qwen/Ollama)
 - Tool Registry: Manages available tools
+- Dream: Offline batch self-replay skill formation system
 """
 
 __all__ = [

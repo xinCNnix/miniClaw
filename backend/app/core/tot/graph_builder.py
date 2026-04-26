@@ -51,6 +51,12 @@ def route_after_extraction(state: ToTState) -> str:
     if coverage_map and isinstance(coverage_map, dict):
         coverage_score = coverage_map.get("coverage_score", 0.0)
 
+    # Hard cap: prevent infinite citation loops
+    sub_rounds = state.get("research_sub_rounds", 0)
+    if sub_rounds >= 5:
+        logger.info("research_sub_rounds >= 5, forcing coverage")
+        return "coverage"
+
     if citation_rounds < citation_max and coverage_score < 0.7:
         return "citation_planner"
 

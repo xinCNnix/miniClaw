@@ -310,6 +310,7 @@ async def replanner_node(state: dict) -> dict:
 
     return {
         "plan": updated_plan,
+        "observations": [],
         "retry_count": retry_count + 1,
         "consecutive_failures": consecutive_failures + (1 if action != "repair_patch" else 0),
         "reasoning_trace": [

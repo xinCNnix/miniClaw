@@ -138,7 +138,7 @@ class SessionManager:
                 dt = datetime.fromisoformat(created_at)
                 timestamp = dt.strftime("%Y%m%d-%H%M%S")
                 session["filename"] = f"session-{timestamp}.json"
-            except:
+            except Exception:
                 # Fallback to session_id if parsing fails
                 session["filename"] = f"{session['session_id']}.json"
 

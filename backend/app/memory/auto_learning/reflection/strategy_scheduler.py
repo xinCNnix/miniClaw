@@ -6,6 +6,7 @@ strategies to neural network-generated continuous prompts.
 
 import logging
 import random
+from collections import deque
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -104,9 +105,9 @@ class StrategyScheduler:
         self.rollback_on_degradation = rollback_on_degradation
 
         # Performance tracking
-        self.baseline_rewards: list[dict] = []
-        self.nn_prediction_rewards: list[dict] = []
-        self.continuous_rewards: list[dict] = []
+        self.baseline_rewards: deque = deque(maxlen=100)
+        self.nn_prediction_rewards: deque = deque(maxlen=100)
+        self.continuous_rewards: deque = deque(maxlen=100)
 
         # User strategy history for consistency protection
         self.user_strategy_history: dict[str, list[int]] = {}
@@ -507,6 +508,7 @@ class StrategyScheduler:
         trajectory,
         tool_index_map: dict | None = None,
         skill_index_map: dict | None = None,
+        prompt_decoder=None,
     ) -> dict:
         """Get meta-policy advice from the strategy scheduler.
 
@@ -529,7 +531,7 @@ class StrategyScheduler:
                 - tool_suggestion: str | None
                 - skill_suggestion: str | None
         """
-        strategy = self.get_strategy(nn_model, state_vec, trajectory)
+        strategy = self.get_strategy(nn_model, state_vec, trajectory, prompt_decoder=prompt_decoder)
 
         # Map action_id back to tool/skill suggestions if maps provided
         tool_suggestion = None

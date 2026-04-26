@@ -168,7 +168,6 @@ async def executor_node(state: dict) -> dict:
     total_steps = len(plan)
     settings = get_settings()
     parallel_enabled: bool = getattr(settings, "perv_enable_parallel", True)
-    mode = "batch" if total_steps <= 3 else "step"
 
     try:
         if not plan:
@@ -177,6 +176,7 @@ async def executor_node(state: dict) -> dict:
 
         # For replan: only execute from cursor onward
         remaining_steps = plan[step_cursor:]
+        mode = "batch" if len(remaining_steps) <= 3 else "step"
         if not remaining_steps:
             logger.info(
                 "[PEVR Executor] No remaining steps (cursor=%d)", step_cursor
@@ -195,7 +195,7 @@ async def executor_node(state: dict) -> dict:
         if mode == "batch":
             new_observations = await _execute_batch(
                 task=task,
-                plan=plan,
+                plan=remaining_steps,
                 prior_observations=prior_observations,
                 system_prompt=system_prompt,
             )
@@ -516,7 +516,7 @@ async def _execute_layered(
         agg_tokens["total_tokens"] += tokens.get("total_tokens", 0)
 
     # Update cursor to end of executed steps
-    new_cursor = len(plan)
+    new_cursor = cursor + len(all_observations)
 
     return (
         all_observations,
@@ -630,10 +630,8 @@ async def _execute_parallel_steps(
         try:
             result, step_images = await _invoke_tool(tool_name, tool_inputs)
             output_key = step.get("output_key", "")
-            if output_key:
-                step_outputs[output_key] = result
 
-            return {
+            obs = {
                 "step_id": step_id,
                 "tool": tool_name,
                 "input": tool_inputs,
@@ -642,6 +640,9 @@ async def _execute_parallel_steps(
                 "evidence": _extract_evidence_refs(tool_name, tool_inputs, "success"),
                 "generated_images": step_images,
             }
+            if output_key:
+                obs["output_key"] = output_key
+            return obs
         except Exception as e:
             logger.warning(
                 "[PEVR Executor]   %s: %s FAILED (parallel): %s",
@@ -682,6 +683,9 @@ async def _execute_parallel_steps(
                 "evidence": [],
             })
         elif isinstance(r, dict):
+            output_key = r.pop("output_key", "")
+            if output_key:
+                step_outputs[output_key] = r.get("result", "")
             observations.append(r)
             if r.get("status") == "fail":
                 failures += 1

@@ -149,6 +149,7 @@ async def writer_node(state: ToTState) -> Dict:
     return {
         "draft": new_draft,
         "prev_coverage_score": current_score,
+        "reasoning_trace": state["reasoning_trace"],
     }
 
 
@@ -206,10 +207,11 @@ def _emit_sse_writer_event(
         draft: The updated draft text.
         coverage_score: Current coverage score.
     """
-    trace = state.setdefault("reasoning_trace", [])
+    trace = list(state.get("reasoning_trace", []))
     trace.append({
         "type": "research_draft_update",
         "draft_length": len(draft),
         "sections_count": draft.count("## "),
         "coverage_score": coverage_score,
     })
+    state["reasoning_trace"] = trace

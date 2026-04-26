@@ -70,7 +70,10 @@ async def citation_fetch_node(state: ToTState) -> Dict:
     if not targets:
         logger.debug("citation_fetch_node: no citation targets, skipping")
         chase_rounds = int(state.get("citation_chase_rounds", 0)) + 1
-        return {"citation_chase_rounds": chase_rounds}
+        return {
+            "citation_chase_rounds": chase_rounds,
+            "research_sub_rounds": state.get("research_sub_rounds", 0) + 1,
+        }
 
     tools: List[BaseTool] = state.get("tools") or []
     existing_sources: List[Dict] = state.get("raw_sources") or []
@@ -148,6 +151,7 @@ async def citation_fetch_node(state: ToTState) -> Dict:
         "raw_sources": combined_sources,
         "citation_chase_rounds": chase_rounds,
         "citation_targets": [],  # Clear targets after fetching
+        "research_sub_rounds": state.get("research_sub_rounds", 0) + 1,
     }
 
 

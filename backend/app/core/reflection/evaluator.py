@@ -10,6 +10,7 @@ Key Design:
 - Agent Macro: Post-execution, explicit, persisted (should_persist=True)
 """
 
+import copy
 import hashlib
 import json
 import logging
@@ -120,8 +121,8 @@ class UnifiedEvaluator:
         Returns:
             EvaluationResult: 评估结果
         """
-        # 检查缓存
-        if self.cache_enabled:
+        # 检查缓存（仅缓存微观评估）
+        if self.cache_enabled and evaluation_type.startswith("micro_"):
             cached = self._get_from_cache(evaluation_type, context)
             if cached:
                 logger.debug(f"Cache hit for {evaluation_type}")
@@ -398,7 +399,9 @@ class UnifiedEvaluator:
             )
 
             # 失败情况下质量分数较低
-            quality_score = 3.0
+            quality_score = min(
+                getattr(reflection, 'quality_score', 3.0), 5.0
+            )
 
             logger.info(f"Failure evaluation: problems={len(reflection.problems)}")
 
@@ -432,7 +435,7 @@ class UnifiedEvaluator:
             entry = self._cache[key]
             if time.time() - entry["timestamp"] < 300:  # 5分钟TTL
                 logger.debug(f"Cache hit: {evaluation_type}")
-                return entry["result"]
+                return copy.deepcopy(entry["result"])
             else:
                 del self._cache[key]  # 过期，删除
 

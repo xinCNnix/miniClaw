@@ -12,6 +12,7 @@ The ``run_skill_policy`` function is the unified entry point.  Each mode
 PolicyOutput.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -46,9 +47,9 @@ _DEFAULT_GUARD_CONFIG = {
 # headroom so multi-skill plans and skills without keyword catalogs are
 # not accidentally blocked.
 _STATUS_THRESHOLDS = {
-    "stable":      {"min_sim": 0.50},
-    "candidate":   {"min_sim": 0.65, "min_confidence": 0.7},
-    "provisional": {"min_sim": 0.75, "min_confidence": 0.6, "require_success": True},
+    "stable":      {"min_sim": 0.35},
+    "candidate":   {"min_sim": 0.50, "min_confidence": 0.7},
+    "provisional": {"min_sim": 0.65, "min_confidence": 0.6, "require_success": True},
 }
 
 # Phase 2: policy_score formula weights (docs/skill节点.md Section 3)
@@ -647,20 +648,32 @@ async def _llm_compile(
     except Exception:
         pass  # Provider may not support response_format
 
-    response = await compile_llm.ainvoke([
-        SystemMessage(content=system_msg),
-        HumanMessage(content=user_msg),
-    ])
+    max_retries = 2
+    for attempt in range(1, max_retries + 1):
+        response = await compile_llm.ainvoke([
+            SystemMessage(content=system_msg),
+            HumanMessage(content=user_msg),
+        ])
 
-    raw = response.content.strip()
-    parsed = _parse_tool_plan_json(raw)
+        raw = response.content.strip()
+        parsed = _parse_tool_plan_json(raw)
+
+        if parsed:
+            break
+
+        logger.warning(
+            "SkillPolicy COMPILE: '%s' attempt %d/%d invalid JSON: %s",
+            skill_name, attempt, max_retries, raw[:200],
+        )
+        if attempt < max_retries:
+            await asyncio.sleep(0.5)
 
     if not parsed:
         logger.warning(
-            "SkillPolicy COMPILE: LLM returned invalid JSON for '%s': %s",
-            skill_name, raw[:200],
+            "SkillPolicy COMPILE: LLM returned invalid JSON for '%s' after %d attempts: %s",
+            skill_name, max_retries, raw[:200],
         )
-        raise RuntimeError(f"LLM compile failed for {skill_name}: invalid JSON output")
+        raise RuntimeError(f"LLM compile failed for {skill_name}: invalid JSON output after {max_retries} attempts")
 
     # Tag each step with source metadata for guard validation
     for step in parsed:
@@ -972,25 +985,41 @@ def guard_compiled_plan(
             f"Tool plan exceeds max_tool_calls: {len(tool_plans)} > {config['max_tool_calls']}"
         )
 
-    # Duplicate tool call detection
+    # Duplicate tool call detection — auto-fix by removing duplicates
     if config["detect_dead_loop"]:
         seen_calls: set = set()
+        deduped_plans: List[Dict[str, Any]] = []
+        dup_count = 0
         for plan in tool_plans:
             call_sig = _tool_call_signature(plan)
             if call_sig in seen_calls:
-                issues.append(f"Duplicate tool call detected: {call_sig}")
-            seen_calls.add(call_sig)
+                dup_count += 1
+                logger.info("Guard DEDUP: removing duplicate call %s", call_sig[:80])
+            else:
+                seen_calls.add(call_sig)
+                deduped_plans.append(plan)
+        if dup_count:
+            logger.info("Guard DEDUP: removed %d duplicate call(s), %d remaining", dup_count, len(deduped_plans))
+            tool_plans = deduped_plans
 
-    # Duplicate URL detection
+    # Duplicate URL detection — auto-fix by removing duplicates
     if config["detect_duplicate_url"]:
         urls: List[str] = []
+        url_deduped: List[Dict[str, Any]] = []
+        dup_url_count = 0
         for plan in tool_plans:
             args = plan.get("args", {})
             url = args.get("url") or args.get("address", "")
             if url:
                 if url in urls:
-                    issues.append(f"Duplicate URL in tool plan: {url}")
+                    dup_url_count += 1
+                    logger.info("Guard DEDUP: removing duplicate URL %s", url[:80])
+                    continue
                 urls.append(url)
+            url_deduped.append(plan)
+        if dup_url_count:
+            logger.info("Guard DEDUP: removed %d duplicate URL(s), %d remaining", dup_url_count, len(url_deduped))
+            tool_plans = url_deduped
 
     if issues:
         return GuardResult(passed=False, issues=issues, final_plan=None)
