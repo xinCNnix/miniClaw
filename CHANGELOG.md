@@ -4,6 +4,60 @@
 
 ---
 
+## 2026-04-30 - v1.0.0: 全面自主学习与离线蒸馏系统
+
+### 核心变更
+
+#### 1. Dream 离线蒸馏系统
+- 新增 `backend/app/core/dream/` — 完整的离线蒸馏框架
+  - LangGraph 图: sampler → executor → mutator → judge → distiller → skill_dedup → regression → memory_writer
+  - TrajectoryStore: SQLite 轨迹索引 + 加权采样（失败样本加权、低分加权）
+  - 定时/手动触发: `ENABLE_DREAM` + `DREAM_SCHEDULE` cron 配置
+- 新增 `backend/app/api/dream.py` — Dream API 路由
+
+#### 2. Online Distill 在线蒸馏
+- 新增 `backend/app/core/online_distill/` — 执行过程中的实时轨迹蒸馏
+  - LangGraph 图: build_traj → distill → verify → write_traj → write_provisional
+
+#### 3. Execution Trace 统一轨迹记录
+- 新增 `backend/app/core/execution_trace/` — Normal/PERV/ToT 三模式统一轨迹
+  - JSON 持久化到 `logs/traces/` 目录
+
+#### 4. Watchdog 运行监控
+- 新增 `backend/app/core/watchdog/` — 异步任务监控与取消
+
+#### 5. 渐进式自主学习系统增强
+- Reflection Engine: 空 LLM 响应检测与 fallback 处理
+- Pattern Learning: reward 双通道计算 (semantic + shaping)
+- Neural Strategy: 5 阶段渐进调度器 (baseline → dominant)
+- TCA: 4 阶段部署 (collection → dominant)
+- Meta Policy: 渐进式策略注入
+
+#### 6. Bug 修复
+- Online Distill `write_traj`: list 类型写入 SQLite 序列化
+- Memory Extractor: LLM 空响应检测 + 重试增强 prompt
+- ReflectionEngine: 空 JSON 输出检测与拦截
+
+#### 7. 新增 Skills (6 个)
+- `distill-persona` — 人格特征提取
+- `scale_down_analyze_python` — Python 代码分析（蒸馏版）
+- `scale_down_fix_bug` — Bug 修复（蒸馏版）
+- `scale_down_refactor_module` — 模块重构（蒸馏版）
+- `tool_restricted_analyze_python` — 工具受限分析
+- `tool_restricted_fix_bug` — 工具受限修复
+
+#### 8. 新增前端组件
+- `MermaidRenderer.tsx` — Mermaid 图表渲染
+- `perv-card.tsx` — PERV 规划步骤卡片
+- `chart_render_node.py` — ToT Research 图表渲染节点
+
+#### 9. 文档与配置
+- README.md / QUICKSTART.md 全面更新
+- 版本号统一升至 1.0.0
+- `.env.example` 新增 Dream 配置段
+
+---
+
 ## 2026-04-20 - v0.2.0: SkillPolicy 统一技能编译系统
 
 ### 核心变更

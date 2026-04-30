@@ -11,121 +11,108 @@
 
 ## Project Introduction
 
-miniClaw is a lightweight, highly transparent AI Agent system that combines database-backed memory management with plugin-based extensibility. Unlike traditional black-box Agent systems, miniClaw maintains full visibility into Agent behavior through structured storage, traceable tool execution, and human-readable configuration files.
+miniClaw is a lightweight, highly transparent AI Agent system featuring multi-mode reasoning (Normal / PERV / ToT), progressive auto-learning, and plugin-based extensibility. Unlike traditional black-box Agent systems, miniClaw maintains full visibility into Agent behavior through structured storage, traceable tool execution, and human-readable configuration files.
 
 ### Core Features
 
+- **Three Execution Modes (User-Selected)**
+  - **Normal Agent**: Default fast single-pass tool-augmented conversation
+  - **PERV (Plan-Execute-Verify-Reflect)**: User-enabled Deep Planning mode for structured multi-step task execution with verification loops
+  - **ToT (Tree of Thoughts)**: User-enabled Research mode for multi-branch deep reasoning with beam search and evidence synthesis
+
+- **Progressive Auto-Learning System**
+  - **Reflection Engine**: Post-execution quality assessment (micro + macro), self-correction with quality scores
+  - **Pattern Learning**: Automatic extraction and reuse of successful strategies
+  - **Neural Strategy**: Progressive NN policy integration with 5-stage scheduler (baseline → dominant)
+  - **RL Training**: Transformer + MLP dual-head reward model with experience replay
+  - **TCA (Task Complexity Analysis)**: 4-phase deployment (collection → shadow → mixed → dominant)
+  - **Meta Policy**: Adaptive strategy injection with progressive stages
+
+- **Online/Offline Distillation**
+  - **Online Distill**: Real-time trajectory recording and skill distillation during execution
+  - **Dream (Offline)**: Scheduled or manual offline trajectory replay, analysis, and skill synthesis
+  - Trajectory store with weighted sampling (failure-heavy, low-score-heavy)
+
 - **Dual-Storage Memory System**
   - **SQLite Database**: Structured storage for conversations, memories, and user profiles
-  - **Vector Database**: ChromaDB for semantic retrieval and similarity search
-  - **Human-Readable Files**: `MEMORY.md` and `USER.md` for manual inspection and editing
+  - **Vector Database**: ChromaDB for hybrid retrieval (BM25 + semantic, reciprocal rank fusion)
+  - **Knowledge Graph**: Entity and relationship extraction with SQLite backend
+  - **Wiki Engine**: Long-term knowledge accumulation and retrieval
+  - **Human-Readable Files**: `MEMORY.md` and `USER.md` for manual inspection
   - LLM-powered automatic memory extraction with confidence scoring
-  - Memory categorization: preferences, facts, context, and patterns
-  - Automatic pruning and deduplication to prevent memory bloat
-  - Seamless synchronization between database and markdown files
 
-- **Plugin-Based Skills System**
-  - Follows Anthropic Agent Skills paradigm
-  - Each skill is a folder containing a `SKILL.md` documentation file
-  - Automatic dependency detection and installation (Python packages, system tools)
-  - Hot-pluggable design - extend capabilities without code changes
-  - Agent learns skills through natural language documentation
+- **Plugin-Based Skills System (23 Built-in)**
+  - Follows Anthropic Agent Skills paradigm with `SKILL.md` documentation
+  - **SkillPolicy Engine**: Unified compilation pipeline (Match → Gate → Compile → Guard)
+  - Automatic dependency detection (Python packages + system tools)
+  - Hot-pluggable — extend capabilities without code changes
+  - Built-in skills: arxiv-search, chart-plotter, geometry-plotter, diagram-plotter, get_weather, github, research_report_writer, skill-creator, and more
 
 - **Full Transparency & Observability**
-  - System prompt assembly from 6 dynamically generated components
-  - Traceable tool invocation process
-  - Auditable Agent decision-making
-  - Human-readable markdown files for debugging and inspection
+  - System prompt assembled from 6 dynamically generated components
+  - Execution trace recording with JSON persistence
+  - Watchdog system for run monitoring and cancellation
+  - Human-readable markdown files for debugging
 
 - **Security-First Design**
   - Terminal tool sandboxed with cross-platform command blacklist
   - File reading restricted to project directory
-  - API keys encrypted and stored securely
+  - API keys via environment variables, never hardcoded
   - Multi-round tool calling with context isolation
 
 - **Multi-LLM Provider Support**
-  - Support for Qwen, OpenAI, DeepSeek, Ollama, Claude, Gemini, and more
+  - Qwen, OpenAI, DeepSeek, Ollama, Claude, Gemini, and custom OpenAI-compatible APIs
   - Environment variable-based switching
-  - Mix local and cloud models seamlessly
 
-- **Tree of Thoughts (ToT) Reasoning System**
-  - Advanced reasoning with multiple thought branches exploration
-  - Three thinking modes: Heuristic (⚡), Analytical (🔬), Exhaustive (🌌)
-  - Automatic complexity detection and mode switching
-  - Real-time reasoning visualization
-  - Smart stopping to balance quality and speed
-
-- **PEVR Framework (Plan-Execute-Verify-Reflect)**
-  - Structured multi-step task execution with verification loops
-  - Risk-based routing: safe tasks run in parallel, risky tasks serialized
-  - Built-in verifier and re-planner for error recovery
-  - SkillPolicy: unified skill compilation pipeline (Match → Gate → Compile → Guard)
-
-- **Auto-Learning System**
-  - LLM-powered memory extraction with confidence scoring
-  - Pattern recognition and behavioral learning
-  - Offline embedding model support for air-gapped environments
-
-- **Research Mode**
-  - Deep research capabilities with structured multi-stage investigation
-  - Knowledge base + arXiv + web sources integration
-  - Evidence synthesis and cross-reference analysis
-  - Streamed research progress with stage indicators
+- **Multimodal Support**
+  - Image, audio, and document file upload and processing
+  - Images served via `/api/media/` (no base64 in LLM or session storage)
+  - Full Markdown rendering: tables, code blocks, ASCII art with monospace font
 
 ---
 
 ## Development & Testing Platform
 
-**Primary Development Environment: Windows 11**
+**Primary Development Environment: Windows 10/11**
 
-This project is developed and tested primarily on Windows 11. While designed to be cross-platform compatible (Windows, Linux, macOS), some features may have been optimized or tested more extensively on Windows.
+This project is developed and tested primarily on Windows. While designed to be cross-platform compatible (Windows, Linux, macOS), some features may have been optimized or tested more extensively on Windows.
 
-**Platform Compatibility:**
-- ✅ **Windows 10/11** - Primary development and testing platform
-- ✅ **Linux** - Compatible (tested on Ubuntu 20.04+)
-- ✅ **macOS** - Compatible (tested on macOS 12+)
-
-**Platform-Specific Notes:**
-- Windows: Use `start.bat` for quick start
-- Linux/macOS: Use `./start.sh` for quick start
-- Docker: Recommended for consistent behavior across platforms
+- **Windows 10/11** — Primary development and testing platform
+- **Linux** — Compatible (tested on Ubuntu 20.04+)
+- **macOS** — Compatible (tested on macOS 12+)
 
 ---
 
 ## Tech Stack
 
 ### Backend
-
-- **Python 3.10+** - Core language
-- **FastAPI** - High-performance web framework
-- **LangChain 1.x** - Agent orchestration engine (using `create_agent` API)
-- **LlamaIndex** - RAG hybrid retrieval engine
-- **Pydantic** - Data validation
+- **Python 3.10+** — Core language
+- **FastAPI** — High-performance web framework
+- **LangChain 1.x** — Agent orchestration engine (`create_agent` API)
+- **LangGraph** — Graph-based workflow (ToT, PERV, Dream)
+- **LlamaIndex** — RAG hybrid retrieval engine
+- **PyTorch** — Neural strategy and RL training
+- **Pydantic** — Data validation
 
 ### Frontend
-
-- **Next.js 14+** - React framework (App Router)
-- **TypeScript** - Type safety
-- **Shadcn/UI** - High-quality UI component library
-- **Monaco Editor** - Code editor
-- **Tailwind CSS** - Styling framework (Frosty Glass theme)
+- **Next.js 16+** — React framework (App Router + Turbopack)
+- **TypeScript** — Type safety
+- **Shadcn/UI** — UI component library
+- **Tailwind CSS** — Styling framework
 
 ### Storage & Deployment
-
-- **File System** - Local data storage
-- **Docker** - Containerized deployment
-- **SQLite** - Vector storage (Chroma)
+- **SQLite** — Conversations, trajectories, knowledge graph
+- **ChromaDB** — Vector storage (hybrid retrieval)
+- **Docker** — Containerized deployment
 
 ---
 
 ## Quick Start
 
-### 🚀 One-Click Installation (Recommended)
+### One-Click Installation (Recommended)
 
 **Windows Users:**
 ```bash
-# Double-click start.bat
-# Or run from command line
 start.bat
 ```
 
@@ -135,57 +122,35 @@ chmod +x start.sh
 ./start.sh
 ```
 
-**That's it!** The startup scripts will:
-- ✅ Automatically check and install dependencies (Python, Node.js, conda)
-- ✅ Create virtual environments if needed
-- ✅ Install all required packages
-- ✅ Start backend (port 8002) and frontend (port 3000)
-- ✅ Open browser automatically
+The startup scripts will:
+- Verify Python and Node.js are installed
+- Create virtual environments and install dependencies
+- Prompt for API key configuration (first run only)
+- Start backend (port 8002) and frontend (port 3000)
+- Open browser automatically
 
 Visit http://localhost:3000 to start using.
 
-### 📋 Prerequisites
+### First Run
 
-The startup scripts require:
-- **Windows:** Command Prompt or PowerShell
-- **Linux/macOS:** Bash shell
-- **Git** (for cloning the repository)
-- **Internet connection** (for downloading dependencies)
-
-### 🔑 First Run
-
-On the first run, you'll need to configure your LLM API keys. The script will prompt you to:
+On first run, configure your LLM API keys:
 1. Choose an LLM provider (Qwen recommended, free tier available)
 2. Enter your API key
-3. The configuration will be saved automatically
+3. Configuration is saved in `backend/.env`
 
-For manual configuration, see **[QUICKSTART.md](./QUICKSTART.md)**.
-
-### 📐 LaTeX Support (Optional)
-
-For advanced math formula rendering in plots (geometry-plotter skill), install a LaTeX distribution:
-
-- **Windows**: Install [MiKTeX](https://miktex.org/) via `winget install MiKTeX.MiKTeX`
-- **Linux**: `sudo apt install texlive-full`
-- **macOS**: `brew install --cask mactex`
-
-Without LaTeX, the system falls back to matplotlib's built-in mathtext renderer, which covers most common math symbols but doesn't support advanced LaTeX commands like `\begin{cases}`, `\text{}`, `\boxed{}`.
+For detailed setup instructions, see **[QUICKSTART.md](./QUICKSTART.md)**.
 
 ### Docker Deployment
 
 ```bash
-# Clone and start with Docker
-git clone <repository-url>
-cd miniclaw
 cp backend/.env.example backend/.env
 # Edit backend/.env with your API keys
-
 docker-compose up -d
 ```
 
 Access:
 - Frontend: http://localhost:3000
-- Backend: http://localhost:8002
+- Backend API: http://localhost:8002
 - API Docs: http://localhost:8002/docs
 
 ---
@@ -194,76 +159,35 @@ Access:
 
 ### 6 Core Tools
 
-miniClaw includes 6 carefully designed core tools covering the most common AI Agent scenarios:
-
 | Tool | Function | Security Features | Example |
 |------|----------|-------------------|---------|
 | **terminal** | Shell command execution | Sandboxed + command blacklist | `ls -la`, `git status` |
-| **python_repl** | Python code interpreter | Timeout control + exception handling | Data analysis, computation |
-| **fetch_url** | Web scraping | HTML auto-cleaning | News fetching, API calls |
+| **python_repl** | Python code interpreter | Timeout control + matplotlib Agg backend | Data analysis, computation |
+| **fetch_url** | Web content fetching | HTML auto-cleaning | News, API calls |
 | **read_file** | File reading | Restricted to project directory | Reading code, documentation |
 | **write_file** | File writing | Path restriction + sensitive file protection | Creating, editing files |
-| **search_kb** | RAG knowledge base retrieval | Hybrid search (semantic + keyword) | Document queries, knowledge Q&A |
+| **search_kb** | RAG knowledge base retrieval | Hybrid search (BM25 + semantic) | Document queries, knowledge Q&A |
 
-> 💡 All tools can be automatically invoked by Agent through instructions in System Prompt.
+### 23 Built-in Skills
 
-### Agent Skills System
-
-Adopts **Instruction-following** paradigm, allowing Agent to learn new capabilities by reading natural language documentation:
-
-**Skill Structure:**
-```
-skill-name/
-├── SKILL.md          # Skill documentation (YAML frontmatter + Markdown)
-├── scripts/          # Optional: executable scripts
-├── references/       # Optional: reference documentation
-└── assets/           # Optional: resource files
-```
-
-**Built-in Skills:**
-
-- **arxiv-search** - Academic paper search (arXiv API)
-- **github** - GitHub operations (gh CLI)
-- **skill-creator** - Create custom Skills
-- **skill_validator** - Validate Skills integrity
-
-**Creating Custom Skills:**
-
-Simply create a folder and `SKILL.md` file:
-
-```markdown
----
-name: my-skill
-description: Description of this skill's functionality
-dependencies:
-  python:
-    - "requests>=2.31.0"
----
-
-# Skill Name
-
-## Usage Steps
-1. First step
-2. Second step
-
-## Examples
-Provide usage examples
-```
-
-Agent will automatically load and learn how to use this skill.
+| Category | Skills |
+|----------|--------|
+| **Search & Research** | arxiv-search, arxiv-download-paper, baidu-search, agent-papers, conference-paper |
+| **Visualization** | chart-plotter, geometry-plotter, diagram-plotter |
+| **Research Pipeline** | deep_source_extractor, cluster_reduce_synthesis, research_report_writer |
+| **Code Analysis** | scale_down_analyze_python, scale_down_fix_bug, scale_down_refactor_module, tool_restricted_analyze_python, tool_restricted_fix_bug |
+| **Utilities** | get_weather, github, doc-creator, distill-persona, skill-creator, skill_validator, find-skill |
 
 ### System Prompt Composition
 
 System Prompt is dynamically assembled from 6 components (in order):
 
-1. **SKILLS_SNAPSHOT.md** - Dynamically generated capability list
-2. **SOUL.md** - Agent core settings (personality, tone, values)
-3. **IDENTITY.md** - Self-awareness (name, capability boundaries)
-4. **USER.md** - User profile (preferences, common locations, terminology)
-5. **AGENTS.md** - Behavioral guidelines & skill invocation protocols
-6. **MEMORY.md** - Long-term memory (important information extraction)
-
-All components can be customized by editing corresponding files.
+1. **SKILLS_SNAPSHOT.md** — Dynamically generated capability list
+2. **SOUL.md** — Agent core settings (personality, tone, values)
+3. **IDENTITY.md** — Self-awareness (name, capability boundaries)
+4. **USER.md** — User profile (preferences, common locations, terminology)
+5. **AGENTS.md** — Behavioral guidelines and skill invocation protocols
+6. **MEMORY.md** — Long-term memory (important information extraction)
 
 ### File-first Memory System
 
@@ -278,103 +202,95 @@ All components can be customized by editing corresponding files.
 
 ```
 miniclaw/
-├── backend/                      # Python backend service
+├── backend/                        # Python backend service
 │   ├── app/
-│   │   ├── main.py              # FastAPI application entry
-│   │   ├── config.py            # Configuration management
+│   │   ├── main.py                # FastAPI application entry
+│   │   ├── config.py              # Configuration management
 │   │   │
-│   │   ├── core/                # Core modules
-│   │   │   ├── agent.py         # LangChain Agent wrapper
-│   │   │   ├── llm.py           # LLM model initialization
-│   │   │   ├── rag_engine.py    # RAG retrieval engine
-│   │   │   ├── obfuscation.py   # API key obfuscation
-│   │   │   ├── perv/            # PEVR framework (Plan-Execute-Verify-Reflect)
-│   │   │   ├── tot/             # Tree of Thoughts reasoning framework
-│   │   │   ├── skill_policy/    # Unified skill compilation pipeline
-│   │   │   ├── reflection/      # Agent reflection system
-│   │   │   └── streaming/       # Streaming response coordination
+│   │   ├── core/                  # Core modules
+│   │   │   ├── agent.py           # LangChain Agent wrapper (Normal mode)
+│   │   │   ├── llm.py             # LLM model initialization
+│   │   │   ├── rag_engine.py      # RAG hybrid retrieval engine
+│   │   │   ├── embedding_manager.py # Embedding model lifecycle
+│   │   │   ├── media/             # Image registry & HTTP serving
+│   │   │   ├── streaming/         # SSE streaming + image embedding
+│   │   │   ├── watchdog.py        # Run monitoring & cancellation
+│   │   │   ├── trajectory/        # Execution trace recording
+│   │   │   ├── skill_policy/      # SkillPolicy compilation pipeline
+│   │   │   ├── reflection/        # Unified evaluation (micro + macro)
+│   │   │   ├── meta_policy/       # TCA + Meta Policy injection
+│   │   │   ├── online_distill/    # Online trajectory distillation
+│   │   │   ├── tot/               # Tree of Thoughts reasoning
+│   │   │   │   ├── nodes/         # Thought nodes (generate, evaluate, execute, synthesize)
+│   │   │   │   ├── research/      # Research mode sub-graph
+│   │   │   │   ├── router.py      # ToT orchestrator & routing
+│   │   │   │   └── streaming.py   # SSE tree update streaming
+│   │   │   ├── perv/              # PERV framework
+│   │   │   │   ├── nodes/         # Plan, execute, verify, replan nodes
+│   │   │   │   ├── orchestrator.py # PERV graph builder & runner
+│   │   │   │   └── router.py      # PERV routing classifier
+│   │   │   └── dream/             # Offline distillation (Dream)
+│   │   │       ├── nodes/         # Trajectory store, analysis, synthesis
+│   │   │       └── config.py      # Dream scheduling & config
 │   │   │
-│   │   ├── tools/               # 6 core tools
-│   │   │   ├── terminal.py      # Shell command execution
-│   │   │   ├── python_repl.py   # Python code interpreter
-│   │   │   ├── fetch_url.py     # Web scraping
-│   │   │   ├── read_file.py     # File reading
-│   │   │   └── search_kb.py     # Knowledge base search
-│   │   │
-│   │   ├── skills/              # Skills system
-│   │   │   ├── bootstrap.py     # SKILLS_SNAPSHOT generation
-│   │   │   ├── loader.py        # Skill loader
-│   │   │   └── dependencies.py  # Dependency management
-│   │   │
-│   │   ├── memory/              # Conversation memory management
-│   │   │   ├── extractor.py     # Information extraction
-│   │   │   ├── long_term_updater.py  # Long-term memory update
-│   │   │   └── prompts.py       # System Prompt components
-│   │   │
-│   │   ├── api/                 # API routes
-│   │   │   ├── chat.py          # Chat interface (SSE streaming)
-│   │   │   ├── config.py        # Configuration interface
-│   │   │   └── files.py         # File management interface
-│   │   │
-│   │   └── models/              # Pydantic data models
-│   │       ├── sessions.py      # Session models
-│   │       └── messages.py      # Message models
+│   │   ├── tools/                 # 6 core tools
+│   │   ├── skills/                # Skills bootstrap & loader
+│   │   ├── memory/                # Memory management
+│   │   │   ├── auto_learning/     # Pattern NN, RL trainer, reflection
+│   │   │   ├── kg/                # Knowledge graph store
+│   │   │   ├── wiki/              # Wiki engine (long-term knowledge)
+│   │   │   ├── pattern_memory/    # Learned pattern storage
+│   │   │   └── engine.py          # Memory manager
+│   │   ├── api/                   # API routes (16 endpoints)
+│   │   └── models/                # Pydantic data models
 │   │
-│   ├── data/                    # Local data storage
-│   │   ├── skills/              # Skills definitions
-│   │   ├── sessions/            # Conversation records
-│   │   ├── knowledge_base/      # Knowledge base files
-│   │   ├── vector_store/        # Vector storage
-│   │   └── credentials.encrypted # Encrypted API keys
+│   ├── data/                      # Local data storage
+│   │   ├── skills/                # 23 skill definitions
+│   │   ├── sessions/              # Conversation records
+│   │   ├── knowledge_base/        # Knowledge base files
+│   │   └── vector_store/          # ChromaDB vector storage
 │   │
-│   ├── workspace/               # System Prompt components
-│   │   ├── SKILLS_SNAPSHOT.md   # Dynamically generated
-│   │   ├── SOUL.md
-│   │   ├── IDENTITY.md
-│   │   ├── USER.md
-│   │   ├── AGENTS.md
-│   │   └── MEMORY.md
-│   │
-│   ├── tests/                   # Backend tests
-│   └── requirements.txt         # Python dependencies
+│   ├── workspace/                 # System Prompt components
+│   └── logs/                      # Runtime logs & traces
 │
-├── frontend/                    # Next.js frontend
-│   ├── app/                     # App Router
-│   │   ├── chat/                # Chat page
-│   │   └── layout.tsx           # Root layout
-│   │
-│   ├── components/              # React components
-│   │   ├── ui/                  # Shadcn/UI components
-│   │   ├── chat/                # Chat components
-│   │   └── editor/              # Code editor
-│   │
-│   ├── lib/                     # Utility libraries
-│   │   └── api.ts               # API client
-│   │
-│   ├── hooks/                   # React Hooks
-│   │   └── useChat.ts           # Chat Hook
-│   │
-│   └── types/                   # TypeScript types
-│       └── chat.ts              # Chat type definitions
+├── frontend/                      # Next.js frontend (v16+)
+│   ├── app/                       # App Router
+│   ├── components/                # React components
+│   ├── hooks/                     # React Hooks
+│   ├── lib/                       # Utility libraries
+│   └── types/                     # TypeScript types
 │
-├── docs/                        # Documentation
-│   ├── ARCHITECTURE.md          # Architecture documentation
-│   ├── API.md                   # API documentation
-│   └── DEPLOYMENT.md            # Deployment guide
-│
-├── QUICKSTART.md                # Quick start guide
-├── README.md                    # This file
-├── DEVELOPMENT_PLAN.md          # Development plan
-├── start.bat                    # Windows startup script
-├── start.sh                     # Linux/Mac startup script
-└── docker-compose.yml           # Docker orchestration
+├── docs/                          # Documentation
+├── QUICKSTART.md                  # Quick start guide
+├── README.md                      # This file
+├── start.bat                      # Windows startup script
+├── start.sh                       # Linux/Mac startup script
+└── docker-compose.yml             # Docker orchestration
 ```
 
 ---
 
 ## API Interfaces
 
-### Core Chat Interface
+### Core Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/chat` | POST | Chat with SSE streaming (Normal / PERV / ToT) |
+| `/api/chat/cancel` | POST | Cancel running chat |
+| `/api/sessions` | GET | List sessions |
+| `/api/files` | GET/POST | Read/write workspace files |
+| `/api/media/{id}` | GET | Serve registered media (images) |
+| `/api/skills` | GET | List loaded skills |
+| `/api/knowledge-base` | GET/POST | Knowledge base management |
+| `/api/embedding` | POST | Embedding operations |
+| `/api/dream/trigger` | POST | Trigger offline Dream session |
+| `/api/memory` | GET | Memory retrieval |
+| `/api/wiki` | GET | Wiki search |
+
+Full API documentation: http://localhost:8002/docs (after starting backend)
+
+### Chat SSE Example
 
 ```http
 POST /api/chat
@@ -383,48 +299,17 @@ Content-Type: application/json
 {
   "message": "Help me check the weather in Beijing",
   "session_id": "main_session",
-  "stream": true
+  "context": {}
 }
 ```
 
-Returns SSE streaming data:
-
-```
-event: message
-data: {"content": "Checking weather..."}
-
-event: tool_call
-data: {"tool": "terminal", "input": "curl wttr.in/Beijing"}
-
-event: message
-data: {"content": "Beijing current weather: Sunny, 15°C"}
-```
-
-### File Management Interface
-
-```http
-# Read file
-GET /api/files?path=workspace/SOUL.md
-
-# Write file
-POST /api/files
-Content-Type: application/json
-
-{
-  "path": "workspace/SOUL.md",
-  "content": "# New content\n..."
-}
-```
-
-For complete API documentation, visit: http://localhost:8002/docs (after starting backend)
+Returns SSE streaming events: `content_delta`, `tool_call`, `tool_result`, `tree_update`, `final_answer`.
 
 ---
 
 ## LLM Configuration
 
-### Supported LLM Providers
-
-miniClaw supports multiple LLM providers, switchable via `LLM_PROVIDER` environment variable:
+### Supported Providers
 
 | Provider | Configuration | Description |
 |----------|--------------|-------------|
@@ -441,280 +326,104 @@ miniClaw supports multiple LLM providers, switchable via `LLM_PROVIDER` environm
 Edit `backend/.env`:
 
 ```bash
-# Select provider
-LLM_PROVIDER=qwen  # or openai, deepseek, ollama, claude, gemini
-
-# Qwen configuration
+LLM_PROVIDER=qwen
 QWEN_API_KEY=sk-your-api-key
 QWEN_MODEL=qwen-plus
-
-# OpenAI configuration
-# OPENAI_API_KEY=sk-your-api-key
-# OPENAI_MODEL=gpt-4o-mini
-
-# Ollama configuration (local)
-# OLLAMA_BASE_URL=http://localhost:11434/v1
-# OLLAMA_MODEL=qwen2.5
 ```
 
-### Embedding Model Configuration
+### Optional: System Dependencies
 
-Knowledge base functionality requires Embedding model for semantic retrieval. System supports three configuration methods:
+Some skills require system-level tools:
 
-#### Method 1: Use LLM Provider's API Embedding (Recommended)
+```bash
+# Graphviz (diagram-plotter)
+winget install Graphviz.Graphviz
 
-No model download required, direct API calls:
+# GitHub CLI (github skill)
+winget install GitHub.cli
 
-| LLM Provider | Embedding Model | Configuration |
-|--------------|----------------|--------------|
-| OpenAI | `text-embedding-3-large` | Auto-used |
-| Qwen | `text-embedding-v3` | Auto-used |
-| DeepSeek | `deepseek-embedding` | Auto-used |
-
-#### Method 2: Use Local HuggingFace Model
-
-When LLM doesn't support embedding, system automatically downloads local model:
-
-- **Default Model**: `RamManavalan/Qwen3-VL-Embedding-8B-FP8`
-- **Size**: ~8GB
-- **Download**: HF-Mirror acceleration for China users
-
-#### Method 3: Manually Specify Model
-
-Edit `backend/app/core/rag_engine.py`:
-
-```python
-model_name = "BAAI/bge-large-zh-v1.5"  # Chinese embedding model
+# LaTeX (geometry-plotter advanced rendering)
+winget install MiKTeX.MiKTeX
 ```
 
 ---
 
 ## Testing
 
-**Testing Platform:** All tests are developed and validated on Windows 11. Tests should pass on Linux and macOS as well, but Windows is the primary testing environment.
-
-### Backend Testing
-
 ```bash
+# Backend
 cd backend
-
-# Run all tests
 pytest tests/
 
-# Run specific test file
-pytest tests/test_tools.py
-
-# View coverage
-pytest --cov=app tests/
-```
-
-### Frontend Testing
-
-```bash
+# Frontend
 cd frontend
-
-# Unit tests
 npm test
-
-# E2E tests
 npx playwright test
-
-# View E2E test report
-npx playwright show-report
 ```
 
 ---
 
 ## Development Guide
 
-### Backend Development
-
 ```bash
+# Backend
 cd backend
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Start development server (hot reload)
 uvicorn app.main:app --port 8002 --reload
-```
 
-### Frontend Development
-
-```bash
+# Frontend
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start development server
 npm run dev
-
-# Build production version
-npm run build
 ```
 
-### Code Standards
-
-Please refer to [CLAUDE.md](./CLAUDE.md) for complete development standards:
-
-- **Python**: Follow PEP8, use Type Hints
-- **TypeScript**: Strict mode, no `any`
-- **LangChain**: Must use `create_agent` API, legacy `AgentExecutor` prohibited
+Code standards: [CLAUDE.md](./CLAUDE.md)
 
 ---
 
 ## Documentation
 
-- **[QUICKSTART.md](./QUICKSTART.md)** - 5-minute quick start guide
-- **[CLAUDE.md](./CLAUDE.md)** - Development standards and AI collaboration protocol
-- **[DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)** - Complete development plan
-- **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** - System architecture design
-- **[docs/API.md](./docs/API.md)** - API interface documentation
-- **[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)** - Docker and production deployment
-
----
-
-## Security Considerations
-
-⚠️ **Before deploying to production, please note:**
-
-1. **API Key Security**
-   - Don't hard-code API keys in code
-   - Use environment variables or key management services
-   - Rotate API keys regularly
-
-2. **File Access Restrictions**
-   - Terminal tool configured with command blacklist
-   - read_file tool restricted to project directory
-   - Container isolation recommended for production
-
-3. **Network Security**
-   - Configure CORS whitelist
-   - Enable HTTPS
-   - Rate limit API access
-
-4. **Log Auditing**
-   - Log all tool invocations
-   - Regularly audit System Prompt changes
-   - Monitor anomalous behavior
-
----
-
-## FAQ
-
-### Q: How to add custom Skills?
-
-A: Create a new folder under `backend/data/skills/`, add `SKILL.md` file. Agent will load automatically.
-
-Example:
-```bash
-mkdir backend/data/skills/my-skill
-cat > backend/data/skills/my-skill/SKILL.md << 'EOF'
----
-name: my-skill
-description: My custom skill
----
-
-# Skill Description
-
-Detailed description of how to use this skill.
-EOF
-```
-
-### Q: How to modify Agent personality?
-
-A: Edit `backend/workspace/SOUL.md` file to define Agent's core settings.
-
-### Q: Where are conversation histories saved?
-
-A: Saved in `backend/data/sessions/*.json` files, can be viewed or edited directly.
-
-### Q: How to disable certain tools?
-
-A: Edit `backend/app/core/tools.py`, comment out unwanted tool registrations.
-
-### Q: Knowledge base slow on first use?
-
-A: First use requires downloading Embedding model (~8GB). Wait for download to complete or use LLM provider's Embedding API.
-
----
-
-## Contributing
-
-Contributions are welcome! Please follow this process:
-
-1. Fork this project
-2. Create feature branch (`git checkout -b feature/AmazingFeature`)
-3. Follow code standards in [CLAUDE.md](./CLAUDE.md)
-4. Commit changes (`git commit -m 'Add some AmazingFeature'`)
-5. Push to branch (`git push origin feature/AmazingFeature`)
-6. Open Pull Request
-
-### Contribution Areas
-
-- New Skills (tool integrations, domain knowledge)
-- Core tool optimization
-- UI/UX improvements
-- Documentation enhancements
-- Bug fixes
+- **[QUICKSTART.md](./QUICKSTART.md)** — Quick start guide
+- **[CLAUDE.md](./CLAUDE.md)** — Development standards and AI collaboration protocol
+- **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)** — System architecture design
+- **[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)** — Docker and production deployment
 
 ---
 
 ## Roadmap
 
-### v0.3 (Current)
+### v1.0.0 (Current)
 
-- [x] PEVR framework (Plan-Execute-Verify-Reflect)
-- [x] Tree of Thoughts (ToT) reasoning system
+- [x] PERV framework (Plan-Execute-Verify-Reflect)
+- [x] Tree of Thoughts reasoning with research mode
 - [x] SkillPolicy unified skill compilation
-- [x] Auto-learning system with pattern recognition
-- [x] Multi-LLM provider support
-- [x] 6 core tools (terminal, python_repl, fetch_url, read_file, write_file, search_kb)
-- [x] Research mode with visualization
+- [x] Progressive auto-learning (reflection, pattern, neural strategy, RL)
+- [x] Online/Offline distillation (Dream)
+- [x] TCA & Meta Policy injection
+- [x] 23 built-in skills
+- [x] Multimodal support (image, audio, document upload)
+- [x] Full Markdown rendering (tables, code blocks, ASCII art)
+- [x] Knowledge graph memory
+- [x] Wiki engine for long-term knowledge
 
 ### v0.4 (Planned)
 
 - [ ] Multi-session management
 - [ ] Skill marketplace integration
-- [ ] Multimodal support (images, files)
-
-### v0.5 (Future)
-
 - [ ] Multi-Agent collaboration
-- [ ] Knowledge graph memory
-- [ ] Mobile support
 
 ---
 
 ## License
 
-This project is licensed under the **MIT License** - see [LICENSE](LICENSE) file for details
+This project is licensed under the **MIT License** — see [LICENSE](LICENSE) file for details.
 
 ---
 
 ## Acknowledgments
 
-- [OpenClaw](https://github.com/openclaw) - Prototype project
-- [LangChain](https://github.com/langchain-ai/langchain) - Powerful Agent framework
-- [LlamaIndex](https://github.com/run-llama/llama_index) - Excellent RAG engine
-- [Anthropic](https://www.anthropic.com) - Agent Skills paradigm
-- [Shadcn/UI](https://ui.shadcn.com) - Beautiful UI component library
-
----
-
-## Contact
-
-- **Issues**: Submit issues on GitHub
-- **Discussions**: Welcome discussions and feedback
-- **Email**: [Maintainer email]
-
----
-
-**Happy Coding! 🚀**
-
-Making AI Agent capabilities transparent and controllable, enabling everyone to create their own intelligent assistants.
+- [LangChain](https://github.com/langchain-ai/langchain) — Agent framework
+- [LangGraph](https://github.com/langchain-ai/langgraph) — Graph-based workflow
+- [LlamaIndex](https://github.com/run-llama/llama_index) — RAG engine
+- [Anthropic](https://www.anthropic.com) — Agent Skills paradigm
+- [Shadcn/UI](https://ui.shadcn.com) — UI component library

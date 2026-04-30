@@ -1,141 +1,90 @@
 # miniClaw Quick Start Guide
 
-> Lightweight, highly transparent AI Agent System - One-Click Setup 🚀
+> One-Click Setup for the AI Agent System
 
-## 📋 Prerequisites
+## Prerequisites
 
 ### Required Software
 
-**Before you begin**, ensure you have the following installed:
-
-#### 1. Python 3.10 or higher
+**Python 3.10+**
 ```bash
-# Check your Python version
 python --version
-
-# If not installed or version < 3.10:
-# Windows: Download from https://www.python.org/downloads/
+# Windows: https://www.python.org/downloads/
 # Linux: sudo apt install python3.10
 # macOS: brew install python@3.10
 ```
 
-#### 2. Node.js 18 or higher
+**Node.js 18+**
 ```bash
-# Check your Node.js version
 node --version
-
-# If not installed:
-# Windows: Download from https://nodejs.org/
+# Windows: https://nodejs.org/
 # Linux: sudo apt install nodejs npm
 # macOS: brew install node
 ```
 
-#### 3. Git (for cloning the repository)
+### Optional: System Dependencies
+
+Some skills require system-level tools:
+
 ```bash
-# Check if Git is installed
-git --version
+# Graphviz (diagram-plotter)
+winget install Graphviz.Graphviz
 
-# If not installed:
-# Windows: https://git-scm.com/download/win
-# Linux: sudo apt install git
-# macOS: xcode-select --install
-```
+# GitHub CLI (github skill)
+winget install GitHub.cli
 
-#### 4. MiKTeX / LaTeX (Optional - for math plot rendering)
-```bash
-# Check if LaTeX is installed
-latex --version
-
-# If not installed (optional, for full LaTeX rendering in plots):
-# Windows:
+# LaTeX (geometry-plotter advanced rendering)
 winget install MiKTeX.MiKTeX
-# Linux:
-sudo apt install texlive-full
-# macOS:
-brew install --cask mactex
 ```
-
-> **Note**: LaTeX is optional. Without it, plots still work but use matplotlib's built-in mathtext renderer (limited LaTeX support). With LaTeX installed, plots support full LaTeX syntax including `\begin{cases}`, `\text{}`, `\boxed{}`, etc.
-
-**Note**: The startup scripts will verify these tools and guide you if any are missing.
 
 ---
 
-## 🚀 Super Easy Setup (Recommended)
+## One-Click Setup (Recommended)
 
 ### Windows Users
 
 1. **Clone or download the project**
    ```bash
-   git clone https://github.com/yourusername/miniclaw.git
    cd miniclaw
    ```
 
-2. **Double-click `start.bat`**
-   - That's it! The script will:
-     - Verify Python and Node.js are installed
-     - Create Python virtual environment
-     - Install all dependencies automatically
-     - Prompt for API key configuration (first run only)
-     - Start both backend and frontend services
-   - Browser will open automatically to http://localhost:3000
+2. **Double-click `start.bat`** or run from command line
+   - Verifies Python and Node.js are installed
+   - Creates virtual environment and installs dependencies
+   - Prompts for API key configuration (first run only)
+   - Starts backend (port 8002) and frontend (port 3000)
+   - Browser opens to http://localhost:3000
 
 ### Linux/macOS Users
 
-1. **Clone the project**
-   ```bash
-   git clone https://github.com/yourusername/miniclaw.git
-   cd miniclaw
-   ```
+```bash
+chmod +x start.sh
+./start.sh
+```
 
-2. **Run the startup script**
-   ```bash
-   chmod +x start.sh
-   ./start.sh
-   ```
+---
 
-3. **Done!** The script will handle everything automatically
+## First Run Configuration
 
-## ✨ What the Startup Script Does
-
-The `start.bat` (Windows) and `start.sh` (Linux/Mac) scripts automatically:
-
-- ✅ Check for required tools (Python, Node.js, conda)
-- ✅ Install missing dependencies automatically
-- ✅ Set up virtual environments
-- ✅ Install all Python and Node.js packages
-- ✅ Prompt you to configure API keys (first run only)
-- ✅ Start backend service (port 8002)
-- ✅ Start frontend service (port 3000)
-- ✅ Open your browser to http://localhost:3000
-
-**No manual installation required!**
-
-## 🔑 First Run Configuration
-
-On first run, the script will ask you to:
+On first run, configure your LLM API keys:
 
 1. **Choose an LLM provider**
-   - **Qwen (通义千问)** - Recommended, has free tier
-   - **OpenAI GPT** - Production quality
-   - **DeepSeek** - Cost-effective
-   - **Ollama** - Completely local, free
-   - **Custom OpenRouter-compatible** - Use any OpenRouter model
+   - **Qwen** — Recommended, has free tier
+   - **OpenAI GPT** — Production quality
+   - **DeepSeek** — Cost-effective
+   - **Ollama** — Completely local, free
 
 2. **Enter your API key**
-   - Get your key from the provider's website (see links below)
-   - Paste it when prompted
-   - Configuration is saved automatically in `backend/.env`
+   - **Qwen**: https://dashscope.aliyun.com/ (Free tier available)
+   - **OpenAI**: https://platform.openai.com/api-keys
+   - **DeepSeek**: https://platform.deepseek.com/
+   - **Ollama**: https://ollama.com/ (No API key needed)
 
-**API Key Sources:**
-- **Qwen**: https://dashscope.aliyun.com/ (Free tier available)
-- **OpenAI**: https://platform.openai.com/api-keys
-- **DeepSeek**: https://platform.deepseek.com/
-- **Ollama**: https://ollama.com/ (No API key needed, just install Ollama)
+3. Configuration is saved in `backend/.env`
 
-**That's it!** You're ready to use miniClaw.
+---
 
-## 🎯 Start Using
+## Start Using
 
 1. Browser opens to http://localhost:3000
 2. Type your message in the chat box
@@ -143,136 +92,55 @@ On first run, the script will ask you to:
    - "帮我分析一下当前目录的文件结构"
    - "Query the weather in Beijing"
    - "Search arxiv for latest papers on LLM"
-4. Wait for the Agent response
 
-### 💡 Advanced Features
+### Research Mode (Tree of Thoughts)
 
-#### Research Mode (Tree of Thoughts)
+For complex queries requiring deep analysis:
 
-For complex queries requiring deep analysis, enable **Research Mode**:
+1. Click the **Research Mode** toggle in the chat interface
+2. Select a thinking mode:
+   - **Heuristic** (Quick): 2-depth x 3-branching
+   - **Analytical** (Balanced): 4-depth x 4-branching
+   - **Exhaustive** (Deep): 7-depth x 6-branching
+3. Send your query
 
-**How to Use:**
+The system explores multiple reasoning branches, evaluates each, and synthesizes the best results into a comprehensive answer with evidence and cross-references.
 
-1. **Click the Research Mode toggle** in the chat interface
-2. **Select a thinking mode**:
-   - ⚡ **Heuristic** (Quick): 2-depth × 3-branching, best for time-sensitive queries
-   - 🔬 **Analytical** (Balanced): 4-depth × 4-branching, for complex problems
-   - 🌌 **Exhaustive** (Deep): 7-depth × 6-branching, for thorough research
+### Deep Planning Mode (PERV)
 
-3. **Optionally adjust branching factor** (number of thought branches per level)
+For structured multi-step tasks:
 
-4. **Send your query**
+1. Enable **Deep Planning** toggle in the chat interface
+2. The system will create a step-by-step execution plan
+3. Each step is executed, verified, and replanned if needed
 
-**Example Research Queries:**
-```
-"深度研究量子计算的最新进展及其在密码学中的应用"
-"Deep research on GPT-4 technical architecture and training methods"
-"Compare different approaches to memory management in operating systems"
-```
+---
 
-**What Happens in Research Mode:**
-- System explores multiple reasoning branches
-- Each branch is evaluated for relevance, novelty, and feasibility
-- Best branches are expanded further
-- Results from all branches are synthesized
-- Final answer includes evidence and cross-references
+## Manual Setup (If Scripts Fail)
 
-**Visual Feedback:**
-- Real-time thought tree visualization
-- Research stage indicators (gathering → analysis → synthesis)
-- Evaluation scores for each thought
-- Tool execution tracking
-
-**Note:** Research mode takes longer but produces higher-quality, well-researched answers.
-
-## 🔧 Advanced Setup (Optional)
-
-If you prefer manual setup or need troubleshooting, see below.
-
-### Manual API Key Configuration
-
-Edit `backend/.env` file manually:
-
-```bash
-# Copy the example file
-cp backend/.env.example backend/.env
-
-# Edit the file
-# Windows: notepad backend/.env
-# Linux/macOS: nano backend/.env
-```
-
-Choose your provider:
-
-**Qwen (Recommended - Free Tier):**
-```bash
-LLM_PROVIDER=qwen
-QWEN_API_KEY=sk-your-qwen-api-key
-QWEN_MODEL=qwen-plus
-```
-
-**OpenAI:**
-```bash
-LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-your-openai-key
-OPENAI_MODEL=gpt-4o-mini
-```
-
-**Ollama (Local, Free):**
-```bash
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://localhost:11434/v1
-OLLAMA_MODEL=qwen2.5
-```
-
-### Manual Startup (If Scripts Fail)
-
-**Prerequisites:**
-- Python 3.10+ installed and in PATH
-- Node.js 18+ installed and in PATH
-
-**Terminal 1 - Backend:**
+**Terminal 1 — Backend:**
 ```bash
 cd backend
-
-# Create virtual environment (if not exists)
-python -m venv venv
-
-# Activate virtual environment
-# Windows:
-venv\Scripts\activate
-# Linux/macOS:
-source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Configure environment
 cp .env.example .env
 # Edit .env with your API keys
-# Windows: notepad .env
-# Linux/macOS: nano .env
-
-# Start backend
 uvicorn app.main:app --port 8002 --reload
 ```
 
-**Terminal 2 - Frontend:**
+**Terminal 2 — Frontend:**
 ```bash
 cd frontend
-
-# Install dependencies (first time only)
 npm install
-
-# Start frontend development server
 npm run dev
 ```
 
-**Access the application:**
+Access:
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:8002
 
-## 📚 Core Features Preview
+---
+
+## Features Overview
 
 ### 6 Core Tools
 
@@ -285,110 +153,60 @@ npm run dev
 | **write_file** | Write files | "Create a new file" |
 | **search_kb** | Knowledge base search | "Search for relevant info" |
 
-### Built-in Skills
+### 23 Built-in Skills
 
-- **arxiv-search** - Academic paper search
-- **github** - GitHub operations
-- **skill-creator** - Create custom skills
-- **skill_validator** - Validate skills
+Search & Research: arxiv-search, arxiv-download-paper, baidu-search, agent-papers, conference-paper
 
-## ❓ FAQ
+Visualization: chart-plotter, geometry-plotter, diagram-plotter
 
-### Q: Installation takes too long
+Research Pipeline: deep_source_extractor, cluster_reduce_synthesis, research_report_writer
 
-**A:** First run downloads dependencies (~500MB for backend, ~200MB for frontend). Future starts are instant (a few seconds).
+Code Analysis: scale_down_analyze_python, scale_down_fix_bug, scale_down_refactor_module, tool_restricted_analyze_python, tool_restricted_fix_bug
 
-### Q: Script fails with "command not found: python"
-
-**A:** Install Python 3.10 or higher:
-- Windows: https://www.python.org/downloads/ (Check "Add to PATH" during installation)
-- Linux: `sudo apt install python3.10 python3.10-venv`
-- macOS: `brew install python@3.10`
-
-### Q: Script fails with "command not found: node"
-
-**A:** Install Node.js 18 or higher:
-- Windows: https://nodejs.org/ (Download LTS version)
-- Linux: `sudo apt install nodejs npm`
-- macOS: `brew install node`
-
-### Q: Virtual environment creation fails
-
-**A:** Ensure you have `venv` module installed:
-```bash
-# Linux/macOS
-sudo apt install python3.10-venv  # Debian/Ubuntu
-# or
-sudo dnf install python3.10-venv  # Fedora
-
-# Windows: venv is included with Python
-```
-
-### Q: How to get API key?
-
-**A:** Visit provider's website:
-- **Qwen**: https://dashscope.aliyun.com/ (Free tier available, recommended)
-- **OpenAI**: https://platform.openai.com/api-keys
-- **DeepSeek**: https://platform.deepseek.com/
-- **Ollama**: No API key needed, just install from https://ollama.com/
-
-### Q: Can I use my own Python/Node.js?
-
-**A:** Yes! The scripts work with existing installations. They check if tools are present and only install what's missing.
-
-### Q: How to switch LLM provider later?
-
-**A:** Edit `backend/.env` file:
-1. Find `LLM_PROVIDER=qwen` (or your current provider)
-2. Change to your desired provider (openai, deepseek, ollama, etc.)
-3. Update the corresponding API key
-4. Restart the services
-
-### Q: Port already in use
-
-**A:** Change ports in `backend/.env`:
-```bash
-# Edit backend/.env
-BACKEND_PORT=8003  # Change to available port
-```
-Or stop the service using the port:
-```bash
-# Windows: Find and kill the process
-netstat -ano | findstr :8002
-taskkill /PID <PID> /F
-
-# Linux/macOS:
-lsof -ti:8002 | xargs kill -9
-```
-
-### Q: How to update dependencies?
-
-**A:**
-```bash
-# Backend
-cd backend
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install --upgrade -r requirements.txt
-
-# Frontend
-cd frontend
-npm update
-```
-
-## 📖 Next Steps
-
-- 📖 Read full documentation: [README.md](./README.md)
-- 🏗️ Learn architecture: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
-- 🔧 Advanced setup: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)
-
-## 💡 Tips
-
-- **First run** takes 5-10 minutes (downloading dependencies)
-- **Subsequent starts** are instant
-- Use **Ctrl+C** in terminal to stop services
-- Configuration files are preserved between runs
-- All data is stored locally in your project directory
+Utilities: get_weather, github, doc-creator, distill-persona, skill-creator, skill_validator, find-skill
 
 ---
 
-**Happy Using! 🎉**
+## FAQ
+
+### Q: Installation takes too long
+
+First run downloads dependencies (~500MB backend, ~200MB frontend). Future starts are instant.
+
+### Q: "command not found: python"
+
+Install Python 3.10+: https://www.python.org/downloads/ (Check "Add to PATH" on Windows)
+
+### Q: Port already in use
+
+```bash
+# Windows
+netstat -ano | findstr :8002
+taskkill /PID <PID> /F
+
+# Linux/macOS
+lsof -ti:8002 | xargs kill -9
+```
+
+### Q: How to switch LLM provider?
+
+Edit `backend/.env`:
+```bash
+LLM_PROVIDER=qwen  # or openai, deepseek, ollama, claude, gemini
+QWEN_API_KEY=sk-your-key
+```
+
+Then restart the services.
+
+### Q: Knowledge base slow on first use?
+
+First use requires downloading Embedding model (~8GB). Wait for download or use your LLM provider's Embedding API.
+
+---
+
+## Next Steps
+
+- Full documentation: [README.md](./README.md)
+- Architecture: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+- Deployment: [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md)
+- Development standards: [CLAUDE.md](./CLAUDE.md)
