@@ -18,9 +18,20 @@ logger = logging.getLogger(__name__)
 
 def _get_llm(model_name: str):
     """Get LLM instance for distillation."""
-    from app.core.llm import get_llm
-
-    return get_llm(model_name)
+    from langchain_openai import ChatOpenAI
+    from app.config import get_settings
+    s = get_settings()
+    provider = s.llm_provider
+    # 复用 create_llm 拿到正确的 base_url/api_key，再覆盖 model
+    from app.core.llm import create_llm
+    base_llm = create_llm(provider)
+    return ChatOpenAI(
+        base_url=base_llm.base_url if hasattr(base_llm, "base_url") else base_llm.openai_api_base,
+        api_key=base_llm.openai_api_key,
+        model=model_name,
+        temperature=0.1,
+        streaming=False,
+    )
 
 
 def _parse_skill_json(content: str) -> Optional[Dict]:

@@ -8,6 +8,8 @@ Visual Base — 通用图片生成底座
 import asyncio
 import csv
 import json
+import subprocess
+import sys
 import logging
 from pathlib import Path
 from typing import List, Dict, Any
@@ -173,19 +175,15 @@ async def _generate_chart(request: Dict[str, Any]) -> str:
     output_name = f"chart_{hash(title) % 10000:04d}"
 
     cmd = [
-        "python", str(scripts_dir / "plot.py"),
+        sys.executable, str(scripts_dir / "plot.py"),
         "--input", str(csv_path),
         "--type", chart_type,
         "--title", title,
         "--output-svg", str(output_dir / f"{output_name}.svg"),
     ]
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    await process.communicate()
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=60))
 
     svg_path = output_dir / f"{output_name}.svg"
     if svg_path.exists():
@@ -214,7 +212,7 @@ async def _generate_diagram(request: Dict[str, Any]) -> str:
     output_name = f"diagram_{hash(title) % 10000:04d}"
 
     cmd = [
-        "python", str(scripts_dir / "diagram_plotter.py"),
+        sys.executable, str(scripts_dir / "diagram_plotter.py"),
         "--type", diagram_type,
         "--content", content,
         "--title", title,
@@ -222,12 +220,8 @@ async def _generate_diagram(request: Dict[str, Any]) -> str:
         "--output", str(output_dir / output_name),
     ]
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    await process.communicate()
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=60))
 
     svg_path = output_dir / f"{output_name}.svg"
     if svg_path.exists():

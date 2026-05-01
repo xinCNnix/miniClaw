@@ -1,7 +1,7 @@
 ---
 name: baidu-search
 description: Search the web using Baidu AI Search Engine (BDSE). Use for live information, documentation, or research topics.
-metadata: { "openclaw": { "emoji": "🔍︎",  "requires": { "bins": ["python3"], "env":["BAIDU_API_KEY"]},"primaryEnv":"BAIDU_API_KEY" } }
+metadata: { "openclaw": { "emoji": "🔍︎",  "requires": { "bins": ["python"], "env":["BAIDU_API_KEY"]},"primaryEnv":"BAIDU_API_KEY" } }
 ---
 
 # Baidu Search
@@ -22,7 +22,7 @@ For detailed setup instructions, see:
 ## Usage
 
 ```bash
-python3 skills/baidu-search/scripts/search.py '<JSON>'
+python skills/baidu-search/scripts/search.py '<JSON>'
 ```
 
 ## Request Parameters
@@ -37,22 +37,22 @@ python3 skills/baidu-search/scripts/search.py '<JSON>'
 
 ```bash
 # Basic search
-python3 scripts/search.py '{"query":"人工智能"}'
+python scripts/search.py '{"query":"人工智能"}'
 
 # Freshness first format "YYYY-MM-DDtoYYYY-MM-DD" example
-python3 scripts/search.py '{
+python scripts/search.py '{
   "query":"最新新闻",
   "freshness":"2025-09-01to2025-09-08"
 }'
 
 # Freshness second format pd、pw、pm、py example
-python3 scripts/search.py '{
+python scripts/search.py '{
   "query":"最新新闻",
   "freshness":"pd"
 }'
 
 # set count, the number of results to return
-python3 scripts/search.py '{
+python scripts/search.py '{
   "query":"旅游景点",
   "count": 20,
 }'

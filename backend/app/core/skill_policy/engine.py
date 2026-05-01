@@ -15,6 +15,8 @@ PolicyOutput.
 import asyncio
 import json
 import logging
+import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +29,11 @@ from .types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def get_python_command() -> str:
+    return sys.executable or "python"
+
 
 # Default tool whitelist for GUARD stage
 _DEFAULT_GUARD_TOOLS = frozenset({
@@ -554,7 +561,7 @@ Example: [{{"tool": "python_repl", "args": {{"code": "import importlib.util\\n..
 
 TYPE-SPECIFIC RULES:
 - For **instruction** type: Read the skill instructions carefully. Generate the ACTUAL tool calls described in the instructions, with parameters extracted from the user query. For example, if the skill says to run a curl command, generate a terminal tool call with that curl command. NEVER output read_file — that step is already done.
-- For **script** type: generate a `terminal` command running the correct Python script with correct arguments extracted from the user query.
+- For **script** type: generate a `terminal` command running the correct Python script with correct arguments extracted from the user query. Use `python` (not `python3`) for the command.
 - For **module** type: generate `python_repl` code that uses importlib to load handler.py and calls run() with properly extracted parameters.
 - For **handler_module** type: generate `python_repl` code that uses importlib to load handler.py and calls the correct function with parameters extracted from the user query.
 
@@ -583,6 +590,10 @@ def _parse_tool_plan_json(raw: str) -> Optional[List[Dict[str, Any]]]:
         text = text.split("\n", 1)[-1]
     if text.endswith("```"):
         text = text.rsplit("```", 1)[0]
+    text = text.strip()
+    # Strip JavaScript-style comments (LLM sometimes adds these)
+    text = re.sub(r"(?<!:)//.*?$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     text = text.strip()
 
     try:
@@ -812,7 +823,7 @@ def _remap_args(
                 "Guard _remap_args: saved LLM code to %s, running via terminal",
                 temp_script,
             )
-            return {"command": f'python "{temp_script}"'}
+            return {"command": f'"{get_python_command()}" "{temp_script}"'}
 
         # No usable python_repl code — fall back to running the skill's main script
         script_path = _find_main_script(skill_name)
@@ -825,7 +836,7 @@ def _remap_args(
             return {"command": cmd}
         except Exception as e:
             logger.warning("Guard _remap_args: build_cli_command failed: %s", e)
-            return {"command": f"python {script_path}"}
+            return {"command": f'"{get_python_command()}" {script_path}'}
 
     if skill_type == "handler_module":
         skills_dir = _get_skills_dir()
@@ -833,10 +844,11 @@ def _remap_args(
 
         # Build importlib preamble to load handler.py
         importlib_preamble = (
-            "import importlib.util\n"
+            "import importlib.util, asyncio\n"
             f"spec = importlib.util.spec_from_file_location('handler', r'{handler_path}')\n"
             "mod = importlib.util.module_from_spec(spec)\n"
             "spec.loader.exec_module(mod)\n"
+            "_call = lambda fn, *a, **kw: asyncio.run(fn(*a, **kw)) if asyncio.iscoroutinefunction(fn) else fn(*a, **kw)\n"
         )
 
         code = current_args.get("code", "")
@@ -854,6 +866,8 @@ def _remap_args(
             code = re.sub(r'^import handler\n?', '', code, flags=re.MULTILINE)
             # Replace handler.xxx references with mod.xxx
             code = re.sub(r'\bhandler\.', 'mod.', code)
+            # Wrap async handler calls: mod.run(...) → _call(mod.run, ...)
+            code = re.sub(r'\bmod\.run\(', '_call(mod.run, ', code)
             # Build alias assignments: draw = mod.draw
             aliases = "\n".join(f"{n} = mod.{n}" for n in imported_names) + "\n" if imported_names else ""
             # NOTE: Disabled backslash escaping — too fragile for code containing
@@ -889,24 +903,26 @@ def _remap_args(
             code = re.sub(r'^import handler\n?', '', code, flags=re.MULTILINE)
             code = re.sub(r'\bhandler\.', 'mod.', code)
             importlib_preamble = (
-                "import importlib.util\n"
+                "import importlib.util, asyncio\n"
                 f"spec = importlib.util.spec_from_file_location('handler', r'{handler_path}')\n"
                 "mod = importlib.util.module_from_spec(spec)\n"
                 "spec.loader.exec_module(mod)\n"
+                "_call = lambda fn, *a, **kw: asyncio.run(fn(*a, **kw)) if asyncio.iscoroutinefunction(fn) else fn(*a, **kw)\n"
             )
             aliases = "\n".join(f"{n} = mod.{n}" for n in imported_names) + "\n" if imported_names else ""
             code = code.replace('\\', '\\\\')
             return {"code": importlib_preamble + "\n" + aliases + code}
 
         if not code:
-            # No code at all — inject run() template
+            # No code at all — inject run() template (async-safe)
             code = (
-                "import importlib.util\n"
+                "import importlib.util, asyncio\n"
                 f"spec = importlib.util.spec_from_file_location('handler', r'{handler_path}')\n"
                 "mod = importlib.util.module_from_spec(spec)\n"
                 "spec.loader.exec_module(mod)\n"
-                f"result = mod.run(inputs={{'query': {user_query!r}}}, context={{}})\n"
-                "print(result)"
+                f"_r = mod.run(inputs={{'query': {user_query!r}}}, context={{}})\n"
+                "if asyncio.iscoroutine(_r): _r = asyncio.run(_r)\n"
+                "print(_r)"
             )
             return {"code": code}
         return {"code": code}
@@ -963,6 +979,40 @@ def guard_compiled_plan(
                     skill_type, skill_name or "",
                     plan.get("args", {}), user_query,
                 )
+        elif skill_type == "script" and actual_tool == "terminal":
+            # Tool is correct but LLM may use wrong field name or wrong path.
+            args = plan.get("args", {})
+            needs_fix = False
+
+            # Fix 1: 'code' → 'command' (terminal expects 'command')
+            if "code" in args and "command" not in args:
+                args = {"command": args["code"]}
+                needs_fix = True
+
+            # Fix 2: correct script path (LLM often omits 'data/' prefix)
+            cmd = args.get("command", "")
+            correct_script = _find_main_script(skill_name)
+            if correct_script and correct_script not in cmd:
+                # LLM used wrong path, rebuild command with correct script
+                from app.core.tot.skill_orchestrator import build_cli_command
+                try:
+                    args = {"command": build_cli_command(correct_script, user_query)}
+                except Exception:
+                    args = {"command": f'"{get_python_command()}" {correct_script}'}
+                needs_fix = True
+
+            if needs_fix:
+                logger.info(
+                    "Guard ARGS-CORRECT: '%s' script — fixed terminal args",
+                    skill_name,
+                )
+                plan["args"] = args
+
+        # Restore metadata for downstream (skill name display, executor propagation)
+        if skill_type:
+            plan["_source_skill_type"] = skill_type
+        if skill_name:
+            plan["_source_skill_name"] = skill_name
 
     # 2. Standard checks on the (now-corrected) plan
     for plan in tool_plans:

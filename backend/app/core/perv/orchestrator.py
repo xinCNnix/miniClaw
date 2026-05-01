@@ -277,6 +277,24 @@ class PlannerOrchestrator:
                 except Exception as _le:
                     logger.debug("[PEVR] Post-learning trigger failed: %s", _le)
 
+                # === Online Distill (fire-and-forget, gated by perv_enable_post_learning) ===
+                try:
+                    if getattr(_gs(), "perv_enable_post_learning", False) and self._final_answer:
+                        from app.core.online_distill import online_distill_skill
+                        asyncio.create_task(
+                            online_distill_skill(
+                                user_query=task,
+                                agent_output=self._final_answer,
+                                tool_calls=[],
+                                execution_time=graph_duration,
+                                execution_mode="perv",
+                                plan=self._final_plan,
+                                observations=self._final_observations,
+                            )
+                        )
+                except Exception as _le:
+                    logger.debug("[OnlineDistill] PEVR trigger failed: %s", _le)
+
             except Exception as exc:
                 logger.error(
                     "[PEVR Orchestrator] Fatal error: %s (%.1fs)",
@@ -357,7 +375,7 @@ class PlannerOrchestrator:
                 enrichment["strategy_prompt"] = strategy_prompt or ""
                 if self._pevr_log:
                     self._pevr_log.log_custom(
-                        "strategy_injection", prompt=strategy_prompt[:100]
+                        "strategy_injection", prompt=(strategy_prompt or "")[:100]
                     )
             except Exception as e:
                 logger.warning("[PERV Enrichment] Strategy injection failed: %s", e)
@@ -715,6 +733,7 @@ class PlannerOrchestrator:
                     result_data["training_triggered"] = learning_result.training_triggered
 
                 self._pevr_log.log_custom("learning_result", data=result_data)
+                self._pevr_log.append_learning_result(result_data)
 
             logger.info(
                 "[PEVR] Post-execution learning completed: pattern=%s",

@@ -224,6 +224,31 @@ const zhTranslations = {
     score: '评分',
     tools: '{count} 个工具',
   },
+  // PERV (Plan-Execute-Verify-Reflect)
+  perv: {
+    phase: {
+      routing: '路由决策',
+      planning: '规划',
+      executing: '执行',
+      verifying: '验证',
+      replanning: '重新规划',
+      done: '完成',
+    },
+    step_status: {
+      success: '成功',
+      fail: '失败',
+      pending: '等待中',
+    },
+    verification: {
+      pass: '通过',
+      fail: '未通过',
+      confidence: '置信度',
+    },
+    retry_count: '重试 {count} 次',
+    skills_matched: '{matched}/{compiled} 技能已编译',
+    risk_level: '风险等级',
+    plan_steps: '{count} 个步骤',
+  },
   // Common
   common: {
     loading: '加载中...',
@@ -421,6 +446,31 @@ const enTranslations = {
     pending: 'Pending...',
     score: 'Score',
     tools: '{count} tools',
+  },
+  // PERV (Plan-Execute-Verify-Reflect)
+  perv: {
+    phase: {
+      routing: 'Routing',
+      planning: 'Planning',
+      executing: 'Executing',
+      verifying: 'Verifying',
+      replanning: 'Replanning',
+      done: 'Done',
+    },
+    step_status: {
+      success: 'Success',
+      fail: 'Failed',
+      pending: 'Pending',
+    },
+    verification: {
+      pass: 'Pass',
+      fail: 'Fail',
+      confidence: 'Confidence',
+    },
+    retry_count: 'Retry #{count}',
+    skills_matched: '{matched}/{compiled} skills compiled',
+    risk_level: 'Risk Level',
+    plan_steps: '{count} steps',
   },
   // Common
   common: {

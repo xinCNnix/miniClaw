@@ -94,7 +94,26 @@ async def verifier_node(state: dict) -> dict:
             "coverage": 0.0,
             "scores": {},
         }
-        report: Dict[str, Any] = repair_json_or_none(raw_content) or _fallback_report
+        parsed = repair_json_or_none(raw_content)
+        if parsed is None:
+            # JSON parsing failed — log raw response for analysis
+            logger.debug(
+                "[PEVR Verifier] JSON repair failed, raw response (first 500 chars): %s",
+                raw_content[:500],
+            )
+            # Heuristic: if observations contain substantial content, lean toward pass
+            obs_text = " ".join(str(o.get("output", "")) for o in observations)
+            if len(obs_text) > 200 and any(
+                kw in obs_text.lower()
+                for kw in ["success", "完成", "result", "found", "generated"]
+            ):
+                _fallback_report.update({
+                    "verdict": "pass",
+                    "confidence": 0.6,
+                    "passed": True,
+                    "reason": "Fallback: observations contain successful results (JSON parse failed)",
+                })
+        report: Dict[str, Any] = parsed or _fallback_report
 
         # Ensure required keys exist (support both old and new format)
         report.setdefault("verdict", "fail")

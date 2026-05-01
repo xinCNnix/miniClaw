@@ -7,7 +7,11 @@
       "installed_at": "2026-03-08T20:29:50.836170",
       "version": "1.0.0",
       "author": "miniClaw",
-      "tags": ["weather", "api", "utility"]
+      "tags": [
+        "weather",
+        "api",
+        "utility"
+      ]
     },
     "arxiv-search": {
       "name": "arxiv-search",
@@ -16,7 +20,13 @@
       "installed_at": "2026-03-13T16:15:00.000000",
       "version": "1.0.0",
       "author": "miniClaw",
-      "tags": ["arxiv", "academic", "research", "papers", "literature-search"]
+      "tags": [
+        "arxiv",
+        "academic",
+        "research",
+        "papers",
+        "literature-search"
+      ]
     },
     "find-skill": {
       "name": "find-skill",
@@ -25,7 +35,13 @@
       "installed_at": "2026-03-13T16:15:00.000000",
       "version": "1.0.0",
       "author": "miniClaw",
-      "tags": ["skills", "search", "install", "github", "repository"]
+      "tags": [
+        "skills",
+        "search",
+        "install",
+        "github",
+        "repository"
+      ]
     },
     "github": {
       "name": "github",
@@ -34,7 +50,12 @@
       "installed_at": "2026-03-13T16:15:00.000000",
       "version": "1.0.0",
       "author": "miniClaw",
-      "tags": ["github", "git", "development", "code-review"]
+      "tags": [
+        "github",
+        "git",
+        "development",
+        "code-review"
+      ]
     },
     "skill_validator": {
       "name": "skill_validator",
@@ -43,7 +64,11 @@
       "installed_at": "2026-03-13T16:15:00.000000",
       "version": "1.0.0",
       "author": "miniClaw",
-      "tags": ["validation", "skills", "security"]
+      "tags": [
+        "validation",
+        "skills",
+        "security"
+      ]
     },
     "skill-creator": {
       "name": "skill-creator",
@@ -52,8 +77,13 @@
       "installed_at": "2026-03-13T16:15:00.000000",
       "version": "1.0.0",
       "author": "miniClaw",
-      "tags": ["creation", "skills", "development"]
+      "tags": [
+        "creation",
+        "skills",
+        "development"
+      ]
     }
   },
-  "last_updated": "2026-03-13T16:39:00.000000"
+  "last_updated": "2026-04-29T18:18:07.250326",
+  "updated_at": "2026-04-29T17:36:13.750071"
 }

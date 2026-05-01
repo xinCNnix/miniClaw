@@ -27,6 +27,11 @@ __all__ = [
     "get_tool_registry",
     "get_registered_tools",
     "validate_all_tools",
+
+    # Dream
+    "run_dream",
+    "build_dream_subgraph",
+    "DreamConfig",
 ]
 
 
@@ -35,6 +40,7 @@ def __getattr__(name: str):
     _AGENT = {"AgentManager", "create_agent_manager"}
     _LLM = {"create_llm", "get_default_llm", "get_available_providers", "validate_provider_config"}
     _TOOLS = {"ToolRegistry", "tool_registry", "get_tool_registry", "get_registered_tools", "validate_all_tools"}
+    _DREAM = {"run_dream", "build_dream_subgraph", "DreamConfig"}
 
     if name in _AGENT:
         from .agent import AgentManager, create_agent_manager
@@ -55,6 +61,13 @@ def __getattr__(name: str):
             "get_tool_registry": get_tool_registry,
             "get_registered_tools": get_registered_tools,
             "validate_all_tools": validate_all_tools,
+        }[name]
+    if name in _DREAM:
+        from .dream import run_dream, build_dream_subgraph, DreamConfig
+        return {
+            "run_dream": run_dream,
+            "build_dream_subgraph": build_dream_subgraph,
+            "DreamConfig": DreamConfig,
         }[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

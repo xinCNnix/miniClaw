@@ -13,7 +13,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
-from fastapi.staticfiles import StaticFiles
 import asyncio
 import logging
 import re
@@ -32,6 +31,7 @@ from app.api import memory_sync as memory_sync_api
 from app.api import embedding as embedding_api
 from app.api import media as media_api
 from app.api import wiki as wiki_api
+from app.api import dream as dream_api
 
 
 # Configure logging
@@ -223,6 +223,104 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"[Watchdog] 启动失败: {e}")
 
+    # Dream module status + auto-scheduler (Phase 2)
+    if getattr(settings, "enable_dream", False):
+        schedule = getattr(settings, "dream_schedule", "")
+        if schedule:
+            max_samples = getattr(settings, "dream_max_samples", 3)
+            executor_mode = getattr(settings, "dream_executor_mode", "simulated")
+            asyncio.create_task(
+                _dream_scheduler_loop(schedule, max_samples, executor_mode)
+            )
+            logger.info(
+                f"[Dream] Auto-scheduler started (schedule={schedule}, "
+                f"max_samples={max_samples}, mode={executor_mode})"
+            )
+        else:
+            logger.info("[Dream] Module enabled, manual trigger at POST /api/dream/trigger")
+    else:
+        logger.info("[Dream] Module disabled")
+
+
+def _cron_field_matches(field: str, value: int, lo: int, hi: int) -> bool:
+    """Check if a cron field matches a value. Supports *, */N, and specific numbers."""
+    if field == "*":
+        return True
+    if field.startswith("*/"):
+        step = int(field[2:])
+        return value % step == 0
+    # Comma-separated or range values
+    for part in field.split(","):
+        if "-" in part:
+            a, b = part.split("-", 1)
+            if int(a) <= value <= int(b):
+                return True
+        elif int(part) == value:
+            return True
+    return False
+
+
+def _next_cron_time(cron_expr: str) -> "datetime.datetime":
+    """Calculate next fire time from a 5-field cron expression."""
+    import datetime as _dt
+
+    parts = cron_expr.strip().split()
+    if len(parts) != 5:
+        raise ValueError(f"Expected 5-field cron, got: {cron_expr}")
+
+    minute_f, hour_f, dom_f, month_f, dow_f = parts
+    now = _dt.datetime.now()
+    candidate = now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)
+
+    # Scan forward (max 1 year)
+    for _ in range(525960):
+        if (
+            _cron_field_matches(minute_f, candidate.minute, 0, 59)
+            and _cron_field_matches(hour_f, candidate.hour, 0, 23)
+            and _cron_field_matches(dom_f, candidate.day, 1, 31)
+            and _cron_field_matches(month_f, candidate.month, 1, 12)
+            and _cron_field_matches(dow_f, candidate.weekday(), 0, 6)
+        ):
+            return candidate
+        candidate += _dt.timedelta(minutes=1)
+
+    return now + _dt.timedelta(hours=24)
+
+
+async def _dream_scheduler_loop(
+    schedule: str, max_samples: int, executor_mode: str
+) -> None:
+    """Background task that runs Dream sessions on a cron schedule."""
+    import datetime as _dt
+
+    while True:
+        try:
+            next_run = _next_cron_time(schedule)
+        except Exception as e:
+            logger.error(f"[Dream Scheduler] Invalid schedule '{schedule}': {e}")
+            return
+
+        now = _dt.datetime.now()
+        wait = max(0, (next_run - now).total_seconds())
+        logger.info(f"[Dream Scheduler] Next run at {next_run} (in {wait:.0f}s)")
+        await asyncio.sleep(wait)
+
+        try:
+            from app.core.dream import run_dream
+
+            logger.info("[Dream Scheduler] Starting scheduled Dream session")
+            await run_dream(
+                mode="nightly",
+                max_samples=max_samples,
+                executor_mode=executor_mode,
+            )
+            logger.info("[Dream Scheduler] Session completed")
+        except Exception as e:
+            logger.error(f"[Dream Scheduler] Session failed: {e}", exc_info=True)
+
+        # Minimum gap between runs
+        await asyncio.sleep(60)
+
 
 async def _warmup_embedding_model(embedding_manager, timeout: int):
     """
@@ -333,11 +431,7 @@ app.include_router(websocket_api.router, prefix="/api")
 app.include_router(embedding_api.router, prefix="/api/embedding")
 app.include_router(media_api.router, prefix="/api/media")
 app.include_router(wiki_api.router, prefix="/api")
-
-# Serve frontend static files (Docker deployment only)
-_static_dir = Path(__file__).resolve().parent.parent.parent / "static"
-if _static_dir.is_dir():
-    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="frontend")
+app.include_router(dream_api.router, prefix="/api/dream")
 
 
 if __name__ == "__main__":

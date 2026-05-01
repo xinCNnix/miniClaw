@@ -40,6 +40,7 @@ class PEVRTrace(BaseExecutionTrace):
     def __init__(self, task: str, session_id: str = ""):
         super().__init__()
         self.task = task
+        self._last_trace_path: str | None = None
         self.session_id = session_id
 
         self.loops: List[LoopRecord] = []
@@ -660,9 +661,33 @@ class PEVRTrace(BaseExecutionTrace):
         try:
             from app.core.execution_trace.writer import save_trace
             data = self.get_summary()
-            save_trace(data, mode="perv", task_name=self.task[:50], session_id=self.session_id)
+            self._last_trace_path = save_trace(
+                data, mode="perv", task_name=self.task[:50], session_id=self.session_id,
+            )
         except Exception as e:
             logger.debug("[PEVR] Auto-save trace failed: %s", e)
+
+    def append_learning_result(self, result_data: dict):
+        """Append learning events to the already-saved trace file.
+
+        Called by _post_execution_learning() after the trace was auto-saved.
+        """
+        if not self._last_trace_path:
+            return
+        try:
+            path = Path(self._last_trace_path)
+            if not path.exists():
+                return
+            with open(path, "r", encoding="utf-8") as f:
+                trace = json.load(f)
+            events = trace.get("learning_events", [])
+            events.append({"type": "learning_result", **result_data})
+            trace["learning_events"] = events
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(trace, f, indent=2, ensure_ascii=False, default=str)
+            logger.debug("[PEVR] Learning result appended to trace %s", self._last_trace_path)
+        except Exception as e:
+            logger.debug("[PEVR] Failed to append learning result to trace: %s", e)
 
 
 def get_pevr_logger(task: str, session_id: str = "") -> PEVRTrace:

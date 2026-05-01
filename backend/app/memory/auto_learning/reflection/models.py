@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ReflectionResult(BaseModel):
@@ -73,6 +73,13 @@ class ReflectionResult(BaseModel):
     ] = Field(default="none", description="Type of failure")
 
     root_cause: str = Field(default="", description="Root cause analysis")
+
+    @field_validator("root_cause", mode="before")
+    @classmethod
+    def _coerce_none_to_empty(cls, v):
+        if v is None:
+            return ""
+        return v
     reusable_pattern: str | None = Field(
         default=None, description="Reusable strategy (optional)"
     )

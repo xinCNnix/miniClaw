@@ -112,6 +112,12 @@ class PatternLearner:
         """
         logger.info(f"Starting learning for session {session_id}")
 
+        # Ensure user_query is a string (may be list when attachments present)
+        if isinstance(user_query, list):
+            user_query = " ".join(
+                item.get("text", "") for item in user_query if isinstance(item, dict)
+            )
+
         try:
             # Step 1: Reflect on execution
             logger.debug("Step 1: Running reflection analysis")

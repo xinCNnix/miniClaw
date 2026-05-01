@@ -84,8 +84,18 @@ class MemoryExtractor:
         last_error = None
         for attempt in range(self.max_retries + 1):
             try:
+                # On retry, strengthen the prompt to counter empty responses
+                prompt = system_prompt
+                if attempt > 0:
+                    prompt += (
+                        "\n\nIMPORTANT: You MUST respond with a valid JSON object. "
+                        "Do NOT return empty content. "
+                        'If no memories are worth extracting, return: '
+                        '{"memories":[],"summary":"","topics":[]}'
+                    )
+
                 # Call LLM
-                result = await self._call_llm(system_prompt, conversation_text)
+                result = await self._call_llm(prompt, conversation_text)
 
                 # Parse and validate result
                 extraction_result = self._parse_extraction_result(result, session_id)
@@ -227,7 +237,17 @@ Be conservative - only extract information you're confident about. If uncertain,
         ]
 
         response = await self.llm.ainvoke(messages)
-        return response.content
+        content = response.content
+
+        if not content or not content.strip():
+            logger.warning(
+                "LLM returned empty response for memory extraction "
+                "(conversation length=%d chars)",
+                len(conversation_text),
+            )
+            raise ValueError("LLM returned empty response for memory extraction")
+
+        return content
 
     def _parse_extraction_result(
         self,

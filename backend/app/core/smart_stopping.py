@@ -120,8 +120,12 @@ class SmartToolStopping:
 
         return False, ""
 
-    def _is_simple_greeting(self, message: str) -> bool:
+    def _is_simple_greeting(self, message) -> bool:
         """检测是否为简单问候"""
+        if isinstance(message, list):
+            message = " ".join(
+                item.get("text", "") for item in message if isinstance(item, dict)
+            )
         message_lower = message.lower().strip()
 
         # 简单问候关键词

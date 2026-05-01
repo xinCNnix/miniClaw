@@ -128,6 +128,7 @@ def create_llm(
         temperature=config["temperature"],
         max_tokens=4000,  # Increased from 2000 to prevent truncation
         streaming=True,  # Enable streaming for SSE
+        stream_usage=True,  # Return token usage even when streaming
         request_timeout=settings.llm_request_timeout,  # 超时保护，防止 API 无响应时永久挂起
     )
 
@@ -231,6 +232,7 @@ def create_llm_from_config(llm_config: PydanticLLMConfig) -> BaseChatModel:
         temperature=0.1,
         max_tokens=4000,  # Increased from 2000 to prevent truncation
         streaming=True,  # Enable streaming for SSE
+        stream_usage=True,  # Return token usage even when streaming
         request_timeout=settings.llm_request_timeout,  # 超时保护
     )
 

@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -90,24 +91,36 @@ def extract_skill_name(path: str) -> Optional[str]:
 
 
 def detect_skill_type(skill_name: str, skills_dir: Path) -> str:
-    """检测 skill 是 module 还是 script 类型。
+    """检测 skill 类型: module / script / instruction。
+
+    - module: scripts/handler.py 存在且包含 def 定义
+    - script: scripts/ 目录下有 .py 文件但无 handler.py
+    - instruction: 仅 SKILL.md，无可执行脚本
 
     Args:
         skill_name: skill 名称。
         skills_dir: skills 根目录路径。
 
     Returns:
-        "module" 或 "script"。
+        "module", "script" 或 "instruction"。
     """
-    handler_path = skills_dir / skill_name / "scripts" / "handler.py"
+    skill_dir = skills_dir / skill_name
+    handler_path = skill_dir / "scripts" / "handler.py"
     if handler_path.exists():
         try:
             content = handler_path.read_text(encoding="utf-8")
-            if "async def run" in content or "def run" in content:
+            if re.search(r'\bdef\s+\w+', content):
                 return "module"
         except Exception:
             pass
-    return "script"
+
+    scripts_dir = skill_dir / "scripts"
+    if scripts_dir.exists():
+        py_files = list(scripts_dir.glob("*.py"))
+        if py_files:
+            return "script"
+
+    return "instruction"
 
 
 def extract_script_path(
@@ -206,7 +219,8 @@ def build_cli_command(
     Returns:
         构造好的 CLI 命令字符串。
     """
-    cmd = f'python {script_path}'
+    python_cmd = sys.executable or "python"
+    cmd = f'"{python_cmd}" {script_path}'
 
     if extra_args:
         for k, v in extra_args.items():
@@ -283,6 +297,9 @@ async def _execute_module_skill(
 ) -> Dict[str, Any]:
     """执行模块型 skill。
 
+    优先查找 run() 函数，不存在时查找 handler 中的第一个 async def / def 公开函数。
+    对 geometry-plotter 这类无 run() 的 skill，使用 LLM 提取参数后调用对应函数。
+
     Args:
         skill_name: skill 名称。
         user_query: 用户查询。
@@ -292,14 +309,10 @@ async def _execute_module_skill(
     Returns:
         执行结果 dict。
     """
-    # 旧代码（注释掉）：from app.skills.loader import execute_skill — loader.py 中无此函数
-    # from app.skills.loader import execute_skill
-    # result = await execute_skill(skill_name, inputs=inputs, context={"llm": llm})
-
-    # 新代码：直接用 importlib 加载 scripts/handler.py 并调用 run()
     import importlib.util
-    from app.config import settings
+    from app.config import get_settings
 
+    settings = get_settings()
     skills_dir = Path(getattr(settings, "skills_dir", "data/skills"))
     handler_path = skills_dir / skill_name / "scripts" / "handler.py"
 
@@ -313,40 +326,150 @@ async def _execute_module_skill(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
+    # 1. 优先找 run() 函数
     run_func = getattr(module, "run", None)
-    if run_func is None:
-        raise RuntimeError(f"No 'run' function in {handler_path}")
+    if run_func is not None:
+        inputs = {"query": user_query}
+        if extra_args:
+            inputs.update(extra_args)
+        try:
+            if asyncio.iscoroutinefunction(run_func):
+                result = await run_func(inputs=inputs, context={"llm": llm})
+            else:
+                result = run_func(inputs=inputs, context={"llm": llm})
+        except Exception as e:
+            logger.error(f"Module skill execution failed for {skill_name}: {e}")
+            return {
+                "status": "error",
+                "result": str(e),
+                "skill_type": "module",
+                "skill_name": skill_name,
+            }
+    else:
+        # 2. 无 run()：使用 LLM 提取参数，调用匹配的函数
+        result = await _execute_custom_module(skill_name, module, user_query, llm, handler_path)
 
-    inputs = {"query": user_query}
-    if extra_args:
-        inputs.update(extra_args)
+    result_str, gen_images = embed_output_images_v2(str(result))
+    _register_embedded_images(result_str)
+    if gen_images:
+        logger.info("[SkillOrchestrator] module %s generated %d image(s)", skill_name, len(gen_images))
+    return {
+        "status": "success",
+        "result": result_str,
+        "skill_type": "module",
+        "skill_name": skill_name,
+        "generated_images": gen_images if gen_images else None,
+    }
+
+
+async def _execute_custom_module(
+    skill_name: str,
+    module: Any,
+    user_query: str,
+    llm: Optional[Any],
+    handler_path: Path,
+) -> Any:
+    """对无 run() 函数的 module skill，使用 LLM 提取参数并调用对应函数。
+
+    扫描 handler 中的公开函数（不以 _ 开头），用 LLM 决定调用哪个函数及参数。
+
+    Args:
+        skill_name: skill 名称。
+        module: 已加载的 handler 模块。
+        user_query: 用户查询。
+        llm: LLM 实例。
+        handler_path: handler.py 路径。
+
+    Returns:
+        函数执行结果。
+    """
+    import inspect
+
+    # 收集公开函数及其签名
+    public_funcs = {}
+    for name, obj in inspect.getmembers(module, inspect.isfunction):
+        if not name.startswith("_"):
+            sig = inspect.signature(obj)
+            public_funcs[name] = {
+                "func": obj,
+                "params": list(sig.parameters.keys()),
+            }
+
+    if not public_funcs:
+        raise RuntimeError(f"No public functions found in {handler_path}")
+
+    if llm is None:
+        # 无 LLM：尝试带 user_query 调用第一个公开函数，失败则无参调用
+        first_name = next(iter(public_funcs))
+        func = public_funcs[first_name]["func"]
+        try:
+            if asyncio.iscoroutinefunction(func):
+                return await func(query=user_query)
+            return func(query=user_query)
+        except TypeError:
+            if asyncio.iscoroutinefunction(func):
+                return await func()
+            return func()
+
+    # 用 LLM 提取参数
+    import json as _json
+    from langchain_core.messages import SystemMessage, HumanMessage
+
+    func_descriptions = []
+    for fname, info in public_funcs.items():
+        params_str = ", ".join(info["params"])
+        func_descriptions.append(f"- {fname}({params_str})")
+
+    # 读取 SKILL.md 获取技能描述
+    skill_md_path = handler_path.parent.parent / "SKILL.md"
+    skill_desc = ""
+    if skill_md_path.exists():
+        try:
+            skill_desc = skill_md_path.read_text(encoding="utf-8")[:2000]
+        except Exception:
+            pass
+
+    system_msg = (
+        f"你是参数提取器。根据 SKILL.md 说明和用户请求，选择正确的函数并提取参数，输出 JSON。\n"
+        f"只输出 JSON，不要其他内容。\n\n"
+        f"可用函数:\n" + "\n".join(func_descriptions) + "\n\n"
+        f"输出格式: {{\"function\": \"函数名\", \"args\": {{参数名: 值}}}}"
+    )
+    user_msg = f"用户请求: {user_query}\n\nSKILL.md:\n{skill_desc}"
 
     try:
-        if asyncio.iscoroutinefunction(run_func):
-            result = await run_func(inputs=inputs, context={"llm": llm})
-        else:
-            result = run_func(inputs=inputs, context={"llm": llm})
-        # 统一图片嵌入：module skill 也可能生成图片
-        result_str, gen_images = embed_output_images_v2(str(result))
-        # Register generated images with MediaRegistry (keep for document insertion)
-        _register_embedded_images(result_str)
-        if gen_images:
-            logger.info("[SkillOrchestrator] module %s generated %d image(s)", skill_name, len(gen_images))
-        return {
-            "status": "success",
-            "result": result_str,
-            "skill_type": "module",
-            "skill_name": skill_name,
-            "generated_images": gen_images if gen_images else None,
-        }
+        response = await llm.ainvoke([SystemMessage(content=system_msg), HumanMessage(content=user_msg)])
+        text = response.content.strip()
+        text = re.sub(r'^```\w*\n?', '', text).rstrip('`').strip()
+        params = _json.loads(text)
     except Exception as e:
-        logger.error(f"Module skill execution failed for {skill_name}: {e}")
-        return {
-            "status": "error",
-            "result": str(e),
-            "skill_type": "module",
-            "skill_name": skill_name,
-        }
+        logger.warning("[SkillOrchestrator] LLM param extraction failed for %s: %s", skill_name, e)
+        # 回退：调用第一个公开函数
+        first_name = next(iter(public_funcs))
+        func = public_funcs[first_name]["func"]
+        if asyncio.iscoroutinefunction(func):
+            return await func()
+        return func()
+
+    func_name = params.get("function", next(iter(public_funcs)))
+    func_args = params.get("args", {})
+
+    if func_name not in public_funcs:
+        logger.warning("[SkillOrchestrator] LLM chose unknown function '%s', using first available", func_name)
+        func_name = next(iter(public_funcs))
+
+    func = public_funcs[func_name]["func"]
+    logger.info("[SkillOrchestrator] custom module %s: calling %s(%s)", skill_name, func_name, list(func_args.keys()))
+
+    try:
+        if asyncio.iscoroutinefunction(func):
+            return await func(**func_args)
+        return func(**func_args)
+    except TypeError as te:
+        logger.warning("[SkillOrchestrator] function %s args mismatch: %s, falling back to no-args call", func_name, te)
+        if asyncio.iscoroutinefunction(func):
+            return await func()
+        return func()
 
 
 async def _execute_script_skill(
@@ -420,42 +543,45 @@ async def _execute_script_skill(
             "skill_name": skill_name,
         }
 
-    # 执行，设置超时 120 秒（图形生成可能较慢）
-    try:
-        result = await asyncio.wait_for(
-            terminal_tool.ainvoke({"command": cmd}),
-            timeout=120.0,
-        )
-        # 后处理：扫描 outputs/ 目录，将生成的图片嵌入为 base64
-        result_str = str(result)
-        result_str, gen_images = embed_output_images_v2(result_str)
-        # Register generated images with MediaRegistry (keep for document insertion)
-        _register_embedded_images(result_str)
-        if gen_images:
-            logger.info("[SkillOrchestrator] script %s generated %d image(s)", skill_name, len(gen_images))
-        return {
-            "status": "success",
-            "result": result_str,
-            "skill_type": "script",
-            "skill_name": skill_name,
-            "generated_images": gen_images if gen_images else None,
-        }
-    except asyncio.TimeoutError:
-        logger.warning(f"Script skill {skill_name} timed out (120s)")
-        return {
-            "status": "error",
-            "result": f"Skill execution timed out (120s): {skill_name}",
-            "skill_type": "script",
-            "skill_name": skill_name,
-        }
-    except Exception as e:
-        logger.error(f"Script skill execution failed for {skill_name}: {e}")
-        return {
-            "status": "error",
-            "result": str(e),
-            "skill_type": "script",
-            "skill_name": skill_name,
-        }
+    # 执行，设置超时 120 秒（图形生成可能较慢），失败重试 1 次
+    max_attempts = 2
+    last_error = None
+    for attempt in range(max_attempts):
+        try:
+            result = await asyncio.wait_for(
+                terminal_tool.ainvoke({"command": cmd}),
+                timeout=120.0,
+            )
+            # 成功 → 后处理
+            result_str = str(result)
+            result_str, gen_images = embed_output_images_v2(result_str)
+            _register_embedded_images(result_str)
+            if gen_images:
+                logger.info("[SkillOrchestrator] script %s generated %d image(s)", skill_name, len(gen_images))
+            return {
+                "status": "success",
+                "result": result_str,
+                "skill_type": "script",
+                "skill_name": skill_name,
+                "generated_images": gen_images if gen_images else None,
+            }
+        except asyncio.TimeoutError:
+            last_error = f"Skill execution timed out (120s): {skill_name}"
+            logger.warning(f"Script skill {skill_name} timed out (120s), attempt {attempt + 1}/{max_attempts}")
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(
+                "Script skill %s failed (attempt %d/%d): %s",
+                skill_name, attempt + 1, max_attempts, e,
+            )
+
+    logger.error(f"Script skill {skill_name} failed after {max_attempts} attempts")
+    return {
+        "status": "error",
+        "result": f"Skill execution failed after {max_attempts} attempts: {last_error}",
+        "skill_type": "script",
+        "skill_name": skill_name,
+    }
 
 
 async def execute_skill_from_skillmd(
@@ -468,9 +594,10 @@ async def execute_skill_from_skillmd(
 ) -> Dict[str, Any]:
     """从 SKILL.md 内容自动检测并执行 skill。
 
-    根据技能类型（模块或脚本）选择合适的执行方式：
-    - 模块型: 调用 execute_skill() 委托给 handler.py
-    - 脚本型: 提取脚本路径，通过 terminal 工具执行 CLI 命令
+    根据技能类型选择合适的执行方式：
+    - module: 调用 handler.py 中的函数
+    - script: 提取脚本路径，通过 terminal 工具执行 CLI 命令
+    - instruction: 返回 SKILL.md 内容供 LLM 解读
 
     Args:
         skill_name: skill 目录名称。
@@ -489,144 +616,22 @@ async def execute_skill_from_skillmd(
 
     skill_type = detect_skill_type(skill_name, skills_dir)
     logger.info(
-        f"Skill orchestrator: executing '{skill_name}' as {skill_type} "
-        f"for query: {user_query[:80]}"
+        "Skill orchestrator: executing '%s' as %s "
+        "for query: %s",
+        skill_name, skill_type, user_query[:80],
     )
-
-    # geometry-plotter 特例：handler 有 draw()/draw_code()，无 run()
-    if skill_name == "geometry-plotter":
-        return await _execute_geometry_plotter(skill_content, user_query, tools, llm)
 
     if skill_type == "module":
         return await _execute_module_skill(skill_name, user_query, extra_args, llm)
-    else:
+    elif skill_type == "script":
         return await _execute_script_skill(
             skill_name, skill_content, user_query, tools, extra_args
         )
-
-
-# ---------------------------------------------------------------------------
-# geometry-plotter 特例：LLM 提取参数 → 直接调用 draw()/draw_code()
-# ---------------------------------------------------------------------------
-
-async def _extract_draw_params(skill_content: str, user_query: str, llm: Any) -> dict:
-    """LLM 根据 SKILL.md 提取 draw()/draw_code() 参数，输出 JSON。
-
-    Args:
-        skill_content: SKILL.md 文件内容。
-        user_query: 用户查询字符串。
-        llm: LLM 实例。
-
-    Returns:
-        参数 dict，包含 mode (draw/draw_code) 及对应参数。
-    """
-    import json as _json
-    from langchain_core.messages import SystemMessage, HumanMessage
-
-    system_msg = (
-        "你是一个参数提取器。根据 SKILL.md 说明和用户请求，提取绘图参数，输出 JSON。\n"
-        "只输出 JSON，不要其他内容。\n\n"
-        "draw 模式参数: mode, expr, x_range, y_range, title, latex_label, xlabel, ylabel, save_name\n"
-        "draw_code 模式参数: mode, code (matplotlib 代码，以 plt.savefig(SAVE_PATH) 结尾), save_name\n\n"
-        "示例 — 用户说'画正弦曲线':\n"
-        '{"mode": "draw", "expr": "np.sin(x)", "title": "正弦函数", '
-        '"latex_label": "$\\\\sin(x)$", "x_range": [-6.28, 6.28]}'
-    )
-    user_msg = f"用户请求: {user_query}\n\nSKILL.md:\n{skill_content}"
-
-    response = await llm.ainvoke([SystemMessage(content=system_msg), HumanMessage(content=user_msg)])
-    text = response.content.strip()
-    # 清理 markdown 代码块包裹
-    text = re.sub(r'^```\w*\n?', '', text).rstrip('`').strip()
-
-    try:
-        return _json.loads(text)
-    except _json.JSONDecodeError:
-        m = re.search(r'\{[^{}]+\}', text, re.DOTALL)
-        if m:
-            try:
-                return _json.loads(m.group(0))
-            except _json.JSONDecodeError:
-                pass
-        logger.warning("[geometry-plotter] Failed to parse LLM params, using fallback")
-        return {"mode": "draw", "expr": "np.sin(x)"}
-
-
-async def _execute_geometry_plotter(
-    skill_content: str,
-    user_query: str,
-    tools: List[BaseTool],
-    llm: Optional[Any],
-) -> Dict[str, Any]:
-    """geometry-plotter 特例处理。
-
-    handler.py 有 draw()/draw_code() 但无 run()，
-    通过 LLM 提取参数后直接调用对应函数。
-
-    所有 matplotlib 配置（字体、backend、输出格式）均在 handler 内部，
-    此函数只负责参数提取和函数调度。
-    """
-    import importlib.util
-
-    # 1. LLM 提取参数
-    params = await _extract_draw_params(skill_content, user_query, llm)
-    logger.info(f"[geometry-plotter] LLM extracted params: {params}")
-
-    # 2. 动态加载 handler.py
-    from app.config import get_settings
-    skills_dir = Path(get_settings().skills_dir)
-    handler_path = skills_dir / "geometry-plotter" / "scripts" / "handler.py"
-
-    if not handler_path.exists():
+    else:
+        # instruction 类型：返回 SKILL.md 内容，让 LLM 自行解读指令
         return {
-            "status": "error",
-            "result": f"geometry-plotter handler not found: {handler_path}",
-            "skill_name": "geometry-plotter",
+            "status": "success",
+            "result": skill_content,
+            "skill_type": "instruction",
+            "skill_name": skill_name,
         }
-
-    spec = importlib.util.spec_from_file_location("geometry_plotter_handler", handler_path)
-    if spec is None or spec.loader is None:
-        return {
-            "status": "error",
-            "result": f"Failed to load geometry-plotter handler",
-            "skill_name": "geometry-plotter",
-        }
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    # 3. 根据参数选择 draw() 或 draw_code()
-    try:
-        if params.get("mode") == "draw_code":
-            result = module.draw_code(params.get("code", ""), save_name=params.get("save_name"))
-        else:
-            result = module.draw(
-                expr=params.get("expr", "np.sin(x)"),
-                x_range=tuple(params["x_range"]) if "x_range" in params else (-5, 5),
-                y_range=tuple(params["y_range"]) if "y_range" in params else None,
-                title=params.get("title"),
-                latex_label=params.get("latex_label"),
-                xlabel=params.get("xlabel"),
-                ylabel=params.get("ylabel"),
-                save_name=params.get("save_name"),
-            )
-    except Exception as e:
-        logger.error(f"[geometry-plotter] draw() execution failed: {e}")
-        return {
-            "status": "error",
-            "result": f"geometry-plotter draw failed: {str(e)}",
-            "skill_name": "geometry-plotter",
-        }
-
-    result_str, gen_images = embed_output_images_v2(str(result))
-    _register_embedded_images(result_str)
-    if gen_images:
-        logger.info("[geometry-plotter] generated %d image(s)", len(gen_images))
-
-    return {
-        "status": "success",
-        "result": result_str,
-        "skill_type": "geometry_plotter_special",
-        "skill_name": "geometry-plotter",
-        "generated_images": gen_images or None,
-    }

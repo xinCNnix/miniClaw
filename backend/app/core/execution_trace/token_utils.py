@@ -29,12 +29,20 @@ def extract_token_usage(response: Any) -> Dict[str, int]:
     """
     # Prefer usage_metadata (LangChain 0.2+)
     usage = getattr(response, "usage_metadata", None)
-    if usage and isinstance(usage, dict):
-        return {
-            "prompt_tokens": usage.get("input_tokens", 0) or 0,
-            "completion_tokens": usage.get("output_tokens", 0) or 0,
-            "total_tokens": usage.get("total_tokens", 0) or 0,
-        }
+    if usage:
+        if isinstance(usage, dict):
+            return {
+                "prompt_tokens": usage.get("input_tokens", 0) or 0,
+                "completion_tokens": usage.get("output_tokens", 0) or 0,
+                "total_tokens": usage.get("total_tokens", 0) or 0,
+            }
+        # usage_metadata may be an object with attributes (some providers)
+        if hasattr(usage, "input_tokens"):
+            return {
+                "prompt_tokens": getattr(usage, "input_tokens", 0) or 0,
+                "completion_tokens": getattr(usage, "output_tokens", 0) or 0,
+                "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+            }
 
     # Fallback to response_metadata.token_usage
     meta = getattr(response, "response_metadata", {})

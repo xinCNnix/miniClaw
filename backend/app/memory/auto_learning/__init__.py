@@ -56,4 +56,4 @@ __all__ = [
     "sample_strategy_action",
 ]
 
-__version__ = "0.3.0"  # Bumped for reflection features
+__version__ = "1.0.0"

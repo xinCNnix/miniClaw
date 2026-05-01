@@ -10,11 +10,13 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import BaseTool
 
 from app.core.tot.state import ToTState, Thought, get_thought_map
+
+from app.core.llm import create_llm
 
 # Skill orchestrator integration (optional — graceful fallback)
 try:
@@ -163,6 +165,13 @@ async def thought_executor_node(state: ToTState) -> ToTState:
 
         # ---- 存储结果 ----
         thought.tool_results = results
+        # Extract skill name from results if any
+        for r in results:
+            if isinstance(r, dict) and r.get("_source_skill_name"):
+                if not thought.metadata:
+                    thought.metadata = {}
+                thought.metadata["_source_skill_name"] = r["_source_skill_name"]
+                break
         thought.local_done = True
         thought.local_step_count = len([r for r in results if r.get("status") != "skipped"])
         thought.local_error_count = len([r for r in results if r.get("status") == "error"])
@@ -295,9 +304,21 @@ async def _execute_tool_plan_sequential(
                 continue
 
             tool = tool_map[tool_name]
-            result_str, gen_images = await _execute_single_tool(tool, tool_args, user_query)
+            result_str, gen_images, step_skill_name = await _execute_single_tool(tool, tool_args, user_query)
 
-            entry = {"tool": tool_name, "result": result_str, "status": "success"}
+            # Detect command-not-found exit codes in terminal results
+            is_cmd_not_found = (
+                "[Exit code: 9009]" in result_str
+                or "[Exit code: 127]" in result_str
+            )
+            if is_cmd_not_found:
+                entry = {"tool": tool_name, "error": result_str, "status": "error"}
+            else:
+                entry = {"tool": tool_name, "result": result_str, "status": "success"}
+            # Propagate skill name from compiled plan step metadata or SkillPolicy execution
+            effective_skill_name = step_skill_name or tool_args.get("_source_skill_name")
+            if effective_skill_name:
+                entry["_source_skill_name"] = effective_skill_name
             if gen_images:
                 entry["generated_images"] = gen_images
             results.append(entry)
@@ -383,7 +404,7 @@ async def _execute_tools_concurrent(
                     "status": "error"
                 })
             else:
-                result_str, gen_images = outcome
+                result_str, gen_images, skill_name = outcome
                 entry: Dict[str, Any] = {
                     "tool": tool_name,
                     "result": result_str,
@@ -391,16 +412,21 @@ async def _execute_tools_concurrent(
                 }
                 if gen_images:
                     entry["generated_images"] = gen_images
+                if skill_name:
+                    entry["_source_skill_name"] = skill_name
                 results.append(entry)
 
     return results
 
 
-async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query: str = "") -> tuple[Any, list[dict]]:
+async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query: str = "") -> tuple[Any, list[dict], Optional[str]]:
     """
     Execute a single tool with error handling.
 
     If read_file reads a SKILL.md, auto-detect and execute the skill via skill_orchestrator.
+
+    Returns:
+        (result_str, generated_images, skill_name) — skill_name is non-None only for SkillPolicy-compiled plans.
     """
     # Check cache before execution
     try:
@@ -409,7 +435,7 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
         cached = cache.get(tool.name, args)
         if cached is not None:
             logger.info(f"[CACHE_HIT] {tool.name} with args={list(args.keys())}")
-            return cached.get("result", ""), cached.get("generated_images", [])
+            return cached.get("result", ""), cached.get("generated_images", []), None
     except Exception:
         pass
 
@@ -428,9 +454,11 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
                     from app.config import get_settings
                     from pathlib import Path as _Path
                     am = get_agent_manager()
-                    skills_dir = _Path(get_settings().skills_dir)
+                    settings = get_settings()
+                    skills_dir = _Path(settings.skills_dir)
+                    skill_llm = create_llm(settings.llm_provider)
                     tool_plan = await check_skill_policy_gate(
-                        skill_name, user_query, am.tools, am.llm, skills_dir,
+                        skill_name, user_query, am.tools, skill_llm, skills_dir,
                     )
                     if tool_plan:
                         # Execute all compiled tool plan steps
@@ -439,21 +467,23 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
                             skill_name, len(tool_plan),
                             [s.get("tool", "?") for s in tool_plan],
                         )
-                        result, images = await _execute_compiled_skill_plan(
+                        result, images, compiled_skill_name = await _execute_compiled_skill_plan(
                             tool_plan, am.tools, user_query,
                         )
                         _cache_tool_result(tool.name, args, result, images)
-                        return result, images
+                        return result, images, compiled_skill_name
                     else:
                         logger.info(
-                            "[ThoughtExecutor] SkillPolicy gate not passed for '%s', "
-                            "falling through to legacy path",
+                            "[ThoughtExecutor] SkillPolicy gate not passed for '%s' "
+                            "(action=%s), falling through to legacy path",
                             skill_name,
+                            "PASS_THROUGH",
                         )
                 except Exception as e:
                     logger.warning(
-                        "[ThoughtExecutor] SkillPolicy gate failed for '%s': %s, "
-                        "falling back to legacy", skill_name, e,
+                        "[ThoughtExecutor] SkillPolicy gate failed for '%s': %s [%s], "
+                        "falling back to legacy",
+                        skill_name, e, type(e).__name__,
                     )
                 # GATE not passed or error → fall through to legacy skill_orchestrator
 
@@ -488,10 +518,10 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
                     _cache_tool_result(tool.name, args, result_str, gen_images)
                     if gen_images:
                         logger.info("[ThoughtExecutor] Skill '%s' generated %d image(s)", skill_name, len(gen_images))
-                    return result_str, gen_images
+                    return result_str, gen_images, None
                 except Exception as e:
                     logger.error("[ThoughtExecutor] Skill '%s' execution failed: %s", skill_name, e)
-                    return f"Skill '{skill_name}' execution failed: {str(e)}", []
+                    return f"Skill '{skill_name}' execution failed: {str(e)}", [], None
 
     try:
         result = await tool.ainvoke(args)
@@ -506,7 +536,7 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
         else:
             logger.info("[SingleTool] %s: embed_output_images_v2 found 0 images", tool.name)
         _cache_tool_result(tool.name, args, result_str, gen_images)
-        return result_str, gen_images
+        return result_str, gen_images, None
 
     except AttributeError:
         try:
@@ -522,7 +552,7 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
             else:
                 logger.info("[SingleTool-fallback] %s: embed_output_images_v2 found 0 images", tool.name)
             _cache_tool_result(tool.name, args, result_str, gen_images)
-            return result_str, gen_images
+            return result_str, gen_images, None
         except Exception as e:
             raise Exception(f"Tool execution failed: {str(e)}")
 
@@ -613,7 +643,7 @@ async def _execute_compiled_skill_plan(
     tool_plan: List[Dict[str, Any]],
     tools: List[BaseTool],
     user_query: str,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], Optional[str]]:
     """Execute a multi-step compiled skill tool_plan.
 
     Args:
@@ -645,7 +675,9 @@ async def _execute_compiled_skill_plan(
     combined = "\n".join(all_results)
     if _SKILL_ORCHESTRATOR_AVAILABLE:
         _register_embedded_images(combined)
-    return combined, all_images
+    # Attach skill name metadata from the first step's _source_skill_name
+    skill_name = tool_plan[0].get("_source_skill_name") if tool_plan else None
+    return combined, all_images, skill_name
 
 
 # OLD: 同步执行 fallback（保留）

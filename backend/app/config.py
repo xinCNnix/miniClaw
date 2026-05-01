@@ -63,7 +63,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "miniClaw"
-    app_version: str = "0.1.0"
+    app_version: str = "1.0.0"
     debug: bool = False
 
     # Server
@@ -458,6 +458,8 @@ class Settings(BaseSettings):
     rl_prompt_consistency_coef: float = 0.05
     rl_batch_size: int = 32
     rl_gradient_clip: float = 1.0
+
+    # === Neural Strategy ===
     enable_neural_strategy: bool = True
     neural_strategy_auto_transition: bool = True
 
@@ -526,6 +528,21 @@ class Settings(BaseSettings):
     watchdog_max_runtime: int = Field(
         default=1800, env="WATCHDOG_MAX_RUNTIME",
         description="最大运行时间秒数（默认30分钟兜底）"
+    )
+
+    # === Dream 模块配置 ===
+    enable_dream: bool = Field(default=False, env="ENABLE_DREAM")
+    dream_schedule: str = Field(
+        default="", env="DREAM_SCHEDULE",
+        description="Cron schedule for automatic Dream sessions (empty = manual only)"
+    )
+    dream_max_samples: int = Field(
+        default=3, env="DREAM_MAX_SAMPLES",
+        description="Number of trajectories to sample per Dream session"
+    )
+    dream_executor_mode: str = Field(
+        default="simulated", env="DREAM_EXECUTOR_MODE",
+        description="Executor mode: simulated or replay"
     )
 
 

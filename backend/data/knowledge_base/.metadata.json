@@ -1,13 +1,4 @@
 {
-  "1b336dd396e2c62e": {
-    "id": "1b336dd396e2c62e",
-    "filename": "Llama 2_ Open Foundation and Fine-Tuned Chat Models.pdf",
-    "file_type": ".pdf",
-    "size": 13661300,
-    "upload_date": "2026-03-15T15:55:33.997822",
-    "chunk_count": 27322,
-    "file_path": "data\\knowledge_base\\Llama 2_ Open Foundation and Fine-Tuned Chat Models.pdf"
-  },
   "933e17f862507551": {
     "id": "933e17f862507551",
     "filename": "Agent Quality.pdf",
@@ -61,5 +52,14 @@
     "upload_date": "2026-03-18T19:28:42.020617",
     "chunk_count": 16199,
     "file_path": "data\\knowledge_base\\Prototype to Production.pdf"
+  },
+  "2449148c815be2ba": {
+    "id": "2449148c815be2ba",
+    "filename": "DeepSeek.pdf",
+    "file_type": ".pdf",
+    "size": 4479907,
+    "upload_date": "2026-04-24T18:12:48.917520",
+    "chunk_count": 8959,
+    "file_path": "data\\knowledge_base\\DeepSeek.pdf"
   }
 }

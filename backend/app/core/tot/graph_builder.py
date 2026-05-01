@@ -172,6 +172,7 @@ def build_tot_graph(
     from app.core.tot.research.nodes.writer_node import writer_node
     from app.core.tot.research.nodes.citation_chasing_planner_node import citation_chasing_planner_node
     from app.core.tot.research.nodes.citation_fetch_node import citation_fetch_node
+    from app.core.tot.research.nodes.chart_render_node import chart_render_node
 
     # Create graph with ToTState schema
     graph = StateGraph(ToTState)
@@ -191,8 +192,9 @@ def build_tot_graph(
     graph.add_node("write", writer_node)
     graph.add_node("citation_planner", citation_chasing_planner_node)
     graph.add_node("citation_fetch", citation_fetch_node)
+    graph.add_node("chart_render", chart_render_node)
 
-    logger.info("Added 12 nodes to graph (6 core + 6 research)")
+    logger.info("Added 13 nodes to graph (6 core + 7 research)")
 
     # --- Entry point ---
     graph.set_entry_point("generate_thoughts")
@@ -251,8 +253,9 @@ def build_tot_graph(
         }
     )
 
-    # write → check_termination
-    graph.add_edge("write", "check_termination")
+    # write → chart_render → check_termination
+    graph.add_edge("write", "chart_render")
+    graph.add_edge("chart_render", "check_termination")
 
     # --- Termination routing (Phase 5: 三路路由) ---
     graph.add_conditional_edges(

@@ -14,6 +14,7 @@ from app.core.tot.research.nodes.citation_chasing_planner_node import (
     citation_chasing_planner_node,
 )
 from app.core.tot.research.nodes.citation_fetch_node import citation_fetch_node
+from app.core.tot.research.nodes.chart_render_node import chart_render_node
 
 __all__ = [
     "extractor_node",
@@ -22,4 +23,5 @@ __all__ = [
     "writer_node",
     "citation_chasing_planner_node",
     "citation_fetch_node",
+    "chart_render_node",
 ]

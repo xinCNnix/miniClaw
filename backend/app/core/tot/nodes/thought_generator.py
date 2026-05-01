@@ -7,6 +7,7 @@ Phase 3: Multi-beam generation + backtracking regeneration.
 
 import asyncio
 import logging
+import json
 import re
 import time
 import uuid
@@ -51,12 +52,23 @@ async def thought_generator_node(state: ToTState) -> ToTState:
     user_query = state["user_query"]
     branching_factor = state.get("branching_factor", 3)
     beam_width = state.get("beam_width")
+    task_mode = state.get("task_mode", "standard")
+
+    # ---- Research mode: increment round counter ----
+    if task_mode == "research" and current_depth > 0:
+        research_round = state.get("research_round", 0)
+        state["research_round"] = research_round + 1
+        logger.info(f"[Research] Round incremented to {state['research_round']}")
 
     # ---- Phase 3: 回溯重生成路由 ----
     needs_regeneration = state.get("needs_regeneration", [])
     if needs_regeneration:
         logger.info(f"[Generator] Regeneration requested for beams: {needs_regeneration}")
         return await _regenerate_for_beams(state, needs_regeneration)
+
+    # ---- Research mode: use planner prompts ----
+    if task_mode == "research":
+        return await _generate_research_plans(state)
 
     # ---- Phase 3: 多束生成路由 ----
     active_beams = state.get("active_beams", [])
@@ -219,13 +231,26 @@ async def _regenerate_for_beams(state: ToTState, beam_indices: List[int]) -> ToT
     all_new_thoughts = []
     thought_map = get_thought_map(state["thoughts"])
 
+    # Safety: if active_beams is empty, fall back to best_path
+    if not active_beams:
+        best_path = state.get("best_path", [])
+        if best_path:
+            active_beams = [best_path]
+            state["active_beams"] = active_beams
+            logger.warning("[Regenerate] active_beams was empty, fell back to best_path")
+        else:
+            logger.error("[Regenerate] No active_beams and no best_path, cannot regenerate")
+            state["thoughts"] = []
+            state["needs_regeneration"] = []
+            return state
+
     for beam_idx in beam_indices:
         if beam_idx >= len(active_beams):
+            logger.warning("[Regenerate] beam_idx=%d >= len(active_beams)=%d, skipping", beam_idx, len(active_beams))
             continue
         beam = active_beams[beam_idx]
         parent_id = beam[-1]
-
-        # 收集旧分支摘要（已被标记为 pruned）
+        logger.info("[Regenerate] beam_idx=%d, beam=%s, parent_id=%s", beam_idx, beam, parent_id)
         old_children = [
             t for t in state["thoughts"]
             if t.parent_id == parent_id and t.status == "pruned"
@@ -474,6 +499,176 @@ async def _generate_single_beam(state: ToTState) -> ToTState:
     state["thoughts"] = unique_thoughts
 
     return state
+
+
+# ---------------------------------------------------------------------------
+# Research mode: planner-based generation
+# ---------------------------------------------------------------------------
+
+async def _generate_research_plans(state: ToTState) -> ToTState:
+    """Research mode: generate candidate research plans using planner prompts.
+
+    Uses get_first_round_planner_prompt() for round 0 (no prior evidence)
+    and get_planner_prompt() for subsequent rounds (with evidence feedback).
+    """
+    llm = state["llm"]
+    user_query = state["user_query"]
+    current_depth = state["current_depth"]
+    branching_factor = state.get("branching_factor", 3)
+    research_round = state.get("research_round", 0)
+
+    from app.core.tot.research.prompts import (
+        get_first_round_planner_prompt,
+        get_planner_prompt,
+        parse_json_output,
+    )
+    from app.core.tot.research.evidence_utils import format_evidence_for_prompt
+
+    # Build user prompt based on round
+    if research_round == 0:
+        prompt = get_first_round_planner_prompt(user_query)
+        logger.info(f"[Research-Planner] First round (depth={current_depth})")
+    else:
+        evidence_summary = format_evidence_for_prompt(state.get("evidence_store", []))
+        coverage_map_raw = state.get("coverage_map")
+        coverage_map = json.dumps(coverage_map_raw, ensure_ascii=False) if coverage_map_raw else "{}"
+        contradictions_raw = state.get("contradictions")
+        contradictions = json.dumps(contradictions_raw, ensure_ascii=False) if contradictions_raw else "[]"
+        max_depth = state.get("max_depth", 5)
+        remaining_rounds = str(max(0, max_depth - research_round))
+
+        prompt = get_planner_prompt(
+            user_query=user_query,
+            evidence_summary=evidence_summary,
+            coverage_map=coverage_map,
+            contradictions=contradictions,
+            remaining_rounds=remaining_rounds,
+        )
+        logger.info(
+            f"[Research-Planner] Round {research_round} "
+            f"(evidence={len(state.get('evidence_store', []))}, "
+            f"remaining={remaining_rounds})"
+        )
+
+    from app.core.tot.prompt_composer import compose_system_prompt
+    system_prompt = compose_system_prompt(
+        base_system_prompt=state.get("system_prompt", ""),
+        node_role="generator",
+        domain_profile=state.get("domain_profile"),
+        tools=state.get("tools"),
+        prompt_level="full",
+    )
+
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=prompt),
+    ]
+
+    gen_start = time.time()
+    all_new_thoughts = []
+    elapsed = 0.0
+
+    try:
+        response = await llm.ainvoke(messages)
+        elapsed = time.time() - gen_start
+        content = response.content or ""
+
+        logger.info(f"[Research-Planner] Response received ({len(content)} chars, {elapsed:.1f}s)")
+
+        parsed = parse_json_output(content)
+        plans = []
+        if "_array" in parsed:
+            plans = parsed["_array"]
+        elif parsed:
+            plans = [parsed]
+
+        _parent_id = state["best_path"][-1] if state.get("best_path") else None
+        all_new_thoughts = _convert_plans_to_thoughts(plans, _parent_id, current_depth, branching_factor)
+
+        if not all_new_thoughts:
+            logger.warning("[Research-Planner] No plans parsed, using fallback")
+            all_new_thoughts = _generate_fallback_thoughts(
+                user_query, current_depth,
+                state["best_path"][-1] if state.get("best_path") else None,
+                branching_factor,
+            )
+
+    except Exception as e:
+        elapsed = time.time() - gen_start
+        logger.error(f"[Research-Planner] Error: {e}")
+        all_new_thoughts = _generate_fallback_thoughts(
+            user_query, current_depth,
+            state["best_path"][-1] if state.get("best_path") else None,
+            branching_factor,
+        )
+
+    unique_thoughts = _deduplicate_thoughts(all_new_thoughts)
+
+    logger.info(
+        f"[Research-Planner] Generated {len(unique_thoughts)} plan-thoughts "
+        f"at depth {current_depth}, round {research_round}"
+    )
+
+    state["reasoning_trace"].append({
+        "type": "thoughts_generated",
+        "depth": current_depth,
+        "count": len(unique_thoughts),
+        "thoughts": [t.model_dump() for t in unique_thoughts],
+        "research_round": research_round,
+        "plan_mode": True,
+    })
+
+    if "tot_logger" in state:
+        state["tot_logger"].log_generation(
+            depth=current_depth,
+            count=len(unique_thoughts),
+            variant=f"research_planner_r{research_round}",
+            prompt_length=0,
+            duration=elapsed,
+            token_usage=None,
+        )
+
+    state["thoughts"] = unique_thoughts
+    return state
+
+
+def _convert_plans_to_thoughts(
+    plans: list, parent_id: str | None, depth: int, max_count: int
+) -> list:
+    """Convert parsed research plans to Thought objects with tool_calls.
+
+    Each plan's queries are mapped to search_kb tool calls.
+    """
+    thoughts = []
+
+    for plan in plans[:max_count]:
+        plan_id = plan.get("plan_id", f"P{len(thoughts) + 1}")
+        goal = plan.get("goal", "")
+        gap = plan.get("missing_gap", "")
+        queries = plan.get("queries", [])
+
+        content_parts = [f"[{plan_id}] {goal}"]
+        if gap:
+            content_parts.append(f"Gap: {gap}")
+        content = " | ".join(content_parts)
+
+        tool_calls = []
+        for query in queries[:3]:
+            if isinstance(query, str) and query.strip():
+                tool_calls.append({
+                    "name": "search_kb",
+                    "args": {"query": query.strip(), "top_k": 5},
+                })
+
+        thoughts.append(Thought(
+            id=f"thought_{uuid.uuid4().hex[:8]}",
+            parent_id=parent_id,
+            content=content,
+            tool_calls=tool_calls,
+            status="pending",
+        ))
+
+    return thoughts
 
 
 def _get_generator_system_prompt(variant: int = 0) -> str:

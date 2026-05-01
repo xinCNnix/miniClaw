@@ -72,8 +72,10 @@ export interface ThoughtTreeNode {
   content: string
   parent_id?: string
   score?: number
-  status: 'pending' | 'evaluated' | 'selected' | 'pruned'
+  status: 'pending' | 'evaluated' | 'selected' | 'pruned' | 'executing' | 'done'
+  skill_name?: string
   tool_calls?: Array<{ name: string; args: Record<string, unknown> }>
+  tool_statuses?: Array<{ tool: string; status: string }>
   children: ThoughtTreeNode[]
 }
 
@@ -171,5 +173,58 @@ export type ThinkingEvent =
       depth: number
       beam_indices?: number[]
       count: number
+      timestamp: string
+    }
+  // PERV events
+  | { type: 'perv_start'; timestamp: string }
+  | {
+      type: 'perv_router_decision'
+      decision: { mode?: string; risk_level?: string; [k: string]: unknown }
+      duration_ms: number
+      timestamp: string
+    }
+  | {
+      type: 'perv_planning'
+      plan: Array<{ id: string; name: string; tool: string; purpose: string; skill?: string }>
+      timestamp: string
+    }
+  | {
+      type: 'perv_layer_start'
+      layers: unknown[]
+      total_steps: number
+      timestamp: string
+    }
+  | {
+      type: 'perv_step_complete'
+      step_id: string
+      status: string
+      tool: string
+      timestamp: string
+    }
+  | {
+      type: 'perv_execution_complete'
+      steps_completed: number
+      parallel: boolean
+      timestamp: string
+    }
+  | {
+      type: 'perv_verification'
+      report: { verdict: string; confidence: number; checks: unknown[]; coverage?: number }
+      timestamp: string
+    }
+  | {
+      type: 'perv_replan'
+      retry_count: number
+      timestamp: string
+    }
+  | {
+      type: 'perv_skill_policy'
+      matched: number
+      compiled: number
+      timestamp: string
+    }
+  | {
+      type: 'perv_summarized'
+      summary_count: number
       timestamp: string
     }

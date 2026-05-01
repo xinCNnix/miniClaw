@@ -300,16 +300,27 @@ class ToTEventStreamer:
             ]
             children = [c for c in children if c is not None]
 
+            # Build per-tool status summary
+            tool_statuses = []
+            if thought.tool_results:
+                for tr in thought.tool_results:
+                    tool_statuses.append({
+                        "tool": tr.get("tool", ""),
+                        "status": tr.get("status", "unknown"),
+                    })
+
             return {
                 "id": thought.id,
                 "content": thought.content,
                 "parent_id": thought.parent_id,
                 "score": thought.evaluation_score,
                 "status": thought.status,
+                "skill_name": (thought.metadata or {}).get("_source_skill_name"),
                 "tool_calls": [
                     {"name": tc.get("name", ""), "args": tc.get("args", {})}
                     for tc in thought.tool_calls
                 ] if thought.tool_calls else [],
+                "tool_statuses": tool_statuses,
                 "children": children
             }
 

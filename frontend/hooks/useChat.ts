@@ -491,6 +491,121 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   if (data.generated_images && data.generated_images.length > 0) {
                     appendImagesDedup(collectedImages, data.generated_images)
                   }
+                  // Also emit as thinkingEvent for PervCard
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_execution_complete",
+                      steps_completed: data.steps_completed ?? 0,
+                      parallel: data.parallel ?? false,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                // PERV SSE events (backend uses pevr_ / perv_ mixed prefixes)
+                case "pevr_start":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    { type: "perv_start", timestamp: new Date().toISOString() },
+                  ])
+                  break
+
+                case "perv_router_decision":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_router_decision",
+                      decision: data.decision ?? data,
+                      duration_ms: data.duration_ms ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "pevr_planning":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_planning",
+                      plan: data.plan ?? [],
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "pevr_layer_start":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_layer_start",
+                      layers: data.layers ?? [],
+                      total_steps: data.total_steps ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "pevr_step_complete":
+                  // Dedup by step_id — keep only latest per step
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(
+                      e => !(e.type === 'perv_step_complete' && (e as any).step_id === data.step_id)
+                    )
+                    return [...filtered, {
+                      type: "perv_step_complete",
+                      step_id: data.step_id ?? "",
+                      status: data.status ?? "pending",
+                      tool: data.tool ?? "",
+                      timestamp: new Date().toISOString(),
+                    }]
+                  })
+                  break
+
+                case "pevr_verification":
+                  // Replace — keep only latest verification
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(e => e.type !== 'perv_verification')
+                    return [...filtered, {
+                      type: "perv_verification",
+                      report: data.report ?? { verdict: "unknown", confidence: 0, checks: [] },
+                      timestamp: new Date().toISOString(),
+                    }]
+                  })
+                  break
+
+                case "pevr_replan":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_replan",
+                      retry_count: data.retry_count ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "perv_skill_policy":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_skill_policy",
+                      matched: data.matched ?? 0,
+                      compiled: data.compiled ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "perv_summarized":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_summarized",
+                      summary_count: data.summary_count ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
                   break
 
                 case "done":

@@ -17,7 +17,7 @@ import time
 from typing import Dict, List
 
 from app.core.tot.state import ToTState
-from app.core.tot.research.evidence_utils import content_hash, dedup_evidence
+from app.core.tot.research.evidence_utils import content_hash, compute_reliability, dedup_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,11 @@ def _passthrough(state: ToTState) -> Dict:
     for src in raw_sources:
         source_text = src.get("source_text", "")
         source_id = src.get("source_id", f"passthrough_{content_hash(source_text)[:8]}")
+        reliability = compute_reliability({
+            "source_type": src.get("source_type", "unknown"),
+            "tool_name": src.get("tool_name", ""),
+            "content_length": len(source_text),
+        })
         passthrough_items.append({
             "source_id": source_id,
             "source_type": src.get("source_type", "unknown"),
@@ -192,7 +197,7 @@ def _passthrough(state: ToTState) -> Dict:
             "quote": source_text[:500],
             "claim": source_text[:300] if source_text else "",
             "numbers": [],
-            "reliability": 0.5,
+            "reliability": reliability,
             "relevance": 0.5,
         })
 
@@ -249,6 +254,7 @@ def _normalize_extracted(
                         "numbers": [],
                         "reliability": float(extracted_json.get("reliability", 0.5)),
                         "relevance": float(extracted_json.get("relevance", 0.5)),
+                        "published": extracted_json.get("published", extracted_json.get("year", "")),
                     })
                 elif isinstance(item, dict):
                     result.append({
@@ -261,6 +267,7 @@ def _normalize_extracted(
                         "numbers": item.get("numbers", []),
                         "reliability": float(item.get("reliability", extracted_json.get("reliability", 0.5))),
                         "relevance": float(item.get("relevance", extracted_json.get("relevance", 0.5))),
+                        "published": item.get("published", item.get("year", extracted_json.get("published", extracted_json.get("year", "")))),
                     })
             return result
 
@@ -277,6 +284,7 @@ def _normalize_extracted(
                 "numbers": extracted_json.get("numbers", []),
                 "reliability": float(extracted_json.get("reliability", 0.5)),
                 "relevance": float(extracted_json.get("relevance", 0.5)),
+                "published": extracted_json.get("published", extracted_json.get("year", "")),
             }]
 
     # List output
@@ -296,6 +304,7 @@ def _normalize_extracted(
                         "numbers": item.get("numbers", []),
                         "reliability": float(item.get("reliability", 0.5)),
                         "relevance": float(item.get("relevance", 0.5)),
+                        "published": item.get("published", item.get("year", "")),
                     })
         return result
 

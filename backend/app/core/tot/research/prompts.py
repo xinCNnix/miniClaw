@@ -54,8 +54,9 @@ def _load_template(name: str) -> str:
 def _fill_template(template: str, **kwargs: Any) -> str:
     """Fill {variable} placeholders in a template string.
 
-    Uses str.format_map() with a default-dict so that unmatched
-    placeholders are left as-is rather than raising KeyError.
+    Uses regex substitution so that non-placeholder braces (e.g. JSON
+    objects like {"type":"bar"}) are left untouched. Only standalone
+    {word} patterns (alphanumeric + underscore) are treated as variables.
 
     Args:
         template: Template string with {variable} placeholders.
@@ -65,11 +66,13 @@ def _fill_template(template: str, **kwargs: Any) -> str:
         The template with placeholders filled. Placeholders not
         present in kwargs are left unchanged.
     """
-    class SafeDict(dict):
-        def __missing__(self, key: str) -> str:
-            return f"{{{key}}}"
+    def _replace(match: re.Match) -> str:
+        key = match.group(1)
+        if key in kwargs:
+            return str(kwargs[key])
+        return match.group(0)  # Leave as-is
 
-    return template.format_map(SafeDict(**kwargs))
+    return re.sub(r"\{(\w+)\}", _replace, template)
 
 
 # ---------------------------------------------------------------------------

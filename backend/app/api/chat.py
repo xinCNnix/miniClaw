@@ -38,6 +38,242 @@ agent_logger = get_agent_logger("api.chat")
 router = APIRouter(tags=["chat"])
 
 
+def _extract_pdf_text(data_url: str, filename: str) -> str:
+    """从 PDF 的 base64 data URL 中提取文本内容。"""
+    import base64
+    import io
+
+    try:
+        raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+        pdf_bytes = base64.b64decode(raw)
+
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        pages_text = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text()
+            if text:
+                pages_text.append(f"--- Page {i + 1} ---\n{text}")
+
+        full_text = "\n\n".join(pages_text)
+        if len(full_text) > 30000:
+            full_text = full_text[:30000] + "\n\n[... truncated]"
+
+        if not full_text.strip():
+            return f"[Attached file: {filename} (PDF - no extractable text)]"
+
+        return f"[Attached file: {filename} (PDF, {len(reader.pages)} pages)]\n\n{full_text}"
+    except Exception as e:
+        logger.warning(f"Failed to extract PDF text: {e}")
+        return f"[Attached file: {filename} (application/pdf) - text extraction failed: {e}]"
+
+
+def _extract_spreadsheet_text(data_url: str, filename: str) -> str:
+    """从 Excel/CSV 的 base64 data URL 中提取表格文本。"""
+    import base64
+    import io
+
+    try:
+        raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+        file_bytes = base64.b64decode(raw)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+        rows = []
+        if ext == "csv":
+            import csv
+            text = file_bytes.decode("utf-8", errors="replace")
+            reader = csv.reader(io.StringIO(text))
+            rows = [row for row in reader]
+        elif ext in ("xls", "xlsx"):
+            if ext == "xlsx":
+                import openpyxl
+                wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    if len(wb.sheetnames) > 1:
+                        rows.append([f"--- Sheet: {sheet_name} ---"])
+                    for row in ws.iter_rows(values_only=True):
+                        rows.append([str(c) if c is not None else "" for c in row])
+                wb.close()
+            else:
+                import xlrd
+                wb = xlrd.open_workbook(file_contents=file_bytes)
+                for sx in range(wb.nsheets):
+                    ws = wb.sheet_by_index(sx)
+                    if wb.nsheets > 1:
+                        rows.append([f"--- Sheet: {ws.name} ---"])
+                    for r in range(ws.nrows):
+                        rows.append([str(ws.cell_value(r, c)) for c in range(ws.ncols)])
+        else:
+            return f"[Attached file: {filename} - unsupported spreadsheet format]"
+
+        # 格式化为文本表格
+        lines = []
+        for row in rows:
+            if isinstance(row, list):
+                lines.append(" | ".join(str(v) for v in row))
+            else:
+                lines.append(str(row))
+        text = "\n".join(lines)
+
+        if len(text) > 30000:
+            text = text[:30000] + "\n[... truncated]"
+
+        return f"[Attached file: {filename} ({len(rows)} rows)]\n\n{text}"
+    except Exception as e:
+        logger.warning(f"Failed to extract spreadsheet text: {e}")
+        return f"[Attached file: {filename} - extraction failed: {e}]"
+
+
+def _extract_doc_text(data_url: str, filename: str) -> str:
+    """从 Word 文档的 base64 data URL 中提取文本。"""
+    import base64
+    import io
+
+    try:
+        raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+        file_bytes = base64.b64decode(raw)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+        if ext == "docx":
+            from docx import Document
+            doc = Document(io.BytesIO(file_bytes))
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    paragraphs.append(" | ".join(cell.text for cell in row.cells))
+            text = "\n".join(paragraphs)
+        elif ext == "doc":
+            # .doc (OLE2) — 直接用 antiword 转文本
+            import subprocess
+            import tempfile
+            import os
+            tmp = None
+            try:
+                tmp = tempfile.NamedTemporaryFile(suffix=".doc", delete=False)
+                tmp.write(file_bytes)
+                tmp.close()
+                result = subprocess.run(
+                    ["antiword", "-m", "UTF-8.txt", tmp.name],
+                    capture_output=True, timeout=10,
+                )
+                text = result.stdout.decode("utf-8", errors="replace").strip()
+            except FileNotFoundError:
+                # antiword 未安装，回退到 python-docx（可能失败）或占位
+                text = ""
+                logger.warning("antiword not found, cannot extract .doc text")
+            except Exception as e:
+                text = ""
+                logger.warning(f"antiword failed: {e}")
+            finally:
+                if tmp and os.path.exists(tmp.name):
+                    os.unlink(tmp.name)
+        else:
+            return f"[Attached file: {filename} - unsupported format]"
+
+        if len(text) > 30000:
+            text = text[:30000] + "\n[... truncated]"
+        if not text.strip():
+            return f"[Attached file: {filename} - no extractable text]"
+        return f"[Attached file: {filename}]\n\n{text}"
+    except Exception as e:
+        logger.warning(f"Failed to extract doc text: {e}")
+        return f"[Attached file: {filename} - extraction failed: {e}]"
+
+
+def _extract_ppt_text(data_url: str, filename: str) -> str:
+    """从 PPT 的 base64 data URL 中提取文本。"""
+    import base64
+    import io
+
+    try:
+        raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+        file_bytes = base64.b64decode(raw)
+
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(file_bytes))
+        slides_text = []
+        for i, slide in enumerate(prs.slides):
+            items = []
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        t = para.text.strip()
+                        if t:
+                            items.append(t)
+                if shape.has_table:
+                    for row in shape.table.rows:
+                        items.append(" | ".join(cell.text for cell in row.cells))
+            if items:
+                slides_text.append(f"--- Slide {i + 1} ---\n" + "\n".join(items))
+
+        text = "\n\n".join(slides_text)
+        if len(text) > 30000:
+            text = text[:30000] + "\n[... truncated]"
+        if not text.strip():
+            return f"[Attached file: {filename} - no extractable text]"
+        return f"[Attached file: {filename} ({len(prs.slides)} slides)]\n\n{text}"
+    except Exception as e:
+        logger.warning(f"Failed to extract PPT text: {e}")
+        return f"[Attached file: {filename} - extraction failed: {e}]"
+
+
+def _extract_file_text(data_url: str, filename: str, mime_type: str) -> str:
+    """根据文件类型自动选择提取方法，确保所有文件都尝试提取内容。"""
+    import base64
+
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    # PDF
+    if mime_type == "application/pdf" or ext == "pdf":
+        return _extract_pdf_text(data_url, filename)
+
+    # Excel / CSV
+    _excel_mimes = {
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/octet-stream",  # 很多上传 Excel 时返回这个
+        "text/csv", "application/csv",
+    }
+    _excel_exts = ("xls", "xlsx", "csv")
+    if mime_type in _excel_mimes and ext in _excel_exts or ext in _excel_exts:
+        return _extract_spreadsheet_text(data_url, filename)
+
+    # Word
+    _word_mimes = {
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    _word_exts = ("doc", "docx")
+    if mime_type in _word_mimes or ext in _word_exts:
+        return _extract_doc_text(data_url, filename)
+
+    # PPT
+    _ppt_mimes = {
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+    _ppt_exts = ("ppt", "pptx")
+    if mime_type in _ppt_mimes or ext in _ppt_exts:
+        return _extract_ppt_text(data_url, filename)
+
+    # 所有其他格式：尝试 base64 解码后当文本读取
+    # 覆盖：txt, md, json, xml, yaml, html, css, js, py, java, c, cpp, h, log, ini, cfg, conf, sh, bat, sql, r, go, rs, ts, rb, php, swift, kt, dart, etc.
+    raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+    try:
+        file_bytes = base64.b64decode(raw)
+        text = file_bytes.decode("utf-8", errors="replace")
+        # 过滤掉全是乱码的情况（二进制文件）
+        printable = sum(1 for c in text[:1000] if c.isprintable() or c in "\n\r\t")
+        if len(text[:1000]) > 0 and printable / len(text[:1000]) < 0.7:
+            return f"[Attached file: {filename} ({mime_type}, {len(file_bytes)} bytes - binary content)]"
+        if len(text) > 30000:
+            text = text[:30000] + "\n[... truncated]"
+        return f"[Attached file: {filename}]\n\n{text}"
+    except Exception:
+        return f"[Attached file: {filename} ({mime_type}, binary content)]"
+
+
 def _format_attachments(attachments: list[dict]) -> list[dict]:
     """Convert attachments to LLM multimodal content format.
 
@@ -65,11 +301,8 @@ def _format_attachments(attachments: list[dict]) -> list[dict]:
                 "input_audio": {"data": base64_data, "format": audio_format},
             })
         else:
-            # video/document: include as text description
-            content_blocks.append({
-                "type": "text",
-                "text": f"[Attached file: {filename} ({mime_type})]",
-            })
+            text = _extract_file_text(data_url, filename, mime_type)
+            content_blocks.append({"type": "text", "text": text})
     return content_blocks
 
 # Global agent manager (singleton)
@@ -395,13 +628,23 @@ async def chat_stream_generator(
 
                         # Add images if present (only for current message)
                         if msg.get("images"):
-                            # Format content for vision models
                             content_list = [{"type": "text", "text": msg["content"]}]
                             for img in msg["images"]:
-                                content_list.append({
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                                })
+                                mime = img.get("mime_type", "")
+                                fname = img.get("filename", "")
+                                if mime.startswith("image/"):
+                                    content_list.append({
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:{mime};base64,{img['content']}"}
+                                    })
+                                else:
+                                    # 所有非图片文件都提取文本
+                                    text = _extract_file_text(
+                                        f"data:{mime};base64,{img['content']}",
+                                        fname,
+                                        mime,
+                                    )
+                                    content_list.append({"type": "text", "text": text})
                             message_dict["content"] = content_list
                     else:
                         # HISTORICAL MESSAGE: Abstract to type only - prevents interference

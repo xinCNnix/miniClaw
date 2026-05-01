@@ -35,6 +35,24 @@ from app.core.tot.research.evidence_utils import format_evidence_for_prompt
 logger = logging.getLogger(__name__)
 
 _skills_dir = Path("data/skills")
+_outputs_dir = Path("outputs")
+
+
+def _save_report_to_disk(title: str, content: str) -> Optional[str]:
+    """Save report markdown to outputs/ directory. Returns the file path or None."""
+    try:
+        _outputs_dir.mkdir(parents=True, exist_ok=True)
+        safe_title = re.sub(r'[^\w\s-]', '', title)[:50].strip().replace(' ', '_')
+        if not safe_title:
+            safe_title = "report"
+        filename = f"{safe_title}.md"
+        filepath = _outputs_dir / filename
+        filepath.write_text(content, encoding="utf-8")
+        logger.info("[Synthesis] Report saved to %s", filepath)
+        return str(filepath)
+    except Exception as e:
+        logger.warning("[Synthesis] Failed to save report to disk: %s", e)
+        return None
 
 
 async def _call_skill_handler(skill_name: str, inputs: dict, context: dict):
@@ -441,7 +459,7 @@ async def _research_writing_synthesis(state: ToTState) -> str:
         inputs={
             "reduced_json": reduced_json,
             "user_query": user_query,
-            "output_style": "report"
+            "output_style": "academic_paper"
         },
         context={"llm": llm}
     )
@@ -450,7 +468,11 @@ async def _research_writing_synthesis(state: ToTState) -> str:
     report_result, image_paths = await asyncio.gather(report_task, visual_task)
     report_text = report_result["report_markdown"]
 
-    # Stage C: doc-creator 组装最终文档
+    # Always save the paper to disk
+    saved_path = _save_report_to_disk(user_query, report_text)
+    save_msg = f"\n\n> 论文已保存至: `{saved_path}`" if saved_path else ""
+
+    # Stage C: doc-creator 组装最终文档 (only if visuals available)
     if image_paths:
         file_path = await _assemble_document(
             title=user_query,
@@ -459,8 +481,8 @@ async def _research_writing_synthesis(state: ToTState) -> str:
             output_format=state.get("output_format", "docx"),
         )
         return f"研究报告已生成: {file_path}\n\n{report_text}"
-    else:
-        return report_text
+
+    return report_text + save_msg
 
 
 # ---------------------------------------------------------------------------

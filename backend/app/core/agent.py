@@ -27,6 +27,17 @@ from app.logging_config import get_agent_logger
 from app.core.smart_stopping import should_stop_tool_calling
 
 
+def _content_to_str(content) -> str:
+    """Convert message content (str or multimodal list) to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            item.get("text", "") for item in content if isinstance(item, dict)
+        )
+    return str(content) or ""
+
+
 def _get_skills_dir():
     from pathlib import Path
     return Path(get_settings().skills_dir)
@@ -319,7 +330,7 @@ class AgentManager:
                     from app.core.meta_policy.capability_map import CapabilityMap
 
                     _cap_map = CapabilityMap.from_core_tools()
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     _tca_decision = get_tca_decision(user_msg, cap_map=_cap_map)
                     if _tca_decision and _tca_decision.get("injection_text"):
                         _tca_injection_text = _tca_decision["injection_text"]
@@ -336,7 +347,7 @@ class AgentManager:
                     from app.core.meta_policy.capability_map import CapabilityMap
 
                     _cap_map_mp = CapabilityMap.from_core_tools()
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     _mp_decision = get_meta_policy_decision(user_msg, cap_map=_cap_map_mp)
                     if _mp_decision and _mp_decision.get("injection_text"):
                         lc_messages.append(SystemMessage(content=_mp_decision["injection_text"]))
@@ -530,7 +541,7 @@ class AgentManager:
                         round_count=round_count,
                         tool_name=tool_name,
                         tool_args=tool_args,
-                        user_message=messages[-1].get('content', '') if messages else '',
+                        user_message=_content_to_str(messages[-1].get('content', '')) if messages else '',
                         current_round_time=llm_duration
                     )
 
@@ -823,7 +834,7 @@ class AgentManager:
                 if getattr(settings, "enable_tca", False):
                     from app.core.meta_policy.tca_helpers import record_tca_episode
 
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     record_tca_episode(
                         query=user_msg,
                         tool_calls=_last_tool_calls,
@@ -838,7 +849,7 @@ class AgentManager:
                 if getattr(settings, "enable_meta_policy", False):
                     from app.core.meta_policy.meta_policy_helpers import record_meta_policy_episode
 
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     record_meta_policy_episode(
                         query=user_msg,
                         tool_calls=_last_tool_calls,
@@ -855,7 +866,7 @@ class AgentManager:
 
                     # 收集完整的 agent 输出
                     agent_output = ""
-                    user_query = messages[-1].get("content", "") if messages else ""
+                    user_query = _content_to_str(messages[-1].get("content", "")) if messages else ""
 
                     # 从最近的 content_delta 提取输出（简化方式：用 LLM 最后响应）
                     if hasattr(locals().get("response"), "content"):
@@ -919,7 +930,7 @@ class AgentManager:
 
         # === Async pattern learning (fire-and-forget, after done) ===
         try:
-            _user_query = messages[-1].get("content", "") if messages else ""
+            _user_query = _content_to_str(messages[-1].get("content", "")) if messages else ""
             _agent_output = ""
             if hasattr(locals().get("response"), "content"):
                 _agent_output = response.content or ""
@@ -938,6 +949,22 @@ class AgentManager:
                 )
         except Exception as _le:
             logger.debug("[Learning] Agent post-learning trigger failed: %s", _le)
+
+        # === Online Distill (fire-and-forget, after done) ===
+        try:
+            if _agent_output:
+                from app.core.online_distill import online_distill_skill
+                asyncio.create_task(
+                    online_distill_skill(
+                        user_query=_user_query,
+                        agent_output=_agent_output,
+                        tool_calls=_last_tool_calls,
+                        execution_time=total_duration,
+                        execution_mode="normal",
+                    )
+                )
+        except Exception as _le:
+            logger.debug("[OnlineDistill] Agent trigger failed: %s", _le)
 
     def _convert_messages(
         self,

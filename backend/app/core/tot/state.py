@@ -15,9 +15,22 @@ from langchain_core.tools import BaseTool
 def add_thoughts(left: List["Thought"], right: List["Thought"]) -> List["Thought"]:
     """
     Reducer function for adding thoughts to state.
-    LangGraph requires this for managing state updates.
+    Merges new thoughts, deduplicates by id, and prunes stale entries.
     """
-    return left + right
+    merged = left + right
+    if len(merged) <= 50:
+        return merged
+
+    # Deduplicate by id (keep latest), drop pruned thoughts
+    seen: set = set()
+    result: list = []
+    for t in reversed(merged):
+        if t.id not in seen:
+            seen.add(t.id)
+            if t.status != "pruned":
+                result.append(t)
+    result.reverse()
+    return result
 
 
 class Thought(BaseModel):
@@ -182,6 +195,10 @@ class ToTState(TypedDict):
     # --- SkillPolicy 门控结果 (Phase: SkillPolicyNode) ---
     skill_policy_decisions: NotRequired[Dict[str, Dict]]
     # key = skill_name, value = {"allowed": bool, "reason": str, "compiled_tool": {...}}
+
+    # --- Enrichment data (pattern retrieval + semantic history) ---
+    retrieved_patterns: NotRequired[List[Dict]]      # Retrieved learned patterns
+    semantic_history: NotRequired[str]               # Unified KG + vector context
 
 
 def get_depth_of_thought(thought: Thought, all_thoughts: List[Thought]) -> int:

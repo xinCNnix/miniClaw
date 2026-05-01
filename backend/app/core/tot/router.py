@@ -343,10 +343,48 @@ class ToTOrchestrator:
             profile = get_profile(task_type)
             domain_profile = profile.model_dump()
 
-        # === Pre-state policy decisions (must run before initial_state) ===
+        # === Pre-state enrichment (pattern retrieval + semantic history + policy) ===
         _settings = get_settings_lazy()
+        tot_enrichment: Dict[str, Any] = {}
 
-        # TCA enrichment
+        # a) Pattern Retrieval
+        try:
+            if getattr(_settings, "perv_enable_pattern_retrieval", False):
+                from app.memory.auto_learning.memory import get_pattern_memory
+                memory = get_pattern_memory()
+                patterns = await asyncio.to_thread(
+                    lambda: memory.get_top_patterns(query=query, top_k=3)
+                )
+                tot_enrichment["retrieved_patterns"] = [
+                    {
+                        "description": p.get("description", ""),
+                        "situation": p.get("situation", ""),
+                        "outcome": p.get("outcome", ""),
+                        "fix_action": p.get("fix_action", ""),
+                    }
+                    for p in patterns
+                ]
+                if tot_log:
+                    tot_log.log_custom("pattern_retrieval", count=len(patterns))
+        except Exception as e:
+            logger.debug(f"[ToT Enrichment] Pattern retrieval failed: {e}")
+
+        # b) Semantic History (unified KG + vector)
+        try:
+            if getattr(_settings, "perv_enable_semantic_history", False):
+                from app.memory.retriever_factory import get_memory_retriever
+                retriever = get_memory_retriever()
+                memory_result = await retriever.retrieve(query)
+                if memory_result.merged_context:
+                    tot_enrichment["semantic_history"] = memory_result.merged_context
+                    if tot_log:
+                        tot_log.log_custom(
+                            "semantic_history", kg_source=memory_result.kg_source,
+                        )
+        except Exception as e:
+            logger.debug(f"[ToT Enrichment] Semantic history search failed: {e}")
+
+        # c) TCA enrichment
         tca_decision = None
         try:
             if getattr(_settings, "enable_tca", False):
@@ -363,7 +401,7 @@ class ToTOrchestrator:
         except Exception as e:
             logger.debug(f"[TCA] ToT enrichment injection failed: {e}")
 
-        # Meta Policy enrichment
+        # d) Meta Policy enrichment
         meta_policy_decision = None
         try:
             if getattr(_settings, "enable_meta_policy", False):
@@ -452,6 +490,9 @@ class ToTOrchestrator:
             "deferred_image_paths": [],
             "max_tool_steps_per_node": 5,
             "max_time_per_node": 30.0,
+            # Enrichment data from pattern retrieval + semantic history
+            "retrieved_patterns": tot_enrichment.get("retrieved_patterns", []),
+            "semantic_history": tot_enrichment.get("semantic_history", ""),
         }
 
         # Build LangGraph if not exists (lazy import to avoid circular deps)
@@ -593,10 +634,13 @@ class ToTOrchestrator:
                     # Also send periodic tree updates (hash-based dedup)
                     if "thoughts" in state and len(state["thoughts"]) > 0:
                         try:
+                            all_thoughts = state["thoughts"]
+                            # Only hash last 100 thoughts to prevent MemoryError
+                            hash_source = all_thoughts[-100:] if len(all_thoughts) > 100 else all_thoughts
                             thoughts_data = [
                                 {"id": t.id, "content": t.content, "score": t.evaluation_score,
                                  "status": t.status, "tool_calls": t.tool_calls}
-                                for t in state["thoughts"]
+                                for t in hash_source
                             ]
                             # best_path 已经是 List[str]（thought ID），无需再取 .id
                             best_path_ids = list(state.get("best_path", []))
@@ -657,7 +701,7 @@ class ToTOrchestrator:
                             execution_time=0.0,
                             execution_mode="tot",
                         ),
-                        timeout=30.0,
+                        timeout=60.0,
                     )
                     tot_correction_score = action.quality_score
                     logger.info(
@@ -667,7 +711,7 @@ class ToTOrchestrator:
                     if action.should_correct and action.correction:
                         tot_correction = action.correction
             except asyncio.TimeoutError:
-                logger.warning("[reflection] ToT reflection timed out (30s), skipping")
+                logger.warning("[reflection] ToT reflection timed out (60s), skipping")
             except Exception as e:
                 logger.warning(f"[reflection] ToT reflection failed: {e}")
 
@@ -751,6 +795,22 @@ class ToTOrchestrator:
                 )
         except Exception as _le:
             logger.debug("[Learning] ToT post-learning trigger failed: %s", _le)
+
+        # === Online Distill (fire-and-forget, after done) ===
+        try:
+            if _tot_output:
+                from app.core.online_distill import online_distill_skill
+                asyncio.create_task(
+                    online_distill_skill(
+                        user_query=query,
+                        agent_output=_tot_output,
+                        tool_calls=_tot_tool_calls,
+                        execution_time=0.0,
+                        execution_mode="tot",
+                    )
+                )
+        except Exception as _le:
+            logger.debug("[OnlineDistill] ToT trigger failed: %s", _le)
 
         # === TCA post-execution data recording（done 之后，不阻塞前端）===
         try:

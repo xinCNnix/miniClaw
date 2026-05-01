@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Minimum draft length to be considered valid (chars).
 # Drafts shorter than this are rejected in favor of the previous draft.
-_MIN_DRAFT_LENGTH = 100
+_MIN_DRAFT_LENGTH = 500
 
 
 async def writer_node(state: ToTState) -> Dict:
@@ -77,7 +77,7 @@ async def writer_node(state: ToTState) -> Dict:
     contradictions = state.get("contradictions") or []
 
     # Format evidence
-    evidence_summary = format_evidence_for_prompt(evidence_store)
+    evidence_summary = format_evidence_for_prompt(evidence_store, token_budget=20000)
 
     # Serialize coverage_map and contradictions for the prompt
     coverage_map_str = json.dumps(coverage_map, ensure_ascii=False, indent=2) if coverage_map else "{}"

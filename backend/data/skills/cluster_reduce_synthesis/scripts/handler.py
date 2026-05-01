@@ -1,5 +1,7 @@
 import json
 import logging
+
+from app.core.perv.json_repair import repair_json_or_none
 from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
@@ -87,9 +89,8 @@ max_clusters={max_clusters}
 
     resp = await llm.ainvoke([HumanMessage(content=prompt)])
 
-    try:
-        reduced = json.loads(resp.content)
-    except json.JSONDecodeError:
+    reduced = repair_json_or_none(resp.content)
+    if reduced is None:
         logger.warning("cluster_reduce_synthesis: LLM 输出非合法 JSON，降级返回原文")
         reduced = {
             "query": user_query,

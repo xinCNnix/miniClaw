@@ -1,6 +1,6 @@
 # Available Skills
 This document lists all available skills that the Agent can use.
-**Total Skills**: 22
+**Total Skills**: 23
 ---
 
 ### agent-papers
@@ -99,6 +99,11 @@ This document lists all available skills that the Agent can use.
 
 **Location**: `data/skills/research_report_writer`
 **Version**: 1.0
+
+### scale_down_analyze_python
+**Description**: No description
+**Location**: `data/skills/scale_down_analyze_python`
+**Version**: 1.0.0
 
 ### scale_down_fix_bug
 **Description**: No description

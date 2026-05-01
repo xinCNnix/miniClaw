@@ -48,7 +48,7 @@ async def coverage_node(state: ToTState) -> Dict:
         return {
             "coverage_map": {
                 "query": state.get("user_query", ""),
-                "score": 1.0,
+                "coverage_score": 1.0,
                 "topics": [],
             }
         }
@@ -179,6 +179,11 @@ def _ensure_coverage_fields(parsed: Dict, user_query: str) -> Dict:
     Returns:
         Coverage map dict with all required fields populated.
     """
+    # Unwrap nested structure: LLM may follow the prompt template and
+    # output {"coverage_map": {...}} instead of flat {...}
+    if "coverage_map" in parsed and isinstance(parsed["coverage_map"], dict):
+        parsed = parsed["coverage_map"]
+
     # Handle case where LLM returns topics in different formats
     topics = parsed.get("topics", [])
     if not isinstance(topics, list):

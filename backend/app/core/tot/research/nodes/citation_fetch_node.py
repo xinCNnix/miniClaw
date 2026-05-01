@@ -288,12 +288,14 @@ def _build_tool_args(tool_name: str, query: str, source_type: str) -> Dict:
         Dict of tool arguments.
     """
     if tool_name == "arxiv-search":
-        # 通过 terminal 工具直接执行 arxiv_search.py 脚本
         escaped_query = query.replace('"', '\\"')
         return {
             "command": (
                 f'python data/skills/arxiv-search/scripts/arxiv_search.py'
-                f' --query "{escaped_query}" --max-results 3'
+                f' --query "{escaped_query}"'
+                f' --max-results 15'
+                f' --sort-by submittedDate'
+                f' --order descending'
             )
         }
     elif tool_name in ("web_search", "search"):
