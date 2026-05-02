@@ -9,6 +9,9 @@ from typing import List, Dict, Any, Literal, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
+import json
+import threading
+from pathlib import Path
 from dataclasses import dataclass
 
 
@@ -63,7 +66,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "miniClaw"
-    app_version: str = "0.1.0"
+    app_version: str = "1.0.0"
     debug: bool = False
 
     # Server
@@ -118,6 +121,9 @@ class Settings(BaseSettings):
     custom_api_key: str = Field(default="", env="CUSTOM_API_KEY")
     custom_model: str = Field(default="", env="CUSTOM_MODEL")
     custom_base_url: str = Field(default="", env="CUSTOM_BASE_URL")
+
+    # Skill API Keys
+    baidu_api_key: str = Field(default="", env="BAIDU_API_KEY")
 
     # LangSmith Tracing (Optional)
     # ⚠️ 警告：启用 tracing 会将 API Key 和对话内容上传到 LangSmith 服务器
@@ -455,6 +461,8 @@ class Settings(BaseSettings):
     rl_prompt_consistency_coef: float = 0.05
     rl_batch_size: int = 32
     rl_gradient_clip: float = 1.0
+
+    # === Neural Strategy ===
     enable_neural_strategy: bool = True
     neural_strategy_auto_transition: bool = True
 
@@ -501,6 +509,44 @@ class Settings(BaseSettings):
     # === Session Retention (Phase 4 — 红线4 Session cleanup) ===
     session_retention_days: int = 30            # Session file retention period
     session_archive_on_delete: bool = True      # Archive to EventLog before deletion
+
+    # === Watchdog 配置 ===
+    enable_watchdog: bool = Field(default=True, env="ENABLE_WATCHDOG")
+    watchdog_heartbeat_timeout: int = Field(
+        default=60, env="WATCHDOG_HEARTBEAT_TIMEOUT",
+        description="心跳超时秒数，超过则认为 run 卡死"
+    )
+    watchdog_poll_interval: int = Field(
+        default=5, env="WATCHDOG_POLL_INTERVAL",
+        description="Watchdog 扫描间隔秒数"
+    )
+    watchdog_stuck_threshold: int = Field(
+        default=4, env="WATCHDOG_STUCK_THRESHOLD",
+        description="连续相同状态哈希次数，超过则判定卡死"
+    )
+    watchdog_repeat_threshold: int = Field(
+        default=10, env="WATCHDOG_REPEAT_THRESHOLD",
+        description="连续相同动作次数，超过则判定循环"
+    )
+    watchdog_max_runtime: int = Field(
+        default=1800, env="WATCHDOG_MAX_RUNTIME",
+        description="最大运行时间秒数（默认30分钟兜底）"
+    )
+
+    # === Dream 模块配置 ===
+    enable_dream: bool = Field(default=False, env="ENABLE_DREAM")
+    dream_schedule: str = Field(
+        default="", env="DREAM_SCHEDULE",
+        description="Cron schedule for automatic Dream sessions (empty = manual only)"
+    )
+    dream_max_samples: int = Field(
+        default=3, env="DREAM_MAX_SAMPLES",
+        description="Number of trajectories to sample per Dream session"
+    )
+    dream_executor_mode: str = Field(
+        default="simulated", env="DREAM_EXECUTOR_MODE",
+        description="Executor mode: simulated or replay"
+    )
 
 
 def _load_obfuscated_config() -> None:
@@ -573,23 +619,103 @@ def _load_obfuscated_config() -> None:
         pass
 
 
+RUNTIME_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "runtime_config.json")
+_settings_lock = threading.Lock()
+_cached_settings: Optional["Settings"] = None
+
+
+def _load_runtime_config() -> dict:
+    """Load runtime_config.json if it exists."""
+    import logging
+    _logger = logging.getLogger(__name__)
+    try:
+        path = Path(RUNTIME_CONFIG_PATH)
+        if not path.exists():
+            _logger.debug("[config] runtime_config.json not found, using defaults")
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            _logger.info(f"[config] Loaded runtime_config.json: {len(data)} keys")
+            return data
+    except json.JSONDecodeError as e:
+        _logger.warning(f"[config] runtime_config.json has invalid JSON: {e}")
+        return {}
+    except Exception as e:
+        _logger.warning(f"[config] Failed to load runtime_config.json: {e}")
+        return {}
+
+
+def _is_allowed_runtime_key(key: str) -> bool:
+    """Check if a key is in the settings registry whitelist."""
+    try:
+        from app.core.settings_registry import get_all_keys
+        return key in get_all_keys()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[config] Failed to check key '{key}' against registry: {e}")
+        return False
+
+
 def get_settings() -> Settings:
     """
-    Get settings instance (always fresh, no caching).
+    Get settings instance (cached after first load).
 
-    每次调用都重新加载配置，确保前端设置与后端使用一致。
+    Loads runtime_config.json once at startup and caches the result.
+    Runtime changes to runtime_config.json only take effect after restart.
+    Thread-safe via double-checked locking.
     """
-    import logging
-    _load_obfuscated_config()
-    s = Settings()
-    logger = logging.getLogger(__name__)
-    logger.info(
-        f"[config] Features: reflection={s.enable_agent_reflection}, "
-        f"perv_router={s.perv_router_enabled}, meta_policy={s.enable_meta_policy}, "
-        f"tca={s.enable_tca}, rl_training={s.enable_rl_training}, "
-        f"neural_strategy={s.enable_neural_strategy}, kg={s.enable_kg}"
-    )
-    return s
+    global _cached_settings
+    if _cached_settings is not None:
+        return _cached_settings
+
+    with _settings_lock:
+        if _cached_settings is not None:
+            return _cached_settings
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        _load_obfuscated_config()
+
+        runtime_config = _load_runtime_config()
+        applied_count = 0
+        skipped_keys = []
+        if runtime_config:
+            for key, value in runtime_config.items():
+                if key.startswith("_"):
+                    continue
+                if _is_allowed_runtime_key(key):
+                    if isinstance(value, bool):
+                        os.environ[key.upper()] = "true" if value else "false"
+                    else:
+                        os.environ[key.upper()] = str(value)
+                    applied_count += 1
+                    logger.debug(f"[config] Applied runtime override: {key}={value}")
+                else:
+                    skipped_keys.append(key)
+
+        _cached_settings = Settings()
+
+        if applied_count:
+            logger.info(f"[config] Applied {applied_count} runtime config overrides")
+        if skipped_keys:
+            logger.warning(f"[config] Skipped {len(skipped_keys)} unknown keys in runtime_config.json: {skipped_keys[:5]}")
+
+        logger.info(
+            f"[config] Features: reflection={_cached_settings.enable_agent_reflection}, "
+            f"perv_router={_cached_settings.perv_router_enabled}, meta_policy={_cached_settings.enable_meta_policy}, "
+            f"tca={_cached_settings.enable_tca}, rl_training={_cached_settings.enable_rl_training}, "
+            f"neural_strategy={_cached_settings.enable_neural_strategy}, kg={_cached_settings.enable_kg}"
+        )
+        return _cached_settings
+
+
+def reload_settings() -> Settings:
+    """Force reload settings (for testing or admin use only)."""
+    global _cached_settings
+    with _settings_lock:
+        _cached_settings = None
+    return get_settings()
 
 
 def get_available_providers() -> List[Dict[str, Any]]:
