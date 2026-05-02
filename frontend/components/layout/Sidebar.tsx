@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { MessageSquare, Plus, Trash2, Settings } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -26,6 +27,7 @@ export function Sidebar({
   onDeleteSession,
 }: SidebarProps) {
   const { t } = useTranslation()
+  const router = useRouter()
   const [isDeleting, setIsDeleting] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -52,7 +54,7 @@ export function Sidebar({
           <h1 className="text-xl font-bold text-[var(--ink-green)]">
             MiNiCLAW
           </h1>
-          <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}>
+          <Button variant="ghost" size="sm" onClick={() => router.push("/settings")} title={t("settings.title")}>
             <Settings className="w-4 h-4" />
           </Button>
         </div>
