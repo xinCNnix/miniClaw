@@ -126,9 +126,16 @@ def _validate_setting(key: str, value: Any) -> Optional[str]:
 
 @router.get("/settings")
 async def get_all_settings():
-    """Return all settings groups with current values."""
+    """Return all settings groups with current values.
+
+    Returns the runtime_config.json values (pending restart) if they exist,
+    otherwise falls back to the cached Settings values.
+    """
     from app.config import get_settings
     current = get_settings()
+
+    # Read pending runtime config values (written but not yet applied)
+    pending = _read_runtime_config()
 
     allowed_keys = get_all_keys()
     groups = []
@@ -145,7 +152,11 @@ async def get_all_settings():
             for sdef in SETTINGS_DEFINITIONS:
                 if sdef.group != group_id or sdef.section != section_id:
                     continue
-                current_val = getattr(current, sdef.key, sdef.default)
+                # Prefer pending runtime_config value over cached Settings value
+                if sdef.key in pending:
+                    current_val = pending[sdef.key]
+                else:
+                    current_val = getattr(current, sdef.key, sdef.default)
                 section_settings.append(sdef.to_dict(current_value=current_val))
 
             if section_settings:
