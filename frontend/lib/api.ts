@@ -19,6 +19,11 @@ import type {
   KBBatchUploadResponse,
   KBBatchUploadComplete
 } from '@/types/knowledge-base';
+import type {
+  SettingsResponse,
+  UpdateSettingsResult,
+  ExternalKeysResponse
+} from '@/types/config';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8002';
 
@@ -737,6 +742,71 @@ export class APIClient {
     }
 
     return response.json();
+  }
+
+  async cancelRun(runId: string): Promise<{ success: boolean; message: string }> {
+    const response = await fetch(`${this.baseUrl}/api/chat/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: runId }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to cancel run: ${await response.text()}`);
+    }
+    return response.json();
+  }
+
+  async getRunStatus(runId: string): Promise<Record<string, unknown>> {
+    const response = await fetch(`${this.baseUrl}/api/chat/runs/${runId}`);
+    if (!response.ok) {
+      throw new Error(`Failed to get run status: ${await response.text()}`);
+    }
+    return response.json();
+  }
+
+  // Settings
+
+  async getSettings(): Promise<SettingsResponse> {
+    const res = await fetch(`${this.baseUrl}/api/settings`)
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+  }
+
+  async updateSettings(values: Record<string, unknown>): Promise<UpdateSettingsResult> {
+    const res = await fetch(`${this.baseUrl}/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err)
+    }
+    return res.json()
+  }
+
+  async resetSettings(): Promise<{ success: boolean }> {
+    const res = await fetch(`${this.baseUrl}/api/settings/reset`, {
+      method: "POST",
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+  }
+
+  async getExternalKeys(): Promise<ExternalKeysResponse> {
+    const res = await fetch(`${this.baseUrl}/api/settings/external-keys`)
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
+  }
+
+  async saveExternalKey(service: string, apiKey: string): Promise<{ success: boolean }> {
+    const res = await fetch(`${this.baseUrl}/api/settings/external-keys/${service}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service, api_key: apiKey }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json()
   }
 }
 

@@ -48,3 +48,56 @@ export interface SaveLLMResponse {
 export interface DeleteLLMResponse {
   success: boolean
 }
+
+// Settings page types
+
+export interface SettingItem {
+  key: string
+  type: "bool" | "int" | "float" | "str" | "select"
+  value: unknown
+  default: unknown
+  description_zh: string
+  description_en: string
+  tooltip_zh: string
+  tooltip_en: string
+  range?: { min: number; max: number }
+  options?: { value: string; label_zh: string; label_en: string }[]
+}
+
+export interface SettingSection {
+  id: string
+  label_zh: string
+  label_en: string
+  settings: SettingItem[]
+}
+
+export interface SettingsGroup {
+  id: string
+  label_zh: string
+  label_en: string
+  restart_required: boolean
+  icon: string
+  sections: SettingSection[]
+}
+
+export interface SettingsResponse {
+  groups: SettingsGroup[]
+}
+
+export interface ExternalService {
+  key: string
+  name_zh: string
+  name_en: string
+  description_zh: string
+  description_en: string
+  has_key: boolean
+}
+
+export interface ExternalKeysResponse {
+  services: ExternalService[]
+}
+
+export interface UpdateSettingsResult {
+  success: boolean
+  restart_required: boolean
+}
