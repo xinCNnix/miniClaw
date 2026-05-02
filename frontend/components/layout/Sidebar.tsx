@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { MessageSquare, Plus, Trash2, Settings } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { SettingsDialog } from "./SettingsDialog"
 import { useTranslation } from "@/hooks/use-translation.hook"
 import type { Session } from "@/types/api"
 
@@ -29,7 +28,6 @@ export function Sidebar({
   const { t } = useTranslation()
   const router = useRouter()
   const [isDeleting, setIsDeleting] = useState<string | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation()
@@ -109,8 +107,6 @@ export function Sidebar({
         <p>{t('sidebar.powered_by')}</p>
       </div>
 
-      {/* Settings Dialog */}
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </aside>
   )
 }
