@@ -33,6 +33,7 @@ class LLMConfig:
     model: str
     base_url: str
     api_key: str  # 仅在后端内存中使用，不发送到前端
+    context_window: int = 128_000
 
     def to_dict(self, include_api_key: bool = False) -> Dict[str, Any]:
         """转换为字典（前端显示时不包含 API Key）"""
@@ -42,6 +43,7 @@ class LLMConfig:
             "name": self.name,
             "model": self.model,
             "base_url": self.base_url,
+            "context_window": self.context_window,
         }
 
         if include_api_key:
@@ -366,6 +368,11 @@ class Settings(BaseSettings):
         "IDENTITY": 500,
     }
 
+    # Context Window Management
+    context_window_reserved_output: int = 4000
+    context_window_trigger_ratio: float = 0.80
+    context_window_critical_ratio: float = 0.95
+
     # Memory System
     enable_memory_extraction: bool = True
     enable_semantic_search: bool = True
@@ -620,6 +627,30 @@ def _load_obfuscated_config() -> None:
 
 
 RUNTIME_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "runtime_config.json")
+
+
+def _load_external_keys() -> None:
+    """Load external service keys from external_keys.json into environment."""
+    import logging
+    _logger = logging.getLogger(__name__)
+    try:
+        ext_path = Path(RUNTIME_CONFIG_PATH).parent / "external_keys.json"
+        if not ext_path.exists():
+            return
+        ext_keys = json.loads(ext_path.read_text(encoding="utf-8"))
+        from app.core.obfuscation import KeyObfuscator
+        loaded = 0
+        for key, obfuscated in ext_keys.items():
+            if key.startswith("_"):
+                continue
+            decrypted = KeyObfuscator.deobfuscate(obfuscated)
+            if decrypted:
+                os.environ[key] = decrypted
+                loaded += 1
+        if loaded:
+            _logger.info(f"[config] Loaded {loaded} external service keys from external_keys.json")
+    except Exception as e:
+        _logger.warning(f"[config] Failed to load external_keys.json: {e}")
 _settings_lock = threading.Lock()
 _cached_settings: Optional["Settings"] = None
 
@@ -676,6 +707,7 @@ def get_settings() -> Settings:
         logger = logging.getLogger(__name__)
 
         _load_obfuscated_config()
+        _load_external_keys()
 
         runtime_config = _load_runtime_config()
         applied_count = 0

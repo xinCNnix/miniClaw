@@ -111,6 +111,7 @@ def load_all_llm_configs() -> List[LLMConfig]:
                     model=llm_data.get("model", ""),
                     base_url=llm_data.get("base_url", ""),
                     api_key=api_key,
+                    context_window=llm_data.get("context_window", 128_000),
                 )
                 llms.append(llm_config)
 
@@ -171,6 +172,7 @@ def save_llm_config(llm_config: LLMConfig) -> None:
         "model": llm_config.model,
         "base_url": llm_config.base_url,
         "api_key": encrypted_key,  # 加密存储
+        "context_window": llm_config.context_window,
     }
 
     # 保存到文件
