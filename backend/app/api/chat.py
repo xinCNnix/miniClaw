@@ -616,6 +616,28 @@ async def chat_stream_generator(
             )
             messages = ctx_result.messages
 
+            # Safety: strip base64/images from history messages to avoid sending to LLM
+            # Only the last message (current) should have attachments
+            for i, msg in enumerate(messages[:-1]):
+                # Remove images/attachments field from history
+                msg.pop("images", None)
+                msg.pop("generated_images", None)
+                msg.pop("attachments", None)
+                # Strip base64 data URIs from string content
+                if isinstance(msg.get("content"), str):
+                    msg["content"] = re.sub(
+                        r'data:image/[a-zA-Z+]+;base64,[A-Za-z0-9+/=\n]{50,}',
+                        '[图片]', msg["content"],
+                    )
+                    msg["content"] = re.sub(
+                        r'!\[[^\]]*\]\([^)]*(?:/api/media/|data:image/)[^)]*\)',
+                        '[图片已生成]', msg["content"],
+                    )
+                    msg["content"] = re.sub(
+                        r'http://localhost:\d+/api/media/[a-f0-9]+',
+                        '[图片]', msg["content"],
+                    )
+
             # Emit context events to frontend
             if ctx_result.action == "compressed":
                 yield format_sse_event(ChatEvent(
