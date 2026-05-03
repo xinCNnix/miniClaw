@@ -9,6 +9,7 @@ import re
 import asyncio
 import logging
 import time
+import uuid
 from typing import AsyncIterator
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -23,14 +24,288 @@ from app.skills.bootstrap import bootstrap_skills
 from app.core.trajectory import AgentExecutionLogger
 from app.logging_config import get_agent_logger
 from app.core.tot.router import ToTOrchestrator
-from app.core.perv.orchestrator import get_orchestrator as get_perv_orchestrator
+from app.core.context.manager import get_context_manager
+from app.core.llm_config import get_current_llm_id, load_llm_config
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
+
+# Lazy import to avoid circular dependency
+def _get_perv_orchestrator(**kwargs):
+    from app.core.perv.orchestrator import get_orchestrator
+    return get_orchestrator(**kwargs)
 agent_logger = get_agent_logger("api.chat")
 
 
 router = APIRouter(tags=["chat"])
+
+
+def _extract_pdf_text(data_url: str, filename: str) -> str:
+    """从 PDF 的 base64 data URL 中提取文本内容。"""
+    import base64
+    import io
+
+    try:
+        raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+        pdf_bytes = base64.b64decode(raw)
+
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        pages_text = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text()
+            if text:
+                pages_text.append(f"--- Page {i + 1} ---\n{text}")
+
+        full_text = "\n\n".join(pages_text)
+        if len(full_text) > 30000:
+            full_text = full_text[:30000] + "\n\n[... truncated]"
+
+        if not full_text.strip():
+            return f"[Attached file: {filename} (PDF - no extractable text)]"
+
+        return f"[Attached file: {filename} (PDF, {len(reader.pages)} pages)]\n\n{full_text}"
+    except Exception as e:
+        logger.warning(f"Failed to extract PDF text: {e}")
+        return f"[Attached file: {filename} (application/pdf) - text extraction failed: {e}]"
+
+
+def _extract_spreadsheet_text(data_url: str, filename: str) -> str:
+    """从 Excel/CSV 的 base64 data URL 中提取表格文本。"""
+    import base64
+    import io
+
+    try:
+        raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+        file_bytes = base64.b64decode(raw)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+        rows = []
+        if ext == "csv":
+            import csv
+            text = file_bytes.decode("utf-8", errors="replace")
+            reader = csv.reader(io.StringIO(text))
+            rows = [row for row in reader]
+        elif ext in ("xls", "xlsx"):
+            if ext == "xlsx":
+                import openpyxl
+                wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    if len(wb.sheetnames) > 1:
+                        rows.append([f"--- Sheet: {sheet_name} ---"])
+                    for row in ws.iter_rows(values_only=True):
+                        rows.append([str(c) if c is not None else "" for c in row])
+                wb.close()
+            else:
+                import xlrd
+                wb = xlrd.open_workbook(file_contents=file_bytes)
+                for sx in range(wb.nsheets):
+                    ws = wb.sheet_by_index(sx)
+                    if wb.nsheets > 1:
+                        rows.append([f"--- Sheet: {ws.name} ---"])
+                    for r in range(ws.nrows):
+                        rows.append([str(ws.cell_value(r, c)) for c in range(ws.ncols)])
+        else:
+            return f"[Attached file: {filename} - unsupported spreadsheet format]"
+
+        # 格式化为文本表格
+        lines = []
+        for row in rows:
+            if isinstance(row, list):
+                lines.append(" | ".join(str(v) for v in row))
+            else:
+                lines.append(str(row))
+        text = "\n".join(lines)
+
+        if len(text) > 30000:
+            text = text[:30000] + "\n[... truncated]"
+
+        return f"[Attached file: {filename} ({len(rows)} rows)]\n\n{text}"
+    except Exception as e:
+        logger.warning(f"Failed to extract spreadsheet text: {e}")
+        return f"[Attached file: {filename} - extraction failed: {e}]"
+
+
+def _extract_doc_text(data_url: str, filename: str) -> str:
+    """从 Word 文档的 base64 data URL 中提取文本。"""
+    import base64
+    import io
+
+    try:
+        raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+        file_bytes = base64.b64decode(raw)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+        if ext == "docx":
+            from docx import Document
+            doc = Document(io.BytesIO(file_bytes))
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    paragraphs.append(" | ".join(cell.text for cell in row.cells))
+            text = "\n".join(paragraphs)
+        elif ext == "doc":
+            # .doc (OLE2) — 直接用 antiword 转文本
+            import subprocess
+            import tempfile
+            import os
+            tmp = None
+            try:
+                tmp = tempfile.NamedTemporaryFile(suffix=".doc", delete=False)
+                tmp.write(file_bytes)
+                tmp.close()
+                result = subprocess.run(
+                    ["antiword", "-m", "UTF-8.txt", tmp.name],
+                    capture_output=True, timeout=10,
+                )
+                text = result.stdout.decode("utf-8", errors="replace").strip()
+            except FileNotFoundError:
+                # antiword 未安装，回退到 python-docx（可能失败）或占位
+                text = ""
+                logger.warning("antiword not found, cannot extract .doc text")
+            except Exception as e:
+                text = ""
+                logger.warning(f"antiword failed: {e}")
+            finally:
+                if tmp and os.path.exists(tmp.name):
+                    os.unlink(tmp.name)
+        else:
+            return f"[Attached file: {filename} - unsupported format]"
+
+        if len(text) > 30000:
+            text = text[:30000] + "\n[... truncated]"
+        if not text.strip():
+            return f"[Attached file: {filename} - no extractable text]"
+        return f"[Attached file: {filename}]\n\n{text}"
+    except Exception as e:
+        logger.warning(f"Failed to extract doc text: {e}")
+        return f"[Attached file: {filename} - extraction failed: {e}]"
+
+
+def _extract_ppt_text(data_url: str, filename: str) -> str:
+    """从 PPT 的 base64 data URL 中提取文本。"""
+    import base64
+    import io
+
+    try:
+        raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+        file_bytes = base64.b64decode(raw)
+
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(file_bytes))
+        slides_text = []
+        for i, slide in enumerate(prs.slides):
+            items = []
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        t = para.text.strip()
+                        if t:
+                            items.append(t)
+                if shape.has_table:
+                    for row in shape.table.rows:
+                        items.append(" | ".join(cell.text for cell in row.cells))
+            if items:
+                slides_text.append(f"--- Slide {i + 1} ---\n" + "\n".join(items))
+
+        text = "\n\n".join(slides_text)
+        if len(text) > 30000:
+            text = text[:30000] + "\n[... truncated]"
+        if not text.strip():
+            return f"[Attached file: {filename} - no extractable text]"
+        return f"[Attached file: {filename} ({len(prs.slides)} slides)]\n\n{text}"
+    except Exception as e:
+        logger.warning(f"Failed to extract PPT text: {e}")
+        return f"[Attached file: {filename} - extraction failed: {e}]"
+
+
+def _extract_file_text(data_url: str, filename: str, mime_type: str) -> str:
+    """根据文件类型自动选择提取方法，确保所有文件都尝试提取内容。"""
+    import base64
+
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    # PDF
+    if mime_type == "application/pdf" or ext == "pdf":
+        return _extract_pdf_text(data_url, filename)
+
+    # Excel / CSV
+    _excel_mimes = {
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/octet-stream",  # 很多上传 Excel 时返回这个
+        "text/csv", "application/csv",
+    }
+    _excel_exts = ("xls", "xlsx", "csv")
+    if mime_type in _excel_mimes and ext in _excel_exts or ext in _excel_exts:
+        return _extract_spreadsheet_text(data_url, filename)
+
+    # Word
+    _word_mimes = {
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    _word_exts = ("doc", "docx")
+    if mime_type in _word_mimes or ext in _word_exts:
+        return _extract_doc_text(data_url, filename)
+
+    # PPT
+    _ppt_mimes = {
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+    _ppt_exts = ("ppt", "pptx")
+    if mime_type in _ppt_mimes or ext in _ppt_exts:
+        return _extract_ppt_text(data_url, filename)
+
+    # 所有其他格式：尝试 base64 解码后当文本读取
+    # 覆盖：txt, md, json, xml, yaml, html, css, js, py, java, c, cpp, h, log, ini, cfg, conf, sh, bat, sql, r, go, rs, ts, rb, php, swift, kt, dart, etc.
+    raw = data_url.split(",", 1)[-1] if "," in data_url else data_url
+    try:
+        file_bytes = base64.b64decode(raw)
+        text = file_bytes.decode("utf-8", errors="replace")
+        # 过滤掉全是乱码的情况（二进制文件）
+        printable = sum(1 for c in text[:1000] if c.isprintable() or c in "\n\r\t")
+        if len(text[:1000]) > 0 and printable / len(text[:1000]) < 0.7:
+            return f"[Attached file: {filename} ({mime_type}, {len(file_bytes)} bytes - binary content)]"
+        if len(text) > 30000:
+            text = text[:30000] + "\n[... truncated]"
+        return f"[Attached file: {filename}]\n\n{text}"
+    except Exception:
+        return f"[Attached file: {filename} ({mime_type}, binary content)]"
+
+
+def _format_attachments(attachments: list[dict]) -> list[dict]:
+    """Convert attachments to LLM multimodal content format.
+
+    Frontend sends: [{type, content (data URL), mime_type, filename}]
+    Returns: list of content blocks for the LLM.
+    """
+    content_blocks = []
+    for att in attachments:
+        category = att.get("type", "document")
+        data_url = att.get("content", "")
+        mime_type = att.get("mime_type", "")
+        filename = att.get("filename", "")
+
+        if category == "image":
+            content_blocks.append({
+                "type": "image_url",
+                "image_url": {"url": data_url},
+            })
+        elif category == "audio":
+            # Extract raw base64 from data URL
+            base64_data = data_url.split(",", 1)[-1] if "," in data_url else data_url
+            audio_format = mime_type.split("/")[-1] if "/" in mime_type else "wav"
+            content_blocks.append({
+                "type": "input_audio",
+                "input_audio": {"data": base64_data, "format": audio_format},
+            })
+        else:
+            text = _extract_file_text(data_url, filename, mime_type)
+            content_blocks.append({"type": "text", "text": text})
+    return content_blocks
 
 # Global agent manager (singleton)
 _agent_manager: AgentManager = None
@@ -251,7 +526,7 @@ def detect_task_boundary(msg1: dict, msg2: dict) -> bool:
             if (time2 - time1).total_seconds() > 60:  # 1 minute
                 logger.info("Task boundary: other topic → weather (after gap)")
                 return True
-        except:
+        except Exception:
             pass
 
     # Paper/Code/File switches
@@ -310,87 +585,50 @@ async def chat_stream_generator(
             # Get session history
             session_messages = session.get("messages", [])
 
-            # === INTELLIGENT CONTEXT PRUNING ===
-            # Strategy: Use task boundary detection to prune irrelevant history
-            #
-            # 1. Check if there's a task boundary in recent history
-            # 2. If boundary found, only keep messages AFTER the boundary
-            # 3. If no boundary, keep last 3 messages
-            #
-            # This ensures LLM doesn't see "Beijing weather" when asking "Shanghai weather"
+            # === CONTEXT WINDOW MANAGEMENT ===
+            # Get current LLM config for context_window
+            try:
+                _llm_id = get_current_llm_id()
+                _llm_config = load_llm_config(_llm_id)
+            except Exception:
+                from app.config import LLMConfig
+                logger.warning("Failed to load LLM config for context management, using fallback")
+                _llm_config = LLMConfig(
+                    id="fallback", provider="qwen", name="fallback",
+                    model="", base_url="", api_key="",
+                )
 
-            MAX_CONTEXT_MESSAGES = 3
-            recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
-
-            # Check for task boundary in recent messages
-            boundary_index = -1  # -1 means no boundary found
-            for i in range(len(recent_messages) - 1, 0, -1):
-                if i < len(recent_messages) - 1:  # Not the last message
-                    if detect_task_boundary(recent_messages[i], recent_messages[i + 1]):
-                        boundary_index = i
-                        logger.info(f"Task boundary found at index {i}, pruning earlier history")
-                        break
-
-            # Prune messages based on boundary
-            if boundary_index >= 0:
-                # Keep only messages after the boundary
-                recent_messages = recent_messages[boundary_index + 1:]
-                logger.info(f"Pruned to {len(recent_messages)} messages after boundary")
-            else:
-                # No boundary: keep recent messages as-is
-                logger.debug(f"No task boundary, keeping {len(recent_messages)} recent messages")
-
-            for i, msg in enumerate(recent_messages):
-                if msg["role"] in ["user", "assistant"]:
-                    # Check if this is the last message (current question)
-                    is_last_message = (i == len(recent_messages) - 1)
-
-                    if is_last_message:
-                        # CURRENT MESSAGE: Use full content - this is what LLM should focus on
-                        message_dict = {
-                            "role": msg["role"],
-                            "content": msg["content"],
-                        }
-                        logger.debug(f"Loading current message: {msg['content'][:50]}...")
-
-                        # Add images if present (only for current message)
-                        if msg.get("images"):
-                            # Format content for vision models
-                            content_list = [{"type": "text", "text": msg["content"]}]
-                            for img in msg["images"]:
-                                content_list.append({
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                                })
-                            message_dict["content"] = content_list
-                    else:
-                        # HISTORICAL MESSAGE: Abstract to type only - prevents interference
-                        # Don't show "Beijing weather" - show "Weather Information Query" instead
-                        # Don't include images for historical messages
-                        message_type = _classify_conversation_type(msg.get("content", ""))
-                        message_dict = {
-                            "role": msg["role"],
-                            "content": f"[COMPLETED_TASK] {message_type} - Task finished, ignore details",
-                        }
-                        logger.debug(f"Abstracted historical message to: {message_type}")
-
-                    messages.append(message_dict)
-
-            # Add current message
-            current_message = {
-                "role": "user",
-                "content": request.message,
-            }
-            # Add images from current request if present
-            if request.images:
+            # Build current message with attachments
+            current_message = {"role": "user", "content": request.message}
+            if request.attachments:
                 content_list = [{"type": "text", "text": request.message}]
-                for img in request.images:
-                    content_list.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{img['mime_type']};base64,{img['content']}"}
-                    })
+                content_list.extend(_format_attachments(request.attachments))
                 current_message["content"] = content_list
-            messages.append(current_message)
+
+            # Prepare context via ContextManager
+            context_mgr = get_context_manager()
+            ctx_result = await context_mgr.prepare_context(
+                session_messages=session_messages,
+                current_message=current_message,
+                system_prompt=system_prompt,
+                llm_config=_llm_config,
+                session_id=request.session_id,
+            )
+            messages = ctx_result.messages
+
+            # Emit context events to frontend
+            if ctx_result.action == "compressed":
+                yield format_sse_event(ChatEvent(
+                    type="context_optimized",
+                    data={"action": "compressed"},
+                ))
+                logger.info(f"Context optimized: session={request.session_id}, history compressed")
+            elif ctx_result.action == "checkpoint":
+                yield format_sse_event(ChatEvent(
+                    type="context_checkpoint",
+                    data={"reason": "context_limit", "snapshot_id": ctx_result.checkpoint_id},
+                ))
+                logger.warning(f"Context checkpoint: session={request.session_id}, snapshot={ctx_result.checkpoint_id}")
 
             # Log input
             exec_logger.set_user_question(request.message)
@@ -404,9 +642,19 @@ async def chat_stream_generator(
             collected_images = []  # Collect generated_images from tool outputs
 
             # ── 直接流式输出（无自动 PERV 重路由）──
+            # === Watchdog: 注册 run ===
+            from app.core.watchdog import get_registry as _wd_get_reg
+            _wd_registry = _wd_get_reg()
+            _wd_run_id = str(uuid.uuid4())
+            _wd_info = _wd_registry.register(_wd_run_id, session_id=request.session_id)
+            _wd_cancel = _wd_info.cancel_event
+            yield format_sse_event(ChatEvent(type="run_id", run_id=_wd_run_id))
+
             async for event in agent.astream(
                 messages=messages,
                 system_prompt=system_prompt,
+                cancel_event=_wd_cancel,
+                run_id=_wd_run_id,
             ):
                 event_count += 1
 
@@ -496,7 +744,7 @@ async def chat_stream_generator(
                 session_id=request.session_id,
                 role="user",
                 content=request.message,
-                images=request.images,
+                images=request.attachments,
             )
 
             # Save assistant response to session (if any)
@@ -562,12 +810,17 @@ async def chat_stream_generator(
                 logging.warning(f"Failed to trigger memory extraction: {e}")
 
             # Send done event
+            _wd_registry.set_result(_wd_run_id, {"status": "completed"})
             yield format_sse_event(
                 ChatEvent(type="done")
             )
 
         except Exception as e:
             # Send error event
+            try:
+                _wd_registry.set_error(_wd_run_id, str(e))
+            except Exception:
+                pass
             yield format_sse_event(
                 ChatEvent(
                     type="error",
@@ -590,36 +843,62 @@ async def tot_stream_generator(
     session = session_manager.load_session(request.session_id)
     session_messages = session.get("messages", []) if session else []
 
-    tot_messages = []
-    MAX_CONTEXT_MESSAGES = 3
-    recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
+    # === CONTEXT WINDOW MANAGEMENT (ToT) ===
+    try:
+        _llm_id = get_current_llm_id()
+        _llm_config = load_llm_config(_llm_id)
+    except Exception:
+        from app.config import LLMConfig
+        logger.warning("Failed to load LLM config for ToT context management, using fallback")
+        _llm_config = LLMConfig(
+            id="fallback", provider="qwen", name="fallback",
+            model="", base_url="", api_key="",
+        )
 
-    for msg in recent_messages:
-        if msg["role"] in ("user", "assistant"):
-            content_preview = msg["content"][:300] if msg["content"] else ""
-            # Safety: strip base64 and image URLs so LLM doesn't reuse old images
-            content_preview = re.sub(
+    tot_current = {"role": "user", "content": request.message}
+    context_mgr = get_context_manager()
+    ctx_result = await context_mgr.prepare_context(
+        session_messages=session_messages,
+        current_message=tot_current,
+        system_prompt=system_prompt,
+        llm_config=_llm_config,
+    )
+    tot_messages = ctx_result.messages
+
+    if ctx_result.action != "normal":
+        logger.info(f"ToT context: action={ctx_result.action}, snapshot={ctx_result.checkpoint_id}")
+
+    # Strip base64 and image URLs for safety (existing behavior)
+    for msg in tot_messages:
+        if isinstance(msg.get("content"), str):
+            msg["content"] = re.sub(
                 r'data:image/[a-zA-Z+]+;base64,[A-Za-z0-9+/=\n]{50,}',
-                '[图片]', content_preview,
+                '[图片]', msg["content"],
             )
-            content_preview = re.sub(
+            msg["content"] = re.sub(
                 r'!\[[^\]]*\]\([^)]*(?:/api/media/|data:image/)[^)]*\)',
-                '[图片已生成]', content_preview,
+                '[图片已生成]', msg["content"],
             )
-            content_preview = re.sub(
+            msg["content"] = re.sub(
                 r'http://localhost:\d+/api/media/[a-f0-9]+',
-                '[图片]', content_preview,
+                '[图片]', msg["content"],
             )
-            tot_messages.append({"role": msg["role"], "content": content_preview})
-
-    # Append current user message
-    tot_messages.append({"role": "user", "content": request.message})
 
     try:
+        # === Watchdog: 注册 ToT run ===
+        from app.core.watchdog import get_registry as _wd_get_reg
+        _wd_registry = _wd_get_reg()
+        _wd_run_id = str(uuid.uuid4())
+        _wd_info = _wd_registry.register(_wd_run_id, session_id=request.session_id)
+        _wd_cancel = _wd_info.cancel_event
+        yield format_sse_event(ChatEvent(type="run_id", run_id=_wd_run_id))
+
         async for event in orchestrator.process_request(
             messages=tot_messages,
             system_prompt=system_prompt,
             enable_tot=True,
+            cancel_event=_wd_cancel,
+            run_id=_wd_run_id,
         ):
             event_type = event.get("type", "unknown")
 
@@ -649,7 +928,7 @@ async def tot_stream_generator(
     session_manager = get_session_manager()
     session_manager.add_message(
         session_id=request.session_id, role="user",
-        content=request.message, images=request.images,
+        content=request.message, images=request.attachments,
     )
     if assistant_parts:
         assistant_full_response = "".join(assistant_parts)
@@ -954,21 +1233,32 @@ async def chat(request: ChatRequest):
     # ── Tier 2: PERV（深度规划模式，用户手动触发）──
     elif deep_planning:
         try:
-            perv_orch = get_perv_orchestrator(
+            perv_orch = _get_perv_orchestrator(
                 agent_manager=agent,
                 session_id=request.session_id or "default",
             )
             logger.info("[Routing] Tier 2: PERV Deep Planning (user-triggered)")
+
+            # === Watchdog: 注册 PERV run ===
+            from app.core.watchdog import get_registry as _wd_get_reg
+            _wd_registry = _wd_get_reg()
+            _wd_run_id = str(uuid.uuid4())
+            _wd_info = _wd_registry.register(_wd_run_id, session_id=request.session_id)
+            _wd_cancel = _wd_info.cancel_event
 
             async def _perv_stream():
                 """PERV 深度规划模式流（用户主动触发，不自动降级）。"""
                 assistant_parts = []
                 collected_images = []
 
+                yield format_sse_event(ChatEvent(type="run_id", run_id=_wd_run_id))
+
                 async for event in perv_orch.process_request(
                     [{"role": "user", "content": request.message}],
                     system_prompt,
                     force_mode="plan_execute",
+                    cancel_event=_wd_cancel,
+                    run_id=_wd_run_id,
                 ):
                     et = event.get("type", "")
                     if et == "content_delta":
@@ -996,7 +1286,7 @@ async def chat(request: ChatRequest):
                 session_manager = get_session_manager()
                 session_manager.add_message(
                     session_id=request.session_id, role="user",
-                    content=request.message, images=request.images,
+                    content=request.message, images=request.attachments,
                 )
                 if assistant_parts:
                     full_resp = "".join(assistant_parts)
@@ -1068,7 +1358,7 @@ async def health_check():
     try:
         agent = get_agent_manager()
         agent_initialized = True
-    except:
+    except Exception:
         agent_initialized = False
 
     # Count skills
@@ -1076,7 +1366,7 @@ async def health_check():
         bootstrap = bootstrap_skills()
         bootstrap.scan_skills()
         skills_count = bootstrap.get_skill_count()
-    except:
+    except Exception:
         skills_count = 0
 
     return {
@@ -1154,4 +1444,47 @@ async def _background_memory_extraction(session_id: str) -> None:
 
     except Exception as e:
         logger.error(f"Background memory extraction failed for {session_id}: {e}", exc_info=True)
+
+
+# === Watchdog: 取消和状态查询端点 ===
+
+from pydantic import BaseModel
+
+
+class CancelRequest(BaseModel):
+    run_id: str
+
+
+@router.post("/cancel")
+async def cancel_run(request: CancelRequest):
+    """取消正在运行的 Agent 执行。"""
+    from app.core.watchdog import get_registry
+    registry = get_registry()
+    info = registry.get(request.run_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Run {request.run_id} 不存在")
+    if info.is_terminal:
+        return {"success": True, "message": f"Run 已处于 {info.status} 状态"}
+    registry.request_cancel(request.run_id)
+    logger.info(f"[Watchdog] 用户请求取消 run {request.run_id}")
+    return {"success": True, "message": "Cancel requested"}
+
+
+@router.get("/runs/{run_id}")
+async def get_run_status(run_id: str):
+    """查询指定 run 的状态。"""
+    from app.core.watchdog import get_registry
+    registry = get_registry()
+    info = registry.get(run_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} 不存在")
+    return info.to_dict()
+
+
+@router.get("/runs")
+async def list_active_runs():
+    """列出所有活跃的 run。"""
+    from app.core.watchdog import get_registry
+    registry = get_registry()
+    return {"runs": [r.to_dict() for r in registry.list_active()]}
 
