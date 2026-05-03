@@ -11,6 +11,7 @@ export interface LLMConfig {
   has_api_key: boolean       // 是否已配置 API Key
   api_key_preview: string    // 脱敏预览（sk-1234***）
   is_current?: boolean
+  context_window?: number
 }
 
 export interface SaveLLMRequest {
@@ -21,6 +22,7 @@ export interface SaveLLMRequest {
   base_url: string
   api_key?: string           // 可选，编辑时不修改则不传
   user_confirmed?: boolean   // 可选，用户确认使用不受信任的域名
+  context_window?: number
 }
 
 export interface LLMListResponse {

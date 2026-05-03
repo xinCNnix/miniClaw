@@ -653,6 +653,7 @@ export class APIClient {
       has_api_key: boolean;
       api_key_preview: string;
       is_current: boolean;
+      context_window?: number;
     }>;
   }> {
     const response = await fetch(`${this.baseUrl}/api/config/llms`);
@@ -680,6 +681,7 @@ export class APIClient {
     base_url: string;
     api_key?: string;
     user_confirmed?: boolean;
+    context_window?: number;
   }): Promise<{
     success: boolean;
     llm_id: string;

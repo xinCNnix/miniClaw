@@ -15,6 +15,7 @@ interface LLMConfig {
   has_api_key: boolean
   api_key_preview: string
   is_current?: boolean
+  context_window?: number
 }
 
 interface LLMSettingsProps {
@@ -28,6 +29,7 @@ interface LLMFormData {
   model: string
   base_url: string
   api_key: string
+  context_window: string
 }
 
 const PROVIDER_OPTIONS = [
@@ -37,6 +39,21 @@ const PROVIDER_OPTIONS = [
   { value: "custom", label: "自定义 (Custom)", defaultModel: "", defaultUrl: "" },
   { value: "ollama", label: "Ollama (本地)", defaultModel: "qwen2.5", defaultUrl: "http://localhost:11434/v1" },
 ]
+
+function parseContextWindow(value: string): number {
+  if (!value || value.trim() === "") return 128_000
+  const cleaned = value.trim().toUpperCase()
+  if (cleaned.endsWith("M")) return parseFloat(cleaned) * 1_000_000
+  if (cleaned.endsWith("K")) return parseFloat(cleaned) * 1_000
+  return parseInt(cleaned, 10) || 128_000
+}
+
+function formatContextWindow(value: number | undefined): string {
+  if (!value) return ""
+  if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}M`
+  if (value >= 1_000 && value % 1_000 === 0) return `${value / 1_000}K`
+  return String(value)
+}
 
 export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
   const [llms, setLLMs] = useState<LLMConfig[]>([])
@@ -51,6 +68,7 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
     model: "",
     base_url: "",
     api_key: "",
+    context_window: "",
   })
   const [requiresConfirmation, setRequiresConfirmation] = useState(false)
   const [untrustedDomain, setUntrustedDomain] = useState("")
@@ -120,7 +138,8 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
       name: llm.name,
       model: llm.model,
       base_url: llm.base_url,
-      api_key: "", // 编辑时不显示 API Key，留空表示不修改
+      api_key: "",
+      context_window: formatContextWindow(llm.context_window),
     })
     setShowAddForm(true)
   }
@@ -133,6 +152,7 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
       model: "",
       base_url: "",
       api_key: "",
+      context_window: "",
     })
     setShowAddForm(true)
   }
@@ -156,6 +176,7 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
     try {
       const result = await apiClient.saveLLM({
         ...formData,
+        context_window: parseContextWindow(formData.context_window),
         user_confirmed: userConfirmed,
       })
 
@@ -178,6 +199,7 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
           model: "",
           base_url: "",
           api_key: "",
+          context_window: "",
         })
         await loadLLMs()
         setTimeout(() => setMessage(""), 2000)
@@ -206,6 +228,7 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
       model: "",
       base_url: "",
       api_key: "",
+      context_window: "",
     })
   }
 
@@ -292,6 +315,24 @@ export function LLMSettings({ onConfigChange }: LLMSettingsProps) {
                 />
               </div>
             )}
+
+            {/* Context Window */}
+            <div>
+              <label className="block text-sm font-medium mb-1">上下文窗口</label>
+              <input
+                type="text"
+                className={cn(
+                  "flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2",
+                  "focus:outline-none focus:ring-2 focus:ring-[var(--ink-green)] focus:border-transparent"
+                )}
+                placeholder="128K（默认）"
+                value={formData.context_window}
+                onChange={(e) => setFormData({ ...formData, context_window: e.target.value })}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                支持K/M单位，如128K、1M。默认128K。
+              </p>
+            </div>
 
             {/* API Key */}
             <div>
