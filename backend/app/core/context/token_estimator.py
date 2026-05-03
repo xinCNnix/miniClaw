@@ -15,7 +15,8 @@ class TokenEstimator:
     def estimate_text_tokens(self, text: str) -> int:
         """Estimate tokens for a text string.
 
-        Uses chars/4 for English, chars/2 for CJK characters.
+        Uses chars/4 for English, ~1.2 tokens/char for CJK.
+        CJK ratio calibrated against tiktoken cl100k_base.
         """
         if not text:
             return 0
@@ -23,7 +24,7 @@ class TokenEstimator:
         cjk_count = len(re.findall(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]', text))
         non_cjk_count = len(text) - cjk_count
 
-        return max(1, (cjk_count + 1) // 2 + non_cjk_count // 4)
+        return max(1, int(cjk_count * 1.2 + 0.5) + non_cjk_count // 4)
 
     def estimate_messages_tokens(self, messages: list[dict]) -> int:
         """Estimate total tokens across a list of message dicts."""
