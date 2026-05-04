@@ -120,6 +120,42 @@ async def list_skills():
         skills_dir = Path(settings.skills_dir)
         registry.scan_and_sync(skills_dir)
 
+        # Auto-discover unregistered skills from disk
+        registered = set(registry.list_skills().keys())
+        for skill_dir in skills_dir.iterdir():
+            if not skill_dir.is_dir():
+                continue
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_file.exists():
+                continue
+            skill_name = skill_dir.name
+            if skill_name in registered:
+                continue
+
+            # Read frontmatter to register without LLM
+            try:
+                import yaml
+                content = skill_file.read_text(encoding="utf-8")
+                frontmatter = {}
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 2:
+                        frontmatter = yaml.safe_load(parts[1]) or {}
+
+                desc = frontmatter.get("description", "")
+                desc_en = frontmatter.get("description_en", "") or desc
+                registry.add_skill(
+                    name=skill_name,
+                    description=desc,
+                    description_en=desc_en,
+                    enabled=True,
+                    version=frontmatter.get("version", "1.0.0"),
+                    author=frontmatter.get("author", ""),
+                    tags=frontmatter.get("tags", []),
+                )
+            except Exception:
+                pass
+
         # List all skills
         skills_dict = registry.list_skills()
         skills = [

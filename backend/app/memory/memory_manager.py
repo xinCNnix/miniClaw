@@ -101,12 +101,14 @@ class MemoryManager:
                 logger.info(f"Updated long-term memory from session {session_id}")
 
             # Step 5: Write to Wiki (if enabled)
-            if self.settings.enable_wiki and extraction_result.memories:
+            # wiki 内部独立判断写入条件，不依赖 extraction_result.memories
+            if self.settings.enable_wiki:
                 await self.write_to_wiki(session_id, extraction_result)
                 logger.info(f"Wrote to Wiki from session {session_id}")
 
             # Step 6: Write to KG (if enabled)
-            if self.settings.enable_kg and extraction_result.memories:
+            # KG 内部独立判断写入条件，不依赖 extraction_result.memories
+            if self.settings.enable_kg:
                 await self.write_to_kg(session_id, extraction_result)
                 logger.info(f"Wrote to KG from session {session_id}")
 

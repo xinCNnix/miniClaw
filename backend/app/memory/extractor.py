@@ -84,29 +84,19 @@ class MemoryExtractor:
         last_error = None
         for attempt in range(self.max_retries + 1):
             try:
-                # On retry, strengthen the prompt to counter empty responses
-                prompt = system_prompt
-                if attempt > 0:
-                    prompt += (
-                        "\n\nIMPORTANT: You MUST respond with a valid JSON object. "
-                        "Do NOT return empty content. "
-                        'If no memories are worth extracting, return: '
-                        '{"memories":[],"summary":"","topics":[]}'
-                    )
-
                 # Call LLM
-                result = await self._call_llm(prompt, conversation_text)
+                result = await self._call_llm(system_prompt, conversation_text)
 
                 # Parse and validate result
                 extraction_result = self._parse_extraction_result(result, session_id)
 
                 # If we got here, parsing succeeded
                 if attempt > 0:
-                    logger.info(f"Memory extraction succeeded on retry {attempt + 1}")
+                    logger.info(f"Memory extraction succeeded on retry {attempt + 1} (model={self.llm.model_name})")
 
                 logger.info(
                     f"Extracted {len(extraction_result.memories)} memories "
-                    f"from session {session_id}"
+                    f"from session {session_id} (model={self.llm.model_name})"
                 )
 
                 return extraction_result
@@ -114,7 +104,8 @@ class MemoryExtractor:
             except Exception as e:
                 last_error = e
                 logger.warning(
-                    f"Memory extraction attempt {attempt + 1}/{self.max_retries + 1} failed: {e}"
+                    f"Memory extraction attempt {attempt + 1}/{self.max_retries + 1} "
+                    f"(model={self.llm.model_name}) failed: {e}"
                 )
 
                 if attempt < self.max_retries:
@@ -125,7 +116,8 @@ class MemoryExtractor:
                 else:
                     # All retries exhausted
                     logger.error(
-                        f"Memory extraction failed after {self.max_retries + 1} attempts: {e}"
+                        f"Memory extraction failed after {self.max_retries + 1} attempts "
+                        f"(model={self.llm.model_name}): {e}"
                     )
                     break
 
@@ -152,6 +144,21 @@ class MemoryExtractor:
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
 
+            # 处理 multimodal 消息（content 为列表时提取 text 部分）
+            if isinstance(content, list):
+                text_parts = [
+                    p.get("text", "") for p in content
+                    if isinstance(p, dict) and p.get("type") == "text"
+                ]
+                content = " ".join(text_parts) if text_parts else ""
+            elif not isinstance(content, str):
+                content = str(content)
+
+            # 剥离 assistant 消息中的 thinking tokens，避免干扰提取
+            if role == "assistant" and isinstance(content, str):
+                import re
+                content = re.sub(r'<think\b[^>]*>.*?</think\s*>', '', content, flags=re.DOTALL).strip()
+
             if role == "user":
                 lines.append(f"User: {content}")
             elif role == "assistant":
@@ -169,53 +176,26 @@ class MemoryExtractor:
         Returns:
             System prompt string
         """
-        return """You are a memory extraction assistant. Your task is to analyze conversations and extract key information about the user.
+        return """You are a JSON generator that extracts user information from conversations.
 
-Analyze the conversation and extract:
+CRITICAL: You MUST output ONLY a single valid JSON object. No thinking, no explanation, no markdown.
 
-1. **User Preferences** (type: "preference")
-   - Coding style preferences (e.g., "prefers TypeScript over JavaScript")
-   - Communication style (e.g., "likes concise explanations")
-   - Tool preferences (e.g., "prefers vim over emacs")
-   - Workflow preferences
+Extract these types of memories:
+- "preference": User preferences (coding style, tools, communication style)
+- "fact": Important facts (project details, tech stack, role, background)
+- "context": Context (project goals, constraints, current challenges)
+- "pattern": Recurring requests or common workflows
 
-2. **Important Facts** (type: "fact")
-   - Project details (e.g., "working on miniClaw project")
-   - Technical stack (e.g., "uses Python 3.10+, FastAPI, Next.js")
-   - Domain knowledge
-   - Role or background
+Output EXACTLY this JSON structure (no other text):
+{"memories": [{"type": "preference", "content": "description", "confidence": 0.9}, {"type": "fact", "content": "description", "confidence": 0.8}], "summary": "brief conversation summary", "topics": ["topic1", "topic2"]}
 
-3. **Context** (type: "context")
-   - Project goals
-   - Constraints or limitations
-   - Deadlines or timeframes
-   - Current problems or challenges
-
-4. **Patterns** (type: "pattern")
-   - Recurring requests
-   - Common workflows
-   - Frequently asked topics
-
-For each extracted item, provide:
-- type: One of "preference", "fact", "context", "pattern"
-- content: Clear description (max 200 chars)
-- confidence: Float from 0.0 to 1.0 indicating certainty
-
-Also provide:
-- summary: Brief summary of the conversation (max 500 chars)
-- topics: List of main topics discussed (3-5 items)
-
-Return ONLY valid JSON in this exact format:
-{
-  "memories": [
-    {"type": "preference", "content": "...", "confidence": 0.9},
-    {"type": "fact", "content": "...", "confidence": 0.8}
-  ],
-  "summary": "...",
-  "topics": ["topic1", "topic2", "topic3"]
-}
-
-Be conservative - only extract information you're confident about. If uncertain, use lower confidence score."""
+Rules:
+- confidence: 0.0-1.0 float
+- content: max 200 chars per item
+- summary: max 500 chars
+- topics: 3-5 items
+- Be conservative: only extract high-confidence information
+- If nothing worth extracting, return: {"memories": [], "summary": "", "topics": []}"""
 
     async def _call_llm(self, system_prompt: str, conversation_text: str) -> str:
         """
@@ -237,17 +217,7 @@ Be conservative - only extract information you're confident about. If uncertain,
         ]
 
         response = await self.llm.ainvoke(messages)
-        content = response.content
-
-        if not content or not content.strip():
-            logger.warning(
-                "LLM returned empty response for memory extraction "
-                "(conversation length=%d chars)",
-                len(conversation_text),
-            )
-            raise ValueError("LLM returned empty response for memory extraction")
-
-        return content
+        return response.content
 
     def _parse_extraction_result(
         self,
@@ -268,7 +238,13 @@ Be conservative - only extract information you're confident about. If uncertain,
             ValueError: If JSON parsing fails
         """
         # Try to extract JSON from response
+        import re
         json_str = llm_output.strip()
+
+        # 剥离 thinking tokens（MiniMax/Qwen 等模型可能返回 <think...</think）
+        json_str = re.sub(r'<think\b[^>]*>.*?</think\s*>', '', json_str, flags=re.DOTALL).strip()
+        # 剥离 [FINAL] 等框架标记
+        json_str = re.sub(r'\[FINAL\]', '', json_str).strip()
 
         # Remove markdown code blocks if present
         if json_str.startswith("```"):
@@ -283,12 +259,18 @@ Be conservative - only extract information you're confident about. If uncertain,
                     break
             json_str = "\n".join(lines[start_idx:end_idx]).strip()
 
+        # 如果开头不是 {，尝试从文本中提取第一个 JSON 对象
+        if not json_str.startswith("{"):
+            match = re.search(r'\{.*\}', json_str, re.DOTALL)
+            if match:
+                json_str = match.group(0)
+
         # Parse JSON
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM output as JSON: {e}")
-            logger.debug(f"LLM output: {llm_output}")
+            logger.error(f"Failed to parse LLM output as JSON (model={self.llm.model_name}): {e}")
+            logger.warning(f"LLM raw output (first 500 chars): {llm_output[:500]}")
             # Raise exception to trigger retry
             raise ValueError(f"JSON parsing failed: {e}") from e
 

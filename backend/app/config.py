@@ -9,6 +9,9 @@ from typing import List, Dict, Any, Literal, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
+import json
+import threading
+from pathlib import Path
 from dataclasses import dataclass
 
 
@@ -30,6 +33,7 @@ class LLMConfig:
     model: str
     base_url: str
     api_key: str  # 仅在后端内存中使用，不发送到前端
+    context_window: int = 128_000
 
     def to_dict(self, include_api_key: bool = False) -> Dict[str, Any]:
         """转换为字典（前端显示时不包含 API Key）"""
@@ -39,6 +43,7 @@ class LLMConfig:
             "name": self.name,
             "model": self.model,
             "base_url": self.base_url,
+            "context_window": self.context_window,
         }
 
         if include_api_key:
@@ -363,6 +368,15 @@ class Settings(BaseSettings):
         "IDENTITY": 500,
     }
 
+    # Context Window Management
+    # 上下文窗口管理配置
+    # context_window_reserved_output: 预留给 LLM 输出的 token 数量
+    # compression_ratio: 压缩触发阈值（60%），当消息 token 占用超过此比例时触发首次压缩
+    # switch_ratio: 切换阈值（80%），当消息 token 占用超过此比例时触发 checkpoint
+    context_window_reserved_output: int = 4000
+    context_window_compression_ratio: float = 0.60
+    context_window_switch_ratio: float = 0.80
+
     # Memory System
     enable_memory_extraction: bool = True
     enable_semantic_search: bool = True
@@ -616,23 +630,128 @@ def _load_obfuscated_config() -> None:
         pass
 
 
+RUNTIME_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "runtime_config.json")
+
+
+def _load_external_keys() -> None:
+    """Load external service keys from external_keys.json into environment."""
+    import logging
+    _logger = logging.getLogger(__name__)
+    try:
+        ext_path = Path(RUNTIME_CONFIG_PATH).parent / "external_keys.json"
+        if not ext_path.exists():
+            return
+        ext_keys = json.loads(ext_path.read_text(encoding="utf-8"))
+        from app.core.obfuscation import KeyObfuscator
+        loaded = 0
+        for key, obfuscated in ext_keys.items():
+            if key.startswith("_"):
+                continue
+            decrypted = KeyObfuscator.deobfuscate(obfuscated)
+            if decrypted:
+                os.environ[key] = decrypted
+                loaded += 1
+        if loaded:
+            _logger.info(f"[config] Loaded {loaded} external service keys from external_keys.json")
+    except Exception as e:
+        _logger.warning(f"[config] Failed to load external_keys.json: {e}")
+_settings_lock = threading.Lock()
+_cached_settings: Optional["Settings"] = None
+
+
+def _load_runtime_config() -> dict:
+    """Load runtime_config.json if it exists."""
+    import logging
+    _logger = logging.getLogger(__name__)
+    try:
+        path = Path(RUNTIME_CONFIG_PATH)
+        if not path.exists():
+            _logger.debug("[config] runtime_config.json not found, using defaults")
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            _logger.info(f"[config] Loaded runtime_config.json: {len(data)} keys")
+            return data
+    except json.JSONDecodeError as e:
+        _logger.warning(f"[config] runtime_config.json has invalid JSON: {e}")
+        return {}
+    except Exception as e:
+        _logger.warning(f"[config] Failed to load runtime_config.json: {e}")
+        return {}
+
+
+def _is_allowed_runtime_key(key: str) -> bool:
+    """Check if a key is in the settings registry whitelist."""
+    try:
+        from app.core.settings_registry import get_all_keys
+        return key in get_all_keys()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[config] Failed to check key '{key}' against registry: {e}")
+        return False
+
+
 def get_settings() -> Settings:
     """
-    Get settings instance (always fresh, no caching).
+    Get settings instance (cached after first load).
 
-    每次调用都重新加载配置，确保前端设置与后端使用一致。
+    Loads runtime_config.json once at startup and caches the result.
+    Runtime changes to runtime_config.json only take effect after restart.
+    Thread-safe via double-checked locking.
     """
-    import logging
-    _load_obfuscated_config()
-    s = Settings()
-    logger = logging.getLogger(__name__)
-    logger.info(
-        f"[config] Features: reflection={s.enable_agent_reflection}, "
-        f"perv_router={s.perv_router_enabled}, meta_policy={s.enable_meta_policy}, "
-        f"tca={s.enable_tca}, rl_training={s.enable_rl_training}, "
-        f"neural_strategy={s.enable_neural_strategy}, kg={s.enable_kg}"
-    )
-    return s
+    global _cached_settings
+    if _cached_settings is not None:
+        return _cached_settings
+
+    with _settings_lock:
+        if _cached_settings is not None:
+            return _cached_settings
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        _load_obfuscated_config()
+        _load_external_keys()
+
+        runtime_config = _load_runtime_config()
+        applied_count = 0
+        skipped_keys = []
+        if runtime_config:
+            for key, value in runtime_config.items():
+                if key.startswith("_"):
+                    continue
+                if _is_allowed_runtime_key(key):
+                    if isinstance(value, bool):
+                        os.environ[key.upper()] = "true" if value else "false"
+                    else:
+                        os.environ[key.upper()] = str(value)
+                    applied_count += 1
+                    logger.debug(f"[config] Applied runtime override: {key}={value}")
+                else:
+                    skipped_keys.append(key)
+
+        _cached_settings = Settings()
+
+        if applied_count:
+            logger.info(f"[config] Applied {applied_count} runtime config overrides")
+        if skipped_keys:
+            logger.warning(f"[config] Skipped {len(skipped_keys)} unknown keys in runtime_config.json: {skipped_keys[:5]}")
+
+        logger.info(
+            f"[config] Features: reflection={_cached_settings.enable_agent_reflection}, "
+            f"perv_router={_cached_settings.perv_router_enabled}, meta_policy={_cached_settings.enable_meta_policy}, "
+            f"tca={_cached_settings.enable_tca}, rl_training={_cached_settings.enable_rl_training}, "
+            f"neural_strategy={_cached_settings.enable_neural_strategy}, kg={_cached_settings.enable_kg}"
+        )
+        return _cached_settings
+
+
+def reload_settings() -> Settings:
+    """Force reload settings (for testing or admin use only)."""
+    global _cached_settings
+    with _settings_lock:
+        _cached_settings = None
+    return get_settings()
 
 
 def get_available_providers() -> List[Dict[str, Any]]:

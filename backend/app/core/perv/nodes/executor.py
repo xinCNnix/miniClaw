@@ -9,6 +9,7 @@ run in parallel via asyncio.gather(); unsafe tools run serially.
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -958,6 +959,17 @@ async def _invoke_tool(
     """
     for tool in CORE_TOOLS:
         if tool.name == tool_name:
+            # Inject skill-required env vars for terminal/python_repl tools
+            _env_backup = {}
+            if tool_name in ("terminal", "python_repl"):
+                from app.config import get_settings as _gs
+                _settings = _gs()
+                for _key in ("BAIDU_API_KEY", "ARXIV_API_KEY", "GITHUB_TOKEN"):
+                    _val = getattr(_settings, _key.lower(), None) or getattr(_settings, _key, None)
+                    if _val:
+                        _env_backup[_key] = os.environ.get(_key)
+                        os.environ[_key] = str(_val)
+
             # Pre-execution argument validation
             arg_error = _validate_required_args(tool, tool_inputs)
             if arg_error:
@@ -965,6 +977,12 @@ async def _invoke_tool(
                     "[PEVR Executor] Pre-validation failed for %s: %s",
                     tool_name, arg_error,
                 )
+                # Restore env before returning
+                for _key, _old in _env_backup.items():
+                    if _old is None:
+                        os.environ.pop(_key, None)
+                    else:
+                        os.environ[_key] = _old
                 return arg_error, []
 
             try:
@@ -982,16 +1000,22 @@ async def _invoke_tool(
                         tool_name, tool_inputs, _execute
                     )
                     result_str, gen_images = embed_output_images_v2(str(result))
-                    return result_str, gen_images
                 else:
                     result = await tool.ainvoke(tool_inputs)
                     result_str, gen_images = embed_output_images_v2(str(result))
-                    return result_str, gen_images
             except Exception as e:
                 logger.error(
                     "[PEVR Executor] Tool %s failed: %s",
                     tool_name,
                     e,
                 )
-                return f"Tool error: {e}", []
+                result_str, gen_images = f"Tool error: {e}", []
+            finally:
+                # Restore env vars after tool execution
+                for _key, _old in _env_backup.items():
+                    if _old is None:
+                        os.environ.pop(_key, None)
+                    else:
+                        os.environ[_key] = _old
+            return result_str, gen_images
     return f"Unknown tool: {tool_name}", []

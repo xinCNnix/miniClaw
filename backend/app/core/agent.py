@@ -1106,6 +1106,17 @@ class AgentManager:
             )
             return None
 
+        # Inject skill-required env vars into os.environ so terminal subprocesses can access them
+        from app.config import get_settings as _get_settings
+        _settings = _get_settings()
+        _SKILL_ENV_KEYS = ["BAIDU_API_KEY", "ARXIV_API_KEY", "GITHUB_TOKEN"]
+        _env_backup = {}
+        for _key in _SKILL_ENV_KEYS:
+            _val = getattr(_settings, _key.lower(), None) or getattr(_settings, _key, None)
+            if _val:
+                _env_backup[_key] = os.environ.get(_key)
+                os.environ[_key] = str(_val)
+
         # Execute all steps in tool_plan via direct tool call (no re-interception)
         logger.info(
             "Agent skill intercept: '%s' compiled → %d step(s)",
@@ -1140,6 +1151,14 @@ class AgentManager:
             ).strip()
         # Store gen_images for the serial execution path to pick up
         self._last_skill_images = gen_images if gen_images else []
+
+        # Restore env vars
+        for _key, _old_val in _env_backup.items():
+            if _old_val is None:
+                os.environ.pop(_key, None)
+            else:
+                os.environ[_key] = _old_val
+
         return combined
 
     async def _aexecute_tool_direct(self, name: str, arguments: dict) -> Any:
