@@ -72,6 +72,12 @@ async def list_sessions() -> SessionListResponse:
                 seen[sid] = len(deduped)
                 deduped.append(s)
 
+        # 按 updated_at 倒序排列（最新的在最前面）
+        deduped.sort(
+            key=lambda s: (s.get("updated_at", "") or "") if isinstance(s, dict) else (getattr(s, "updated_at", "") or ""),
+            reverse=True,
+        )
+
         return SessionListResponse(
             sessions=deduped,
             total=len(deduped),

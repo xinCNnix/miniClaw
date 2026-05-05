@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from app.models.chat import ChatRequest, ChatEvent, ToolCall
-from app.core.agent import create_agent_manager, AgentManager
+from app.core.llm import get_agent_manager, reset_agent_manager
 from app.core.tools import get_registered_tools
 from app.memory.prompts import build_system_prompt
 from app.memory.session import get_session_manager
@@ -24,6 +24,8 @@ from app.skills.bootstrap import bootstrap_skills
 from app.core.trajectory import AgentExecutionLogger
 from app.logging_config import get_agent_logger
 from app.core.tot.router import ToTOrchestrator
+from app.core.context.manager import get_context_manager
+from app.core.llm_config import get_current_llm_id, load_llm_config
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -305,111 +307,6 @@ def _format_attachments(attachments: list[dict]) -> list[dict]:
             content_blocks.append({"type": "text", "text": text})
     return content_blocks
 
-# Global agent manager (singleton)
-_agent_manager: AgentManager = None
-_current_provider: str = None
-
-
-def get_agent_manager() -> AgentManager:
-    """
-    Get or create the global agent manager.
-
-    This function implements hot-switching by checking if the configured
-    provider has changed and recreating the agent manager if necessary.
-
-    Returns:
-        AgentManager instance
-
-    Raises:
-        HTTPException: If initialization fails
-    """
-    global _agent_manager, _current_provider
-
-    try:
-        from app.config import get_settings
-        settings = get_settings()
-
-        # Check if provider has changed (hot-switch support)
-        if _current_provider != settings.llm_provider:
-            import logging
-            logging.info(f"=== LLM provider changed: {_current_provider} → {settings.llm_provider} ===")
-
-            # Import tools directly
-            from app.tools import CORE_TOOLS
-            logging.info(f"Tools: {[t.name for t in CORE_TOOLS]}")
-
-            # Recreate agent manager with new provider
-            _agent_manager = create_agent_manager(
-                tools=CORE_TOOLS,
-                llm_provider=settings.llm_provider,
-            )
-            _current_provider = settings.llm_provider
-
-            logging.info("=== Agent manager recreated successfully ===")
-
-        elif _agent_manager is None:
-            import logging
-            logging.info(f"=== Creating agent manager ===")
-            logging.info(f"Tools type: {type(CORE_TOOLS)}")
-            logging.info(f"Tools: {[t.name for t in CORE_TOOLS]}")
-
-            # Create agent manager
-            logging.info(f"Creating agent with provider: {settings.llm_provider}")
-
-            _agent_manager = create_agent_manager(
-                tools=CORE_TOOLS,
-                llm_provider=settings.llm_provider,
-            )
-            _current_provider = settings.llm_provider
-
-            logging.info("=== Agent manager created successfully ===")
-
-        return _agent_manager
-
-    except Exception as e:
-        import traceback
-        logging.error(f"=== Failed to create agent manager ===")
-        logging.error(f"Error: {e}")
-        logging.error(f"Traceback:\n{traceback.format_exc()}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initialize agent: {str(e)}",
-        )
-
-
-def reset_agent_manager() -> None:
-    """
-    Reset the global agent manager to force recreation on next access.
-
-    This should be called when LLM configuration is updated to ensure
-    the new configuration is picked up immediately.
-    """
-    global _agent_manager, _current_provider
-    _agent_manager = None
-    _current_provider = None
-
-    # Also reset memory manager to ensure it uses the new LLM
-    try:
-        from app.memory.memory_manager import reset_memory_manager
-        reset_memory_manager()
-    except Exception as e:
-        logger.warning(f"Failed to reset memory manager: {e}")
-
-    # 重置 memory retriever（持有 RAG 引擎引用）
-    try:
-        from app.memory.retriever_factory import reset_memory_retriever
-        reset_memory_retriever()
-    except Exception as e:
-        logger.warning(f"Failed to reset memory retriever: {e}")
-
-    # 重置统一评估器（缓存了 LLM 实例）
-    try:
-        from app.core.reflection.evaluator import reset_unified_evaluator
-        reset_unified_evaluator()
-    except Exception as e:
-        logger.warning(f"Failed to reset unified evaluator: {e}")
-
-
 def format_sse_event(event: ChatEvent) -> str:
     """
     Format a chat event as SSE message.
@@ -538,7 +435,7 @@ def detect_task_boundary(msg1: dict, msg2: dict) -> bool:
 
 async def chat_stream_generator(
     request: ChatRequest,
-    agent: AgentManager,
+    agent,
     system_prompt: str,
 ) -> AsyncIterator[str]:
     """
@@ -583,93 +480,72 @@ async def chat_stream_generator(
             # Get session history
             session_messages = session.get("messages", [])
 
-            # === INTELLIGENT CONTEXT PRUNING ===
-            # Strategy: Use task boundary detection to prune irrelevant history
-            #
-            # 1. Check if there's a task boundary in recent history
-            # 2. If boundary found, only keep messages AFTER the boundary
-            # 3. If no boundary, keep last 3 messages
-            #
-            # This ensures LLM doesn't see "Beijing weather" when asking "Shanghai weather"
+            # === CONTEXT WINDOW MANAGEMENT ===
+            # Get current LLM config for context_window
+            try:
+                _llm_id = get_current_llm_id()
+                _llm_config = load_llm_config(_llm_id)
+            except Exception:
+                from app.config import LLMConfig
+                logger.warning("Failed to load LLM config for context management, using fallback")
+                _llm_config = LLMConfig(
+                    id="fallback", provider="qwen", name="fallback",
+                    model="", base_url="", api_key="",
+                )
 
-            MAX_CONTEXT_MESSAGES = 3
-            recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
-
-            # Check for task boundary in recent messages
-            boundary_index = -1  # -1 means no boundary found
-            for i in range(len(recent_messages) - 1, 0, -1):
-                if i < len(recent_messages) - 1:  # Not the last message
-                    if detect_task_boundary(recent_messages[i], recent_messages[i + 1]):
-                        boundary_index = i
-                        logger.info(f"Task boundary found at index {i}, pruning earlier history")
-                        break
-
-            # Prune messages based on boundary
-            if boundary_index >= 0:
-                # Keep only messages after the boundary
-                recent_messages = recent_messages[boundary_index + 1:]
-                logger.info(f"Pruned to {len(recent_messages)} messages after boundary")
-            else:
-                # No boundary: keep recent messages as-is
-                logger.debug(f"No task boundary, keeping {len(recent_messages)} recent messages")
-
-            for i, msg in enumerate(recent_messages):
-                if msg["role"] in ["user", "assistant"]:
-                    # Check if this is the last message (current question)
-                    is_last_message = (i == len(recent_messages) - 1)
-
-                    if is_last_message:
-                        # CURRENT MESSAGE: Use full content - this is what LLM should focus on
-                        message_dict = {
-                            "role": msg["role"],
-                            "content": msg["content"],
-                        }
-                        logger.debug(f"Loading current message: {msg['content'][:50]}...")
-
-                        # Add images if present (only for current message)
-                        if msg.get("images"):
-                            content_list = [{"type": "text", "text": msg["content"]}]
-                            for img in msg["images"]:
-                                mime = img.get("mime_type", "")
-                                fname = img.get("filename", "")
-                                if mime.startswith("image/"):
-                                    content_list.append({
-                                        "type": "image_url",
-                                        "image_url": {"url": f"data:{mime};base64,{img['content']}"}
-                                    })
-                                else:
-                                    # 所有非图片文件都提取文本
-                                    text = _extract_file_text(
-                                        f"data:{mime};base64,{img['content']}",
-                                        fname,
-                                        mime,
-                                    )
-                                    content_list.append({"type": "text", "text": text})
-                            message_dict["content"] = content_list
-                    else:
-                        # HISTORICAL MESSAGE: Abstract to type only - prevents interference
-                        # Don't show "Beijing weather" - show "Weather Information Query" instead
-                        # Don't include images for historical messages
-                        message_type = _classify_conversation_type(msg.get("content", ""))
-                        message_dict = {
-                            "role": msg["role"],
-                            "content": f"[COMPLETED_TASK] {message_type} - Task finished, ignore details",
-                        }
-                        logger.debug(f"Abstracted historical message to: {message_type}")
-
-                    messages.append(message_dict)
-
-            # Add current message
-            current_message = {
-                "role": "user",
-                "content": request.message,
-            }
-            # Add attachments from current request if present
+            # Build current message with attachments
+            current_message = {"role": "user", "content": request.message}
             if request.attachments:
                 content_list = [{"type": "text", "text": request.message}]
                 content_list.extend(_format_attachments(request.attachments))
                 current_message["content"] = content_list
-            messages.append(current_message)
+
+            # Prepare context via ContextManager
+            context_mgr = get_context_manager()
+            ctx_result = await context_mgr.prepare_context(
+                session_messages=session_messages,
+                current_message=current_message,
+                system_prompt=system_prompt,
+                llm_config=_llm_config,
+                session_id=request.session_id,
+            )
+            messages = ctx_result.messages
+
+            # Safety: strip base64/images from history messages to avoid sending to LLM
+            # Only the last message (current) should have attachments
+            for i, msg in enumerate(messages[:-1]):
+                # Remove images/attachments field from history
+                msg.pop("images", None)
+                msg.pop("generated_images", None)
+                msg.pop("attachments", None)
+                # Strip base64 data URIs from string content
+                if isinstance(msg.get("content"), str):
+                    msg["content"] = re.sub(
+                        r'data:image/[a-zA-Z+]+;base64,[A-Za-z0-9+/=\n]{50,}',
+                        '[图片]', msg["content"],
+                    )
+                    msg["content"] = re.sub(
+                        r'!\[[^\]]*\]\([^)]*(?:/api/media/|data:image/)[^)]*\)',
+                        '[图片已生成]', msg["content"],
+                    )
+                    msg["content"] = re.sub(
+                        r'http://localhost:\d+/api/media/[a-f0-9]+',
+                        '[图片]', msg["content"],
+                    )
+
+            # Emit context events to frontend
+            if ctx_result.action == "compressed":
+                yield format_sse_event(ChatEvent(
+                    type="context_optimized",
+                    data={"action": "compressed"},
+                ))
+                logger.info(f"Context optimized: session={request.session_id}, history compressed")
+            elif ctx_result.action == "checkpoint":
+                yield format_sse_event(ChatEvent(
+                    type="context_checkpoint",
+                    data={"reason": "context_limit", "snapshot_id": ctx_result.checkpoint_id},
+                ))
+                logger.warning(f"Context checkpoint: session={request.session_id}, snapshot={ctx_result.checkpoint_id}")
 
             # Log input
             exec_logger.set_user_question(request.message)
@@ -884,30 +760,46 @@ async def tot_stream_generator(
     session = session_manager.load_session(request.session_id)
     session_messages = session.get("messages", []) if session else []
 
-    tot_messages = []
-    MAX_CONTEXT_MESSAGES = 3
-    recent_messages = session_messages[-MAX_CONTEXT_MESSAGES:] if len(session_messages) > MAX_CONTEXT_MESSAGES else session_messages
+    # === CONTEXT WINDOW MANAGEMENT (ToT) ===
+    try:
+        _llm_id = get_current_llm_id()
+        _llm_config = load_llm_config(_llm_id)
+    except Exception:
+        from app.config import LLMConfig
+        logger.warning("Failed to load LLM config for ToT context management, using fallback")
+        _llm_config = LLMConfig(
+            id="fallback", provider="qwen", name="fallback",
+            model="", base_url="", api_key="",
+        )
 
-    for msg in recent_messages:
-        if msg["role"] in ("user", "assistant"):
-            content_preview = msg["content"][:300] if msg["content"] else ""
-            # Safety: strip base64 and image URLs so LLM doesn't reuse old images
-            content_preview = re.sub(
+    tot_current = {"role": "user", "content": request.message}
+    context_mgr = get_context_manager()
+    ctx_result = await context_mgr.prepare_context(
+        session_messages=session_messages,
+        current_message=tot_current,
+        system_prompt=system_prompt,
+        llm_config=_llm_config,
+    )
+    tot_messages = ctx_result.messages
+
+    if ctx_result.action != "normal":
+        logger.info(f"ToT context: action={ctx_result.action}, snapshot={ctx_result.checkpoint_id}")
+
+    # Strip base64 and image URLs for safety (existing behavior)
+    for msg in tot_messages:
+        if isinstance(msg.get("content"), str):
+            msg["content"] = re.sub(
                 r'data:image/[a-zA-Z+]+;base64,[A-Za-z0-9+/=\n]{50,}',
-                '[图片]', content_preview,
+                '[图片]', msg["content"],
             )
-            content_preview = re.sub(
+            msg["content"] = re.sub(
                 r'!\[[^\]]*\]\([^)]*(?:/api/media/|data:image/)[^)]*\)',
-                '[图片已生成]', content_preview,
+                '[图片已生成]', msg["content"],
             )
-            content_preview = re.sub(
+            msg["content"] = re.sub(
                 r'http://localhost:\d+/api/media/[a-f0-9]+',
-                '[图片]', content_preview,
+                '[图片]', msg["content"],
             )
-            tot_messages.append({"role": msg["role"], "content": content_preview})
-
-    # Append current user message
-    tot_messages.append({"role": "user", "content": request.message})
 
     try:
         # === Watchdog: 注册 ToT run ===

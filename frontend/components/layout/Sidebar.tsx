@@ -1,10 +1,10 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { MessageSquare, Plus, Trash2, Settings } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { SettingsDialog } from "./SettingsDialog"
 import { useTranslation } from "@/hooks/use-translation.hook"
 import type { Session } from "@/types/api"
 
@@ -26,8 +26,8 @@ export function Sidebar({
   onDeleteSession,
 }: SidebarProps) {
   const { t } = useTranslation()
+  const router = useRouter()
   const [isDeleting, setIsDeleting] = useState<string | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation()
@@ -52,7 +52,7 @@ export function Sidebar({
           <h1 className="text-xl font-bold text-[var(--ink-green)]">
             MiNiCLAW
           </h1>
-          <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}>
+          <Button variant="ghost" size="sm" onClick={() => router.push("/settings")} title={t("settings.title")}>
             <Settings className="w-4 h-4" />
           </Button>
         </div>
@@ -85,7 +85,7 @@ export function Sidebar({
                   {session.metadata?.title || t('sidebar.new_conversation')}
                 </p>
                 <p className="text-xs text-gray-500">
-                  {new Date(session.created_at).toLocaleDateString()}
+                  {new Date(session.updated_at || session.created_at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                 </p>
               </div>
               <Button
@@ -107,8 +107,6 @@ export function Sidebar({
         <p>{t('sidebar.powered_by')}</p>
       </div>
 
-      {/* Settings Dialog */}
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </aside>
   )
 }

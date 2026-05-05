@@ -152,7 +152,7 @@ async def save_llm(request: SaveLLMRequest):
         if len(all_llms) == 1:
             set_current_llm(llm_id)
             # 重置 Agent Manager 以使用新的 LLM
-            from app.api.chat import reset_agent_manager
+            from app.core.llm import reset_agent_manager
             reset_agent_manager()
 
         return {
@@ -182,7 +182,7 @@ async def switch_llm(request: SwitchLLMRequest):
         set_current_llm(request.llm_id)
 
         # 重置 Agent Manager
-        from app.api.chat import reset_agent_manager
+        from app.core.llm import reset_agent_manager
         reset_agent_manager()
 
         return {
@@ -314,7 +314,7 @@ async def save_config(request: LegacySaveRequest):
         if len(all_llms) == 1:
             set_current_llm(llm_id)
             # 重置 Agent Manager 以使用新的 LLM
-            from app.api.chat import reset_agent_manager
+            from app.core.llm import reset_agent_manager
             reset_agent_manager()
 
         return {

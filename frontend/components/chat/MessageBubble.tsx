@@ -48,9 +48,9 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
       {/* Content */}
       <div
         className={clsx(
-          "max-w-[80%] rounded-lg px-4 py-2",
+          "max-w-[80%] rounded-lg px-4 py-2 select-text",
           isUser
-            ? "bg-[var(--ink-green)] text-white"
+            ? "bg-[var(--ink-green)] text-white user-bubble-selection"
             : "bg-white border border-gray-200 text-gray-900"
         )}
       >
@@ -108,7 +108,12 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
               return (
                 <span
                   key={`att-${idx}`}
-                  className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-xs"
+                  className={clsx(
+                    "inline-flex items-center gap-1 px-2 py-1 rounded text-xs",
+                    isUser
+                      ? "bg-white/20 text-green-900"
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  )}
                 >
                   {att.filename || `File ${idx + 1}`}
                 </span>

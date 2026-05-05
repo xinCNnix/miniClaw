@@ -450,7 +450,7 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
                     "query=%s", skill_name, user_query[:80],
                 )
                 try:
-                    from app.api.chat import get_agent_manager
+                    from app.core.llm import get_agent_manager
                     from app.config import get_settings
                     from pathlib import Path as _Path
                     am = get_agent_manager()
@@ -504,7 +504,7 @@ async def _execute_single_tool(tool: BaseTool, args: Dict[str, Any], user_query:
                 skill_content = str(skill_content_result)
 
                 try:
-                    from app.api.chat import get_agent_manager
+                    from app.core.llm import get_agent_manager
                     am = get_agent_manager()
                     skill_result = await execute_skill_from_skillmd(
                         skill_name=skill_name,

@@ -32,6 +32,7 @@ from app.api import embedding as embedding_api
 from app.api import media as media_api
 from app.api import wiki as wiki_api
 from app.api import dream as dream_api
+from app.api import settings as settings_api
 
 
 # Configure logging
@@ -169,7 +170,7 @@ async def startup_event():
     # Initialize agent (warmup)
     try:
         from app.tools import CORE_TOOLS
-        from app.api.chat import get_agent_manager
+        from app.core.llm import get_agent_manager
 
         logger.info(f"Loaded {len(CORE_TOOLS)} tools")
 
@@ -368,8 +369,8 @@ async def root():
     Returns basic API information and available endpoints.
     """
     try:
-        from app.api.chat import _agent_manager
-        agent_ready = _agent_manager is not None
+        from app.core.llm import _agent_manager as _llm_mgr_agent
+        agent_ready = _llm_mgr_agent is not None
     except Exception:
         agent_ready = False
 
@@ -403,8 +404,8 @@ async def health():
     Returns API health status and component status.
     """
     try:
-        from app.api.chat import _agent_manager
-        agent_initialized = _agent_manager is not None
+        from app.core.llm import _agent_manager as _llm_mgr_agent
+        agent_initialized = _llm_mgr_agent is not None
     except Exception:
         agent_initialized = False
 
@@ -432,6 +433,7 @@ app.include_router(embedding_api.router, prefix="/api/embedding")
 app.include_router(media_api.router, prefix="/api/media")
 app.include_router(wiki_api.router, prefix="/api")
 app.include_router(dream_api.router, prefix="/api/dream")
+app.include_router(settings_api.router, prefix="/api")
 
 
 if __name__ == "__main__":

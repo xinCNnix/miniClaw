@@ -237,11 +237,10 @@ Rules:
         Raises:
             ValueError: If JSON parsing fails
         """
-        # Try to extract JSON from response
         import re
         json_str = llm_output.strip()
 
-        # 剥离 thinking tokens（MiniMax/Qwen 等模型可能返回 <think...</think）
+        # 剥离 thinking tokens（<think...</think > 标签格式）
         json_str = re.sub(r'<think\b[^>]*>.*?</think\s*>', '', json_str, flags=re.DOTALL).strip()
         # 剥离 [FINAL] 等框架标记
         json_str = re.sub(r'\[FINAL\]', '', json_str).strip()
@@ -249,9 +248,7 @@ Rules:
         # Remove markdown code blocks if present
         if json_str.startswith("```"):
             lines = json_str.split("\n")
-            # Find content between code blocks (skip first line with ```)
-            start_idx = 1  # Skip the first ``` line
-            # Find end
+            start_idx = 1
             end_idx = len(lines)
             for i in range(start_idx, len(lines)):
                 if lines[i].strip().startswith("```"):
@@ -259,11 +256,18 @@ Rules:
                     break
             json_str = "\n".join(lines[start_idx:end_idx]).strip()
 
-        # 如果开头不是 {，尝试从文本中提取第一个 JSON 对象
+        # 提取第一个 JSON 对象（支持模型在 JSON 前输出非标签格式的思考内容）
         if not json_str.startswith("{"):
             match = re.search(r'\{.*\}', json_str, re.DOTALL)
             if match:
                 json_str = match.group(0)
+            else:
+                # 模型未返回任何 JSON，直接返回空结果，不重试
+                logger.warning(
+                    f"No JSON found in LLM output (model={self.llm.model_name}), "
+                    f"returning empty result. Raw (first 300 chars): {llm_output[:300]}"
+                )
+                return MemoryExtractionResult(memories=[], summary="", topics=[])
 
         # Parse JSON
         try:
@@ -271,7 +275,6 @@ Rules:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM output as JSON (model={self.llm.model_name}): {e}")
             logger.warning(f"LLM raw output (first 500 chars): {llm_output[:500]}")
-            # Raise exception to trigger retry
             raise ValueError(f"JSON parsing failed: {e}") from e
 
         # Parse memories

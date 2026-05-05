@@ -254,13 +254,28 @@ class SessionManager:
                 content = session_file.read_text(encoding="utf-8")
                 session = json.loads(content)
 
+                # 提取标题：metadata.title > 第一条用户消息 > 默认
+                metadata = session.get("metadata", {})
+                title = metadata.get("title", "")
+                if not title:
+                    messages = session.get("messages", [])
+                    for msg in messages:
+                        if msg.get("role") == "user":
+                            content = msg.get("content", "")
+                            if isinstance(content, str) and content.strip():
+                                # 取第一行，截断到 40 字
+                                first_line = content.strip().split("\n")[0]
+                                title = first_line[:40] + ("..." if len(first_line) > 40 else "")
+                                break
+                    metadata = {**metadata, "title": title}
+
                 # Return summary info only
                 sessions.append({
                     "session_id": session["session_id"],
                     "created_at": session.get("created_at"),
                     "updated_at": session.get("updated_at"),
                     "message_count": len(session.get("messages", [])),
-                    "metadata": session.get("metadata", {}),
+                    "metadata": metadata,
                 })
 
             except Exception:
