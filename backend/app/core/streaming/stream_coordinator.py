@@ -30,6 +30,17 @@ from app.config import Settings
 logger = logging.getLogger(__name__)
 
 
+def _content_to_str(content) -> str:
+    """Convert message content (str or multimodal list) to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            item.get("text", "") for item in content if isinstance(item, dict)
+        )
+    return str(content) or ""
+
+
 def _repair_truncated_json(args_str: str) -> dict | None:
     """
     Attempt to repair truncated JSON from incomplete streaming tool_call_chunks.
@@ -303,7 +314,7 @@ class StreamCoordinator:
                     from app.core.meta_policy.capability_map import CapabilityMap
 
                     _cap_map = CapabilityMap.from_core_tools()
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     _tca_decision = get_tca_decision(user_msg, cap_map=_cap_map)
                     if _tca_decision and _tca_decision.get("injection_text"):
                         from langchain_core.messages import SystemMessage
@@ -319,7 +330,7 @@ class StreamCoordinator:
                     from app.core.meta_policy.capability_map import CapabilityMap
 
                     _cap_map_mp = CapabilityMap.from_core_tools()
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     _mp_decision = get_meta_policy_decision(user_msg, cap_map=_cap_map_mp)
                     if _mp_decision and _mp_decision.get("injection_text"):
                         from langchain_core.messages import SystemMessage
@@ -791,7 +802,7 @@ class StreamCoordinator:
                 if self.settings and getattr(self.settings, "enable_tca", False):
                     from app.core.meta_policy.tca_helpers import record_tca_episode
 
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     record_tca_episode(
                         query=user_msg,
                         tool_calls=[{"name": n} for n in _last_tool_names],
@@ -806,7 +817,7 @@ class StreamCoordinator:
                 if self.settings and getattr(self.settings, "enable_meta_policy", False):
                     from app.core.meta_policy.meta_policy_helpers import record_meta_policy_episode
 
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     record_meta_policy_episode(
                         query=user_msg,
                         tool_calls=[{"name": n} for n in _last_tool_names],

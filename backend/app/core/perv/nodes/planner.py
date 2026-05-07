@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage
 
 from app.config import get_settings
-from app.core.llm import create_llm
+from app.core.model_roles import get_role_llm
 from app.core.llm_retry import retry_llm_call
 from app.core.perv.json_repair import repair_json_or_none
 from app.core.perv.prompts import (
@@ -23,7 +23,8 @@ from app.core.perv.prompts import (
     build_skills_list_text,
     extract_system_core,
 )
-from app.core.perv.pevr_logger import PEVRLogger, extract_token_usage
+from app.core.execution_trace.perv_trace import PEVRTrace as PEVRLogger
+from app.core.execution_trace.token_utils import extract_token_usage
 from app.tools import CORE_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ async def planner_node(state: dict) -> dict:
     enrichment: dict = state.get("enrichment") or {}
 
     start = time.time()
+    token_usage: dict = {}
 
     try:
         # --- Gather context for the prompt ---
@@ -84,9 +86,8 @@ async def planner_node(state: dict) -> dict:
             enrichment=enrichment,
         )
 
-        # --- Create LLM and call with retry ---
-        provider = settings.llm_provider
-        llm = create_llm(provider)
+        # --- 通过角色路由获取 planner 角色对应的 LLM（规划专用模型） ---
+        llm = get_role_llm("planner")
 
         response = await retry_llm_call(
             coro_factory=lambda: llm.ainvoke([HumanMessage(content=prompt_text)]),
@@ -263,7 +264,7 @@ async def planner_node(state: dict) -> dict:
             exc_info=True,
         )
         plan_steps = []
-        token_usage = locals().get("token_usage")
+        # token_usage already initialized before try block
         if pevr_log:
             pevr_log.log_planning(
                 loop_index=retry_count,

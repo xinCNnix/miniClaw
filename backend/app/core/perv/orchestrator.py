@@ -12,14 +12,17 @@ langgraph 0.0.20).  Instead, SSE events are derived from the
 ``reasoning_trace`` field and per-node state updates.
 """
 
+import asyncio
 import logging
+import threading
 import time
 from typing import AsyncIterator, Dict, Any, List, Optional
 
 from app.core.perv.graph import build_planner_graph
-from app.core.perv.pevr_logger import PEVRLogger, get_pevr_logger
+from app.core.execution_trace.perv_trace import PEVRTrace as PEVRLogger, get_pevr_logger
 
 logger = logging.getLogger(__name__)
+_stderr_lock = threading.Lock()
 
 
 class PlannerOrchestrator:
@@ -66,6 +69,8 @@ class PlannerOrchestrator:
         messages: List[Dict[str, str]],
         system_prompt: str,
         force_mode: Optional[str] = None,
+        cancel_event: Optional["asyncio.Event"] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Main entry point.  Yields SSE event dicts.
 
@@ -85,6 +90,8 @@ class PlannerOrchestrator:
             SSE event dictionaries with keys ``type`` and optional
             payload fields.
         """
+        self._wd_tracker = None
+
         if not self._graph:
             try:
                 self._graph = build_planner_graph()
@@ -94,12 +101,13 @@ class PlannerOrchestrator:
                 # Retry after patching stderr to a safe sink.
                 import io as _io
                 import sys as _sys
-                _prev = _sys.stderr
-                _sys.stderr = _io.StringIO()
-                try:
-                    self._graph = build_planner_graph()
-                finally:
-                    _sys.stderr = _prev
+                with _stderr_lock:
+                    _prev = _sys.stderr
+                    _sys.stderr = _io.StringIO()
+                    try:
+                        self._graph = build_planner_graph()
+                    finally:
+                        _sys.stderr = _prev
 
         task = messages[-1]["content"] if messages else ""
 
@@ -210,7 +218,11 @@ class PlannerOrchestrator:
                 yield {"type": "pevr_start"}
 
                 start = time.time()
-                async for event in self._run_graph(initial_state):
+                async for event in self._run_graph(
+                    initial_state,
+                    cancel_event=cancel_event,
+                    run_id=run_id,
+                ):
                     yield event
                 graph_duration = time.time() - start
 
@@ -265,6 +277,24 @@ class PlannerOrchestrator:
                 except Exception as _le:
                     logger.debug("[PEVR] Post-learning trigger failed: %s", _le)
 
+                # === Online Distill (fire-and-forget, gated by perv_enable_post_learning) ===
+                try:
+                    if getattr(_gs(), "perv_enable_post_learning", False) and self._final_answer:
+                        from app.core.online_distill import online_distill_skill
+                        asyncio.create_task(
+                            online_distill_skill(
+                                user_query=task,
+                                agent_output=self._final_answer,
+                                tool_calls=[],
+                                execution_time=graph_duration,
+                                execution_mode="perv",
+                                plan=self._final_plan,
+                                observations=self._final_observations,
+                            )
+                        )
+                except Exception as _le:
+                    logger.debug("[OnlineDistill] PEVR trigger failed: %s", _le)
+
             except Exception as exc:
                 logger.error(
                     "[PEVR Orchestrator] Fatal error: %s (%.1fs)",
@@ -308,12 +338,11 @@ class PlannerOrchestrator:
         # --- a) Pattern Retrieval ---
         if getattr(settings, "perv_enable_pattern_retrieval", False):
             try:
-                import asyncio as _asyncio
+                import asyncio
                 from app.memory.auto_learning.memory import get_pattern_memory
                 memory = get_pattern_memory()
-                loop = _asyncio.get_event_loop()
-                patterns = await loop.run_in_executor(
-                    None, lambda: memory.get_top_patterns(query=task, top_k=3)
+                patterns = await asyncio.to_thread(
+                    lambda: memory.get_top_patterns(query=task, top_k=3)
                 )
                 enrichment["retrieved_patterns"] = [
                     {
@@ -332,22 +361,21 @@ class PlannerOrchestrator:
         # --- b) Strategy Injection ---
         if getattr(settings, "perv_enable_strategy_injection", False):
             try:
-                import asyncio as _asyncio
+                import asyncio
                 from app.memory.auto_learning.reflection.strategy_scheduler import get_strategy_scheduler
                 from app.memory.auto_learning.utils import get_embedder
                 from app.memory.auto_learning.nn import get_pattern_nn
                 scheduler = get_strategy_scheduler()
                 nn_model = get_pattern_nn()
                 embedder = get_embedder()
-                loop = _asyncio.get_event_loop()
-                state_vec = await loop.run_in_executor(None, lambda: embedder.encode(task))
-                strategy_prompt = await loop.run_in_executor(
-                    None, lambda: scheduler.get_strategy(nn_model, state_vec, None, None)
+                state_vec = await asyncio.to_thread(lambda: embedder.encode(task))
+                strategy_prompt = await asyncio.to_thread(
+                    lambda: scheduler.get_strategy(nn_model, state_vec, None, None)
                 )
                 enrichment["strategy_prompt"] = strategy_prompt or ""
                 if self._pevr_log:
                     self._pevr_log.log_custom(
-                        "strategy_injection", prompt=strategy_prompt[:100]
+                        "strategy_injection", prompt=(strategy_prompt or "")[:100]
                     )
             except Exception as e:
                 logger.warning("[PERV Enrichment] Strategy injection failed: %s", e)
@@ -390,14 +418,13 @@ class PlannerOrchestrator:
         # --- e) TCA (Task Complexity Analyzer) Injection ---
         if getattr(settings, "enable_tca", False):
             try:
-                import asyncio as _asyncio
+                import asyncio
                 from app.core.meta_policy.tca_helpers import get_tca_decision
                 from app.core.meta_policy.capability_map import CapabilityMap
 
                 cap_map = CapabilityMap.from_core_tools()
-                loop = _asyncio.get_event_loop()
-                tca_decision = await loop.run_in_executor(
-                    None, lambda: get_tca_decision(task, cap_map=cap_map)
+                tca_decision = await asyncio.to_thread(
+                    lambda: get_tca_decision(task, cap_map=cap_map)
                 )
                 if tca_decision and tca_decision.injection_text:
                     enrichment["tca_decision"] = tca_decision.model_dump()
@@ -417,7 +444,9 @@ class PlannerOrchestrator:
         return enrichment
 
     async def _run_graph(
-        self, initial_state: Dict[str, Any]
+        self, initial_state: Dict[str, Any],
+        cancel_event: Optional["asyncio.Event"] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Run the compiled graph and yield SSE events.
 
@@ -435,6 +464,17 @@ class PlannerOrchestrator:
                 for node_name, state_update in chunk.items():
                     if node_name == "__end__":
                         continue
+
+                    # === Watchdog 取消检查 ===
+                    if cancel_event and cancel_event.is_set():
+                        logger.info(f"[Watchdog] PERV run 在节点 '{node_name}' 被取消")
+                        yield {
+                            "type": "cancelled",
+                            "reason": "cancelled_by_user",
+                            "node": node_name,
+                        }
+                        return
+
                     logger.debug(
                         "[PEVR Orchestrator] Node '%s' completed, keys=%s",
                         node_name,
@@ -444,6 +484,31 @@ class PlannerOrchestrator:
                         node_name, state_update, pevr_log
                     ):
                         yield event
+
+                    # === Watchdog 心跳 + 进度 ===
+                    if run_id:
+                        from app.core.watchdog import get_registry, ProgressTracker
+                        _wd_reg = get_registry()
+                        _wd_reg.heartbeat(run_id)
+                        if self._wd_tracker is None:
+                            self._wd_tracker = ProgressTracker()
+                        self._wd_tracker.record_action({
+                            "type": "node",
+                            "name": node_name,
+                        })
+                        self._wd_tracker.record_state({
+                            "node": node_name,
+                            "keys": list(state_update.keys()) if isinstance(state_update, dict) else [],
+                        })
+                        _wd_reg.update_progress(run_id, self._wd_tracker.snapshot())
+                        if self._wd_tracker.is_state_stuck():
+                            logger.warning(f"[Watchdog] PERV 状态卡死，节点 '{node_name}'")
+                            yield {"type": "cancelled", "reason": "state_stuck", "node": node_name}
+                            return
+                        if self._wd_tracker.is_action_repeating():
+                            logger.warning(f"[Watchdog] PERV 动作重复，节点 '{node_name}'")
+                            yield {"type": "cancelled", "reason": "action_repeating", "node": node_name}
+                            return
         except TypeError as te:
             # Fallback for older langgraph that may not support astream
             logger.warning(
@@ -668,6 +733,7 @@ class PlannerOrchestrator:
                     result_data["training_triggered"] = learning_result.training_triggered
 
                 self._pevr_log.log_custom("learning_result", data=result_data)
+                self._pevr_log.append_learning_result(result_data)
 
             logger.info(
                 "[PEVR] Post-execution learning completed: pattern=%s",

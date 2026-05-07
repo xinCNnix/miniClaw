@@ -17,6 +17,7 @@ of target queries and source types to pursue.
 
 import json
 import logging
+import re
 import time
 from typing import Dict, List
 
@@ -138,6 +139,19 @@ async def citation_chasing_planner_node(state: ToTState) -> Dict:
         logger.warning(
             "citation_chasing_planner_node: failed to parse LLM output"
         )
+        logger.debug(
+            "citation_chasing_planner_node: raw LLM output (first 500 chars): %s",
+            raw_output[:500],
+        )
+        # Fallback: try to extract URLs or text clues from raw output
+        targets = _extract_targets_from_text(raw_output)
+        if targets:
+            logger.info(
+                "citation_chasing_planner_node: extracted %d targets from raw text",
+                len(targets),
+            )
+            _log_citation_chase(state, targets)
+            return {"citation_targets": targets}
         return {}
 
     # Check should_chase flag
@@ -151,7 +165,19 @@ async def citation_chasing_planner_node(state: ToTState) -> Dict:
 
     if not targets:
         logger.info("citation_chasing_planner_node: no valid targets after normalization")
-        return {}
+        logger.debug(
+            "citation_chasing_planner_node: parsed JSON keys=%s",
+            list(parsed.keys()),
+        )
+        # Fallback: try raw text extraction
+        targets = _extract_targets_from_text(raw_output)
+        if targets:
+            logger.info(
+                "citation_chasing_planner_node: fallback extracted %d targets",
+                len(targets),
+            )
+        else:
+            return {}
 
     # Log via ToTExecutionLogger
     _log_citation_chase(state, targets)
@@ -223,6 +249,77 @@ def _normalize_targets(parsed: Dict) -> List[Dict]:
 
     # Cap at 5 targets per round to avoid excessive fetching
     return normalized[:5]
+
+
+def _extract_targets_from_text(text: str) -> List[Dict]:
+    """Fallback: extract citation targets from unstructured LLM output.
+
+    Tries URL extraction, numbered list parsing, and markdown link parsing.
+    If no structured data is found, returns a single text-clue entry.
+
+    Args:
+        text: Raw LLM output text.
+
+    Returns:
+        List of citation target dicts.
+    """
+    targets: List[Dict] = []
+
+    # 1. Extract URLs (arxiv, doi, generic)
+    url_pattern = re.compile(
+        r'https?://(?:arxiv\.org/(?:abs|pdf)/\d+\.\d+|doi\.org/[^\s)>\]]+|[^\s)>\]]+(?:\.pdf|\.html))',
+        re.IGNORECASE,
+    )
+    for match in url_pattern.finditer(text):
+        url = match.group(0)
+        targets.append({
+            "query": url,
+            "source_type": "url",
+            "reason": "Extracted from LLM output",
+            "priority": 0.7,
+        })
+
+    # 2. Extract numbered list items (1. query text)
+    list_pattern = re.compile(r'(?:^|\n)\s*\d+\.\s*(.+?)(?:\n|$)', re.MULTILINE)
+    for match in list_pattern.finditer(text):
+        item = match.group(1).strip()
+        if item and not item.startswith("http") and len(item) > 5:
+            targets.append({
+                "query": item,
+                "source_type": "text_clue",
+                "reason": "Extracted from numbered list",
+                "priority": 0.5,
+            })
+
+    # 3. Extract markdown links [text](url)
+    md_link_pattern = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)')
+    for match in md_link_pattern.finditer(text):
+        label, url = match.group(1), match.group(2)
+        targets.append({
+            "query": url,
+            "source_type": "url",
+            "reason": f"Markdown link: {label}",
+            "priority": 0.7,
+        })
+
+    # Deduplicate by query
+    seen = set()
+    unique = []
+    for t in targets:
+        if t["query"] not in seen:
+            seen.add(t["query"])
+            unique.append(t)
+
+    if not unique and len(text.strip()) > 20:
+        # No structured data found — pass as text clue
+        unique.append({
+            "query": text.strip()[:500],
+            "source_type": "text_clue",
+            "reason": "Unparseable LLM output passed as text clue",
+            "priority": 0.3,
+        })
+
+    return unique[:5]
 
 
 def _log_citation_chase(state: ToTState, targets: List[Dict]) -> None:

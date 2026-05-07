@@ -83,10 +83,10 @@ class PatternExtractor:
             If unavailable, falls back to creating a simple ChatOpenAI instance.
         """
         try:
-            # Try to import from miniclaw
-            from app.core.llm import get_default_llm as miniclaw_get_llm
+            # 通过角色路由系统获取 main 角色 LLM
+            from app.core.model_roles import get_role_llm
 
-            return miniclaw_get_llm()
+            return get_role_llm("main")
         except ImportError:
             # Fallback: create a simple ChatOpenAI instance
             logger.warning(

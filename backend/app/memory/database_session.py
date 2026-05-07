@@ -343,6 +343,9 @@ class DatabaseSessionManager(SessionManager):
         Returns:
             True if deleted, False if not found
         """
+        if "/" in session_id or "\\" in session_id or ".." in session_id:
+            logger.warning(f"Invalid session_id rejected: {session_id}")
+            return False
         deleted = False
 
         # Delete from file

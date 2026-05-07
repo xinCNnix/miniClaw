@@ -6,7 +6,118 @@ evidence_store used during deep research tasks.
 """
 
 import hashlib
+import re
+from datetime import datetime, timezone
 from typing import List, Dict
+
+
+def _compute_recency_factor(item: Dict) -> float:
+    """Compute a recency multiplier based on the publication date.
+
+    Piecewise linear decay:
+      - <= 6 months:  1.5
+      - 6-12 months:  1.2
+      - 1-2 years:    1.0
+      - 2-3 years:    0.8
+      - > 3 years:    0.6
+
+    If no date is found, returns 1.0 (neutral).
+    """
+    now = datetime.now(timezone.utc)
+
+    # Try explicit "published" field (from arxiv extractor)
+    date_str = item.get("published", "")
+    parsed = None
+
+    if date_str:
+        for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+            try:
+                parsed = datetime.strptime(date_str[:19], fmt).replace(tzinfo=timezone.utc)
+                break
+            except (ValueError, TypeError):
+                continue
+
+    # Fallback: try "year" field
+    if parsed is None:
+        year = item.get("year", "")
+        if isinstance(year, int):
+            parsed = datetime(year, 1, 1, tzinfo=timezone.utc)
+        elif isinstance(year, str) and year.isdigit():
+            parsed = datetime(int(year), 1, 1, tzinfo=timezone.utc)
+
+    # Fallback: search for 4-digit year in quote/claim/title text
+    if parsed is None:
+        for field in ("quote", "claim", "title"):
+            text = item.get(field, "")
+            if text:
+                m = re.search(r"\b(19|20)\d{2}\b", text)
+                if m:
+                    parsed = datetime(int(m.group()), 1, 1, tzinfo=timezone.utc)
+                    break
+
+    if parsed is None:
+        return 1.0
+
+    age_days = (now - parsed).days
+    age_years = age_days / 365.25
+
+    if age_days <= 180:
+        return 1.5
+    elif age_days <= 365:
+        return 1.2
+    elif age_years <= 2:
+        return 1.0
+    elif age_years <= 3:
+        return 0.8
+    else:
+        return 0.6
+
+
+def compute_reliability(evidence: Dict) -> float:
+    """Compute evidence reliability based on source type and content.
+
+    Scoring rules:
+      - search_kb with content > 200 chars: 0.70–0.85
+      - fetch_url with content > 200 chars: 0.60–0.75
+      - Empty content from any tool: 0.10
+      - Unknown tool with content: 0.50
+      - Fallback: 0.50
+
+    Args:
+        evidence: Dict with keys source_type, tool_name, content_length
+                  (or source_text to derive length from).
+
+    Returns:
+        Reliability score in [0.0, 1.0].
+    """
+    source_type = evidence.get("source_type", "")
+    tool_name = evidence.get("tool_name", "")
+    content_length = evidence.get("content_length", 0)
+    if content_length == 0:
+        content_length = len(evidence.get("source_text", ""))
+
+    if content_length == 0:
+        return 0.10
+
+    if tool_name == "search_kb":
+        if content_length > 500:
+            return 0.85
+        elif content_length > 200:
+            return 0.75
+        return 0.60
+
+    if tool_name == "fetch_url":
+        if content_length > 500:
+            return 0.75
+        elif content_length > 200:
+            return 0.65
+        return 0.55
+
+    # source_type based fallback
+    if source_type == "tool_output":
+        return 0.55 if content_length > 100 else 0.40
+
+    return 0.50
 
 
 def content_hash(source_text: str) -> str:
@@ -91,12 +202,13 @@ def format_evidence_for_prompt(
     if not evidence_store:
         return "（暂无证据）"
 
-    # Sort by relevance * reliability descending
+    # Sort by relevance * reliability * recency_factor descending
     scored_items: List[Dict] = []
     for item in evidence_store:
         relevance = float(item.get("relevance", 0.5))
         reliability = float(item.get("reliability", 0.5))
-        score = relevance * reliability
+        recency = _compute_recency_factor(item)
+        score = relevance * reliability * recency
         scored_items.append((score, item))
 
     scored_items.sort(key=lambda pair: pair[0], reverse=True)
@@ -194,10 +306,12 @@ def dedup_evidence(evidence_store: List[Dict]) -> List[Dict]:
             existing_score = (
                 float(existing.get("relevance", 0.5))
                 * float(existing.get("reliability", 0.5))
+                * _compute_recency_factor(existing)
             )
             new_score = (
                 float(item.get("relevance", 0.5))
                 * float(item.get("reliability", 0.5))
+                * _compute_recency_factor(item)
             )
 
             if new_score > existing_score:

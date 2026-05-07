@@ -9,10 +9,12 @@ import { useCallback } from "react"
 interface SettingNumberInputProps {
   setting: SettingItem
   onChange: (key: string, value: number) => void
+  locale: "zh" | "en"
 }
 
-export function SettingNumberInput({ setting, onChange }: SettingNumberInputProps) {
+export function SettingNumberInput({ setting, onChange, locale }: SettingNumberInputProps) {
   const range = setting.range
+  const label = locale === "zh" ? setting.description_zh : setting.description_en
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const val = setting.type === "int" ? parseInt(e.target.value, 10) : parseFloat(e.target.value)
@@ -27,9 +29,9 @@ export function SettingNumberInput({ setting, onChange }: SettingNumberInputProp
     <div className="py-2 space-y-1">
       <div className="flex items-center gap-2">
         <Label htmlFor={setting.key} className="text-sm font-medium">
-          {setting.description_zh}
+          {label}
         </Label>
-        <SettingTooltip tooltip_zh={setting.tooltip_zh} tooltip_en={setting.tooltip_en} />
+        <SettingTooltip setting={setting} locale={locale} />
       </div>
       <div className="flex items-center gap-2">
         <Input
@@ -43,7 +45,7 @@ export function SettingNumberInput({ setting, onChange }: SettingNumberInputProp
           className="w-32"
         />
         {range && (
-          <span className="text-xs text-muted-foreground whitespace-nowrap">
+          <span className="text-xs text-gray-400 whitespace-nowrap">
             {range.min} ~ {range.max}
           </span>
         )}

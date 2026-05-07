@@ -19,7 +19,7 @@ class DistillConfig:
     require_evidence: bool = True
 
     # Distill stage
-    distill_model: str = "gpt-4"
+    distill_model: str = ""  # 留空则自动使用当前主模型
     max_confidence: float = 0.6
     min_regression_tests: int = 3
     require_success_for_distill: bool = True
@@ -55,6 +55,13 @@ def get_distill_config() -> DistillConfig:
         cfg.enabled = False
     if val := os.getenv("ONLINE_DISTILL_MODEL"):
         cfg.distill_model = val
+    if not cfg.distill_model:
+        try:
+            from app.core.model_roles import get_role_llm_config
+            main_config = get_role_llm_config("main")
+            cfg.distill_model = main_config.model
+        except Exception:
+            cfg.distill_model = "deepseek-chat"  # 最终兜底
     if val := os.getenv("ONLINE_DISTILL_TIMEOUT"):
         try:
             cfg.timeout_seconds = float(val)

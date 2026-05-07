@@ -20,7 +20,7 @@ class DreamConfig:
 
     # --- Distiller phase (requires LLM) ---
     distiller_network: bool = True  # allow network for LLM calls
-    distiller_model: str = "gpt-4"
+    distiller_model: str = ""  # 留空则自动使用当前主模型
     distiller_batch_mode: bool = True  # batch mode to reduce cost
     distiller_max_confidence: float = 0.8  # offline distill confidence ceiling
 

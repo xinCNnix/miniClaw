@@ -9,6 +9,7 @@ run in parallel via asyncio.gather(); unsafe tools run serially.
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,11 +17,12 @@ from langchain_core.messages import HumanMessage
 
 from app.config import get_settings
 from app.core.agent import create_agent_manager
-from app.core.llm import create_llm
+from app.core.model_roles import get_role_llm
 from app.core.llm_retry import retry_llm_call
 from app.core.perv.json_repair import repair_json_or_none
 from app.core.perv.prompts import build_executor_messages
-from app.core.perv.pevr_logger import PEVRLogger, extract_token_usage
+from app.core.execution_trace.perv_trace import PEVRTrace as PEVRLogger
+from app.core.execution_trace.token_utils import extract_token_usage
 from app.core.perv.scheduler import (
     build_execution_layers,
     adjust_parallelism,
@@ -167,7 +169,6 @@ async def executor_node(state: dict) -> dict:
     total_steps = len(plan)
     settings = get_settings()
     parallel_enabled: bool = getattr(settings, "perv_enable_parallel", True)
-    mode = "batch" if total_steps <= 3 else "step"
 
     try:
         if not plan:
@@ -176,6 +177,7 @@ async def executor_node(state: dict) -> dict:
 
         # For replan: only execute from cursor onward
         remaining_steps = plan[step_cursor:]
+        mode = "batch" if len(remaining_steps) <= 3 else "step"
         if not remaining_steps:
             logger.info(
                 "[PEVR Executor] No remaining steps (cursor=%d)", step_cursor
@@ -194,7 +196,7 @@ async def executor_node(state: dict) -> dict:
         if mode == "batch":
             new_observations = await _execute_batch(
                 task=task,
-                plan=plan,
+                plan=remaining_steps,
                 prior_observations=prior_observations,
                 system_prompt=system_prompt,
             )
@@ -515,7 +517,7 @@ async def _execute_layered(
         agg_tokens["total_tokens"] += tokens.get("total_tokens", 0)
 
     # Update cursor to end of executed steps
-    new_cursor = len(plan)
+    new_cursor = cursor + len(all_observations)
 
     return (
         all_observations,
@@ -629,10 +631,8 @@ async def _execute_parallel_steps(
         try:
             result, step_images = await _invoke_tool(tool_name, tool_inputs)
             output_key = step.get("output_key", "")
-            if output_key:
-                step_outputs[output_key] = result
 
-            return {
+            obs = {
                 "step_id": step_id,
                 "tool": tool_name,
                 "input": tool_inputs,
@@ -641,6 +641,9 @@ async def _execute_parallel_steps(
                 "evidence": _extract_evidence_refs(tool_name, tool_inputs, "success"),
                 "generated_images": step_images,
             }
+            if output_key:
+                obs["output_key"] = output_key
+            return obs
         except Exception as e:
             logger.warning(
                 "[PEVR Executor]   %s: %s FAILED (parallel): %s",
@@ -681,6 +684,9 @@ async def _execute_parallel_steps(
                 "evidence": [],
             })
         elif isinstance(r, dict):
+            output_key = r.pop("output_key", "")
+            if output_key:
+                step_outputs[output_key] = r.get("result", "")
             observations.append(r)
             if r.get("status") == "fail":
                 failures += 1
@@ -715,9 +721,8 @@ async def _execute_step_by_step(
     Returns:
         (observations, new_cursor, step_outputs, consecutive_failures, token_usage)
     """
-    settings = get_settings()
-    provider = settings.llm_provider
-    llm = create_llm(provider)
+    # 通过角色路由获取 main 角色 LLM（执行是核心对话功能）
+    llm = get_role_llm("main")
 
     new_observations: List[Dict[str, Any]] = []
     max_consecutive = 3
@@ -953,6 +958,17 @@ async def _invoke_tool(
     """
     for tool in CORE_TOOLS:
         if tool.name == tool_name:
+            # Inject skill-required env vars for terminal/python_repl tools
+            _env_backup = {}
+            if tool_name in ("terminal", "python_repl"):
+                from app.config import get_settings as _gs
+                _settings = _gs()
+                for _key in ("BAIDU_API_KEY", "ARXIV_API_KEY", "GITHUB_TOKEN"):
+                    _val = getattr(_settings, _key.lower(), None) or getattr(_settings, _key, None)
+                    if _val:
+                        _env_backup[_key] = os.environ.get(_key)
+                        os.environ[_key] = str(_val)
+
             # Pre-execution argument validation
             arg_error = _validate_required_args(tool, tool_inputs)
             if arg_error:
@@ -960,6 +976,12 @@ async def _invoke_tool(
                     "[PEVR Executor] Pre-validation failed for %s: %s",
                     tool_name, arg_error,
                 )
+                # Restore env before returning
+                for _key, _old in _env_backup.items():
+                    if _old is None:
+                        os.environ.pop(_key, None)
+                    else:
+                        os.environ[_key] = _old
                 return arg_error, []
 
             try:
@@ -977,16 +999,22 @@ async def _invoke_tool(
                         tool_name, tool_inputs, _execute
                     )
                     result_str, gen_images = embed_output_images_v2(str(result))
-                    return result_str, gen_images
                 else:
                     result = await tool.ainvoke(tool_inputs)
                     result_str, gen_images = embed_output_images_v2(str(result))
-                    return result_str, gen_images
             except Exception as e:
                 logger.error(
                     "[PEVR Executor] Tool %s failed: %s",
                     tool_name,
                     e,
                 )
-                return f"Tool error: {e}", []
+                result_str, gen_images = f"Tool error: {e}", []
+            finally:
+                # Restore env vars after tool execution
+                for _key, _old in _env_backup.items():
+                    if _old is None:
+                        os.environ.pop(_key, None)
+                    else:
+                        os.environ[_key] = _old
+            return result_str, gen_images
     return f"Unknown tool: {tool_name}", []

@@ -8,15 +8,17 @@ import { SettingTooltip } from "./SettingTooltip"
 interface SettingSelectProps {
   setting: SettingItem
   onChange: (key: string, value: string) => void
+  locale: "zh" | "en"
 }
 
-export function SettingSelect({ setting, onChange }: SettingSelectProps) {
+export function SettingSelect({ setting, onChange, locale }: SettingSelectProps) {
   const options = setting.options ?? []
+  const label = locale === "zh" ? setting.description_zh : setting.description_en
   return (
     <div className="py-2 space-y-1">
       <div className="flex items-center gap-2">
-        <Label className="text-sm font-medium">{setting.description_zh}</Label>
-        <SettingTooltip tooltip_zh={setting.tooltip_zh} tooltip_en={setting.tooltip_en} />
+        <Label className="text-sm font-medium">{label}</Label>
+        <SettingTooltip setting={setting} locale={locale} />
       </div>
       <Select value={String(setting.value)} onValueChange={(v) => onChange(setting.key, v)}>
         <SelectTrigger className="w-64">
@@ -25,7 +27,7 @@ export function SettingSelect({ setting, onChange }: SettingSelectProps) {
         <SelectContent>
           {options.map((opt) => (
             <SelectItem key={opt.value} value={opt.value}>
-              {opt.label_zh}
+              {locale === "zh" ? opt.label_zh : opt.label_en}
             </SelectItem>
           ))}
         </SelectContent>

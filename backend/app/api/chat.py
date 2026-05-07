@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from app.models.chat import ChatRequest, ChatEvent, ToolCall
-from app.core.agent import create_agent_manager, AgentManager
+from app.core.llm import get_agent_manager, reset_agent_manager
 from app.core.tools import get_registered_tools
 from app.memory.prompts import build_system_prompt
 from app.memory.session import get_session_manager
@@ -307,111 +307,6 @@ def _format_attachments(attachments: list[dict]) -> list[dict]:
             content_blocks.append({"type": "text", "text": text})
     return content_blocks
 
-# Global agent manager (singleton)
-_agent_manager: AgentManager = None
-_current_provider: str = None
-
-
-def get_agent_manager() -> AgentManager:
-    """
-    Get or create the global agent manager.
-
-    This function implements hot-switching by checking if the configured
-    provider has changed and recreating the agent manager if necessary.
-
-    Returns:
-        AgentManager instance
-
-    Raises:
-        HTTPException: If initialization fails
-    """
-    global _agent_manager, _current_provider
-
-    try:
-        from app.config import get_settings
-        settings = get_settings()
-
-        # Check if provider has changed (hot-switch support)
-        if _current_provider != settings.llm_provider:
-            import logging
-            logging.info(f"=== LLM provider changed: {_current_provider} → {settings.llm_provider} ===")
-
-            # Import tools directly
-            from app.tools import CORE_TOOLS
-            logging.info(f"Tools: {[t.name for t in CORE_TOOLS]}")
-
-            # Recreate agent manager with new provider
-            _agent_manager = create_agent_manager(
-                tools=CORE_TOOLS,
-                llm_provider=settings.llm_provider,
-            )
-            _current_provider = settings.llm_provider
-
-            logging.info("=== Agent manager recreated successfully ===")
-
-        elif _agent_manager is None:
-            import logging
-            logging.info(f"=== Creating agent manager ===")
-            logging.info(f"Tools type: {type(CORE_TOOLS)}")
-            logging.info(f"Tools: {[t.name for t in CORE_TOOLS]}")
-
-            # Create agent manager
-            logging.info(f"Creating agent with provider: {settings.llm_provider}")
-
-            _agent_manager = create_agent_manager(
-                tools=CORE_TOOLS,
-                llm_provider=settings.llm_provider,
-            )
-            _current_provider = settings.llm_provider
-
-            logging.info("=== Agent manager created successfully ===")
-
-        return _agent_manager
-
-    except Exception as e:
-        import traceback
-        logging.error(f"=== Failed to create agent manager ===")
-        logging.error(f"Error: {e}")
-        logging.error(f"Traceback:\n{traceback.format_exc()}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initialize agent: {str(e)}",
-        )
-
-
-def reset_agent_manager() -> None:
-    """
-    Reset the global agent manager to force recreation on next access.
-
-    This should be called when LLM configuration is updated to ensure
-    the new configuration is picked up immediately.
-    """
-    global _agent_manager, _current_provider
-    _agent_manager = None
-    _current_provider = None
-
-    # Also reset memory manager to ensure it uses the new LLM
-    try:
-        from app.memory.memory_manager import reset_memory_manager
-        reset_memory_manager()
-    except Exception as e:
-        logger.warning(f"Failed to reset memory manager: {e}")
-
-    # 重置 memory retriever（持有 RAG 引擎引用）
-    try:
-        from app.memory.retriever_factory import reset_memory_retriever
-        reset_memory_retriever()
-    except Exception as e:
-        logger.warning(f"Failed to reset memory retriever: {e}")
-
-    # 重置统一评估器（缓存了 LLM 实例）
-    try:
-        from app.core.reflection.evaluator import reset_unified_evaluator
-        reset_unified_evaluator()
-    except Exception as e:
-        logger.warning(f"Failed to reset unified evaluator: {e}")
-
-
 def format_sse_event(event: ChatEvent) -> str:
     """
     Format a chat event as SSE message.
@@ -540,7 +435,7 @@ def detect_task_boundary(msg1: dict, msg2: dict) -> bool:
 
 async def chat_stream_generator(
     request: ChatRequest,
-    agent: AgentManager,
+    agent,
     system_prompt: str,
 ) -> AsyncIterator[str]:
     """

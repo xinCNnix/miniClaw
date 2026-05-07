@@ -3,6 +3,7 @@
 import { MessageBubble } from "@/components/chat/MessageBubble"
 import { ThinkingChainDisplay } from "@/components/chat/ThinkingChainDisplay"
 import { ThoughtTree } from "@/components/chat/thought-tree"
+import { PervCard } from "@/components/chat/perv-card"
 import type { Message, ThinkingEvent } from "@/types/chat"
 import { useTranslation } from "@/hooks/use-translation.hook"
 
@@ -17,6 +18,8 @@ export function MessageList({ messages, thinkingEvents = [], isLoading = false }
 
   // Check if there are any ToT events
   const hasToTEvents = thinkingEvents.some(event => event.type.startsWith('tot_'))
+  // Check if there are any PERV events (mixed pevr_ / perv_ prefixes)
+  const hasPervEvents = thinkingEvents.some(event => event.type.startsWith('perv_'))
 
   if (messages.length === 0) {
     return (
@@ -67,13 +70,19 @@ export function MessageList({ messages, thinkingEvents = [], isLoading = false }
             </>
           )} */}
 
-          {/* ToT 模式：只显示思维树卡片（含想法+工具+评分）；普通模式：显示工具调用链 */}
+          {/* ToT 模式：思维树卡片；PERV 模式：PervCard；普通模式：工具调用链 */}
           {index === lastMsgIndex && thinkingEvents.length > 0 && (
             hasToTEvents ? (
               <ThoughtTree
                 events={thinkingEvents}
                 maxHeight="300px"
                 data-testid="tot-reasoning-step"
+              />
+            ) : hasPervEvents ? (
+              <PervCard
+                events={thinkingEvents}
+                maxHeight="300px"
+                data-testid="perv-execution-step"
               />
             ) : (
               <ThinkingChainDisplay

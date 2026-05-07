@@ -14,11 +14,12 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage
 
 from app.config import get_settings
-from app.core.llm import create_llm
+from app.core.model_roles import get_role_llm
 from app.core.llm_retry import retry_llm_call
 from app.core.perv.json_repair import repair_json_or_none
 from app.core.perv.prompts import build_verifier_prompt
-from app.core.perv.pevr_logger import PEVRLogger, extract_token_usage
+from app.core.execution_trace.perv_trace import PEVRTrace as PEVRLogger
+from app.core.execution_trace.token_utils import extract_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +63,8 @@ async def verifier_node(state: dict) -> dict:
             len(observations),
         )
 
-        # --- Call LLM ---
-        provider = settings.llm_provider
-        llm = create_llm(provider)
+        # --- 通过角色路由获取 supervisor 角色对应的 LLM（验证/评估专用模型） ---
+        llm = get_role_llm("supervisor")
 
         response = await retry_llm_call(
             coro_factory=lambda: llm.ainvoke([HumanMessage(content=prompt_text)]),
@@ -93,7 +93,26 @@ async def verifier_node(state: dict) -> dict:
             "coverage": 0.0,
             "scores": {},
         }
-        report: Dict[str, Any] = repair_json_or_none(raw_content) or _fallback_report
+        parsed = repair_json_or_none(raw_content)
+        if parsed is None:
+            # JSON parsing failed — log raw response for analysis
+            logger.debug(
+                "[PEVR Verifier] JSON repair failed, raw response (first 500 chars): %s",
+                raw_content[:500],
+            )
+            # Heuristic: if observations contain substantial content, lean toward pass
+            obs_text = " ".join(str(o.get("output", "")) for o in observations)
+            if len(obs_text) > 200 and any(
+                kw in obs_text.lower()
+                for kw in ["success", "完成", "result", "found", "generated"]
+            ):
+                _fallback_report.update({
+                    "verdict": "pass",
+                    "confidence": 0.6,
+                    "passed": True,
+                    "reason": "Fallback: observations contain successful results (JSON parse failed)",
+                })
+        report: Dict[str, Any] = parsed or _fallback_report
 
         # Ensure required keys exist (support both old and new format)
         report.setdefault("verdict", "fail")

@@ -85,7 +85,7 @@ export function Sidebar({
                   {session.metadata?.title || t('sidebar.new_conversation')}
                 </p>
                 <p className="text-xs text-gray-500">
-                  {new Date(session.created_at).toLocaleDateString()}
+                  {new Date(session.updated_at || session.created_at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                 </p>
               </div>
               <Button

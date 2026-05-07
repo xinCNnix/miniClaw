@@ -3,7 +3,7 @@ name: deep_source_extractor
 description: |
   对单个来源全文进行深层结构化信息提取，输出详细结构化 JSON。
   适用于论文、网页、PDF 转文本等长文档的研究信息提取。
-version: 1.0
+version: "1.0"
 dependencies: {}
 inputs:
   - source_id: str

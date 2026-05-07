@@ -119,14 +119,26 @@ class ReflectionEngine:
         self.timeout = timeout
         self.max_retries = max_retries
 
-        # Build the chain with JSON output parser
+        # Build the chain: prompt -> llm -> (empty check) -> JSON parser
         self.parser = JsonOutputParser()
-        self.chain = self.prompt | self.llm | self.parser
+        self.chain = self.prompt | self.llm | self._validate_and_parse()
 
         logger.info(
             f"ReflectionEngine initialized with LLM: {type(self.llm).__name__}, "
             f"timeout: {timeout}s, max_retries: {max_retries}"
         )
+
+    def _validate_and_parse(self):
+        """Runnable that checks for empty LLM output before JSON parsing."""
+        from langchain_core.runnables import RunnableLambda
+
+        def _check(raw):
+            content = raw.content if hasattr(raw, "content") else str(raw)
+            if not content or not content.strip():
+                raise ValueError("LLM returned empty response for reflection")
+            return self.parser.parse(content)
+
+        return RunnableLambda(_check)
 
     def _get_default_llm(self) -> BaseChatModel:
         """Get default LLM instance.
@@ -139,10 +151,10 @@ class ReflectionEngine:
             If unavailable, falls back to creating a simple ChatOpenAI instance.
         """
         try:
-            # Try to import from miniclaw
-            from app.core.llm import get_default_llm as miniclaw_get_llm
+            # 通过角色路由系统获取 main 角色 LLM
+            from app.core.model_roles import get_role_llm
 
-            return miniclaw_get_llm()
+            return get_role_llm("main")
         except ImportError:
             # Fallback: create a simple ChatOpenAI instance
             logger.warning(
@@ -200,6 +212,12 @@ class ReflectionEngine:
             >>> print(result.completed)
             True
         """
+        # Ensure user_query is a string (may be list when attachments present)
+        if isinstance(user_query, list):
+            user_query = " ".join(
+                item.get("text", "") for item in user_query if isinstance(item, dict)
+            )
+
         # Format tool calls for display
         tool_calls_str = self._format_tool_calls(tool_calls)
 
@@ -251,10 +269,11 @@ class ReflectionEngine:
 
             except ValidationError as e:
                 logger.error(f"Invalid reflection output: {e}")
-                # Return fallback on validation error
-                return self._get_fallback_reflection(
-                    user_query, agent_output, tool_calls
-                )
+                if attempt >= 1:
+                    return self._get_fallback_reflection(
+                        user_query, agent_output, tool_calls
+                    )
+                # Allow 1 retry for validation errors
 
             except Exception as e:
                 logger.error(
@@ -317,6 +336,12 @@ class ReflectionEngine:
         Returns:
             Basic ReflectionResult with heuristic analysis
         """
+        # Ensure user_query is a string
+        if isinstance(user_query, list):
+            user_query = " ".join(
+                item.get("text", "") for item in user_query if isinstance(item, dict)
+            )
+
         # Heuristic analysis
         completed = len(agent_output) > 50  # Simple heuristic
 

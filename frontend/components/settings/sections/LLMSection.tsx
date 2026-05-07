@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Plus, Trash2, Check, X, Edit3, Zap } from "lucide-react"
 import { FormSection } from "./FormSection"
+import { ModelRolesSection } from "./ModelRolesSection"
 
 interface LLMEntry {
   id: string
@@ -165,80 +166,6 @@ export function LLMSection({ settings, onChange, locale }: LLMSectionProps) {
 
   return (
     <div className="space-y-6">
-      {/* LLM cards */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium">
-            {isZh ? "已配置的 LLM" : "Configured LLMs"}
-          </h3>
-          <Button size="sm" variant="secondary" onClick={startAdd}>
-            <Plus className="h-3.5 w-3.5 mr-1" />
-            {isZh ? "添加" : "Add"}
-          </Button>
-        </div>
-
-        {llms.length === 0 && !edit && (
-          <p className="text-sm text-gray-400 py-4 text-center">
-            {isZh ? "暂无 LLM 配置，点击添加" : "No LLMs configured. Click Add."}
-          </p>
-        )}
-
-        <div className="space-y-3">
-          {llms.map((llm) => (
-            <div
-              key={llm.id}
-              className={`rounded-lg border p-4 transition-colors ${
-                llm.is_current
-                  ? "border-emerald-300 bg-emerald-50/50"
-                  : "border-gray-200 bg-white"
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm font-semibold">{llm.name}</span>
-                    {llm.is_current && (
-                      <Badge variant="default">
-                        <Zap className="h-3 w-3 mr-1" />
-                        {isZh ? "当前" : "Active"}
-                      </Badge>
-                    )}
-                    <Badge variant="secondary">{llm.provider}</Badge>
-                  </div>
-                  <div className="text-xs text-gray-500 space-y-0.5">
-                    <div>{isZh ? "模型" : "Model"}: {llm.model}</div>
-                    {llm.base_url && <div className="truncate">URL: {llm.base_url}</div>}
-                    <div className="flex items-center gap-1">
-                      {llm.has_api_key ? (
-                        <><Check className="h-3 w-3 text-green-500" /> {llm.api_key_preview}</>
-                      ) : (
-                        <span className="text-amber-500">{isZh ? "未配置 API Key" : "No API Key"}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 shrink-0 ml-2">
-                  {!llm.is_current && (
-                    <Button size="sm" variant="secondary" onClick={() => handleSwitch(llm.id)}>
-                      <Zap className="h-3.5 w-3.5 mr-1" />
-                      {isZh ? "切换" : "Switch"}
-                    </Button>
-                  )}
-                  <Button size="sm" variant="ghost" onClick={() => startEdit(llm)}>
-                    <Edit3 className="h-3.5 w-3.5" />
-                  </Button>
-                  {!llm.is_current && (
-                    <Button size="sm" variant="ghost" onClick={() => handleDelete(llm.id)}>
-                      <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* Add/Edit form */}
       {edit && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50/30 p-4 space-y-3">
@@ -356,6 +283,88 @@ export function LLMSection({ settings, onChange, locale }: LLMSectionProps) {
             </Button>
           </div>
         </div>
+      )}
+
+      {/* LLM cards */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium">
+            {isZh ? "已配置的 LLM" : "Configured LLMs"}
+          </h3>
+          <Button size="sm" variant="secondary" onClick={startAdd}>
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            {isZh ? "添加" : "Add"}
+          </Button>
+        </div>
+
+        {llms.length === 0 && !edit && (
+          <p className="text-sm text-gray-400 py-4 text-center">
+            {isZh ? "暂无 LLM 配置，点击添加" : "No LLMs configured. Click Add."}
+          </p>
+        )}
+
+        <div className="space-y-3">
+          {llms.map((llm) => (
+            <div
+              key={llm.id}
+              className={`rounded-lg border p-4 transition-colors ${
+                llm.is_current
+                  ? "border-emerald-300 bg-emerald-50/50"
+                  : "border-gray-200 bg-white"
+              }`}
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-semibold">{llm.name}</span>
+                    {llm.is_current && (
+                      <Badge variant="default">
+                        <Zap className="h-3 w-3 mr-1" />
+                        {isZh ? "当前" : "Active"}
+                      </Badge>
+                    )}
+                    <Badge variant="secondary">{llm.provider}</Badge>
+                  </div>
+                  <div className="text-xs text-gray-500 space-y-0.5">
+                    <div>{isZh ? "模型" : "Model"}: {llm.model}</div>
+                    {llm.base_url && <div className="truncate">URL: {llm.base_url}</div>}
+                    <div className="flex items-center gap-1">
+                      {llm.has_api_key ? (
+                        <><Check className="h-3 w-3 text-green-500" /> {llm.api_key_preview}</>
+                      ) : (
+                        <span className="text-amber-500">{isZh ? "未配置 API Key" : "No API Key"}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 ml-2">
+                  {!llm.is_current && (
+                    <Button size="sm" variant="secondary" onClick={() => handleSwitch(llm.id)}>
+                      <Zap className="h-3.5 w-3.5 mr-1" />
+                      {isZh ? "切换" : "Switch"}
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={() => startEdit(llm)}>
+                    <Edit3 className="h-3.5 w-3.5" />
+                  </Button>
+                  {!llm.is_current && (
+                    <Button size="sm" variant="ghost" onClick={() => handleDelete(llm.id)}>
+                      <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 角色分配 — 绑定不同 LLM 到不同任务角色 */}
+      {llms.length > 0 && (
+        <ModelRolesSection
+          llms={llms.map(l => ({ id: l.id, name: l.name, model: l.model }))}
+          onRoleChange={loadLLMs}
+        />
       )}
 
       {/* Runtime settings (e.g. temperature, max_tokens) */}

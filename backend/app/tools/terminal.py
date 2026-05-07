@@ -31,7 +31,7 @@ class TerminalInput(BaseModel):
     )
 
     timeout: int = Field(
-        default=30,
+        default=60,
         description="Command timeout in seconds",
     )
 
@@ -174,7 +174,7 @@ class TerminalTool(BaseTool):
         self,
         command: str,
         cwd: Optional[str] = None,
-        timeout: int = 30,
+        timeout: int = 60,
     ) -> str:
         """
         Execute the shell command.
@@ -219,7 +219,15 @@ class TerminalTool(BaseTool):
 
             # Add exit code if non-zero
             if result.returncode != 0:
-                output.append(f"\n[Exit code: {result.returncode}]")
+                _CMD_NOT_FOUND_HINTS = {
+                    9009: "Command not found (Windows)",
+                    127: "Command not found (Unix)",
+                }
+                hint = _CMD_NOT_FOUND_HINTS.get(result.returncode)
+                if hint:
+                    output.append(f"\n[Exit code: {result.returncode}] {hint}")
+                else:
+                    output.append(f"\n[Exit code: {result.returncode}]")
 
             result_str = "\n".join(output) if output else "Command completed with no output"
 
@@ -290,7 +298,7 @@ class TerminalTool(BaseTool):
         self,
         command: str,
         cwd: Optional[str] = None,
-        timeout: int = 30,
+        timeout: int = 60,
     ) -> str:
         """
         Async version of the tool.

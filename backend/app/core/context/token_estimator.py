@@ -1,12 +1,16 @@
-"""Token budget estimation for context window management."""
+"""Token budget estimation for context window management.
+
+提供 token 估算和预算计算功能，支持 CJK 字符的精确估算。
+预算计算从 settings 读取 reserved output 值，而非硬编码常量。
+"""
 from __future__ import annotations
 
 import logging
 import re
 
-logger = logging.getLogger(__name__)
+from app.config import settings
 
-_DEFAULT_RESERVED = 4000
+logger = logging.getLogger(__name__)
 
 
 class TokenEstimator:
@@ -62,7 +66,8 @@ class TokenEstimator:
             Available tokens for message history.
         """
         context_window = getattr(llm_config, "context_window", 128_000)
-        reserved = _DEFAULT_RESERVED
+        # 从 settings 读取预留输出 token 数，取代硬编码常量
+        reserved = settings.context_window_reserved_output
         budget = max(0, context_window - reserved - system_prompt_tokens)
         logger.debug(
             f"TokenEstimator: context_window={context_window}, "

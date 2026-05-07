@@ -1,7 +1,6 @@
 "use client"
 
-import { useContext } from "react"
-import { AppContext } from "@/contexts/AppContext"
+import { useApp } from "@/contexts/AppContext"
 import type { SettingsGroup } from "@/types/config"
 
 interface SettingsSidebarProps {
@@ -11,7 +10,7 @@ interface SettingsSidebarProps {
 }
 
 export function SettingsSidebar({ groups, activeGroup, onSelect }: SettingsSidebarProps) {
-  const { locale } = useContext(AppContext)
+  const { locale } = useApp()
 
   return (
     <nav className="h-full overflow-y-auto">

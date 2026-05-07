@@ -21,10 +21,22 @@ except ImportError:
     def embed_output_images(x: str) -> str: return x
     def embed_output_images_v2(x: str, max_age_seconds: int = 60) -> tuple[str, list[dict]]: return x, []
 
-from app.core.llm import create_llm, LLMProvider
+from app.core.llm import LLMProvider
+from app.core.model_roles import get_role_llm
 from app.config import get_settings
 from app.logging_config import get_agent_logger
 from app.core.smart_stopping import should_stop_tool_calling
+
+
+def _content_to_str(content) -> str:
+    """Convert message content (str or multimodal list) to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            item.get("text", "") for item in content if isinstance(item, dict)
+        )
+    return str(content) or ""
 
 
 def _get_skills_dir():
@@ -61,9 +73,9 @@ class AgentManager:
         self.tools = tools
         self.llm_provider = llm_provider
 
-        # 如果未提供 LLM，从 provider 创建
+        # 如果未提供 LLM，通过角色路由系统获取 main 角色 LLM
         if llm is None:
-            self.llm = create_llm(llm_provider)
+            self.llm = get_role_llm("main")
         else:
             self.llm = llm
 
@@ -270,6 +282,8 @@ class AgentManager:
         self,
         messages: List[dict],
         system_prompt: str,
+        cancel_event: Optional[asyncio.Event] = None,
+        run_id: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         """
         Async stream agent responses.
@@ -277,8 +291,11 @@ class AgentManager:
         start_time = time.time()
         _last_tool_calls: list[dict] = []  # 工具调用追踪（供反思评估使用）
 
+        # 重置 watchdog 追踪器
+        self._wd_tracker = None
+
         # --- Token & timing metrics ---
-        from app.core.perv.pevr_logger import extract_token_usage
+        from app.core.execution_trace.token_utils import extract_token_usage
         _round_metrics: list[dict] = []
         _total_tool_duration = 0.0
         _total_prompt_tokens = 0
@@ -314,7 +331,7 @@ class AgentManager:
                     from app.core.meta_policy.capability_map import CapabilityMap
 
                     _cap_map = CapabilityMap.from_core_tools()
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     _tca_decision = get_tca_decision(user_msg, cap_map=_cap_map)
                     if _tca_decision and _tca_decision.get("injection_text"):
                         _tca_injection_text = _tca_decision["injection_text"]
@@ -331,7 +348,7 @@ class AgentManager:
                     from app.core.meta_policy.capability_map import CapabilityMap
 
                     _cap_map_mp = CapabilityMap.from_core_tools()
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     _mp_decision = get_meta_policy_decision(user_msg, cap_map=_cap_map_mp)
                     if _mp_decision and _mp_decision.get("injection_text"):
                         lc_messages.append(SystemMessage(content=_mp_decision["injection_text"]))
@@ -343,6 +360,16 @@ class AgentManager:
             # Multi-round tool calling loop
             round_count = 0
             while round_count < max_tool_rounds:
+                # === Watchdog 取消检查 ===
+                if cancel_event and cancel_event.is_set():
+                    logger.info(f"[Watchdog] Run 在第 {round_count} 轮被取消")
+                    yield {
+                        "type": "cancelled",
+                        "reason": "cancelled_by_user",
+                        "round": round_count,
+                    }
+                    return
+
                 llm_start = time.time()
 
                 # === 流式响应开关 ===
@@ -515,7 +542,7 @@ class AgentManager:
                         round_count=round_count,
                         tool_name=tool_name,
                         tool_args=tool_args,
-                        user_message=messages[-1].get('content', '') if messages else '',
+                        user_message=_content_to_str(messages[-1].get('content', '')) if messages else '',
                         current_round_time=llm_duration
                     )
 
@@ -631,11 +658,12 @@ class AgentManager:
                             tool_output = await self._aexecute_tool(tool_name, tool_args)
                             tool_duration = time.time() - tool_start
 
-                            # Skip secondary image processing if SkillIntercept
-                            # already appended markdown image links
+                            # SkillIntercept returns inline markdown + structured images
                             tool_output_str = str(tool_output)
                             if "/api/media/" in tool_output_str:
-                                gen_images = []
+                                # Pick up images stored by _try_skill_intercept
+                                gen_images = getattr(self, "_last_skill_images", []) or []
+                                self._last_skill_images = []  # clear after use
                                 # Clean residual dicts from SkillIntercept output
                                 if "'status': 'success'" in tool_output_str and "'image_path'" in tool_output_str:
                                     import re as _re_clean
@@ -727,6 +755,42 @@ class AgentManager:
                     "total_tokens": _round_prompt + _round_completion,
                 })
 
+                # === Watchdog 心跳 + 进度 ===
+                if run_id:
+                    from app.core.watchdog import get_registry, ProgressTracker
+                    _wd_registry = get_registry()
+                    _wd_registry.heartbeat(run_id)
+                    if self._wd_tracker is None:
+                        self._wd_tracker = ProgressTracker()
+                    for tc in valid_tool_calls:
+                        self._wd_tracker.record_action({
+                            "type": "tool",
+                            "name": tc.get("name", "unknown"),
+                            "args": tc.get("args", {}),
+                        })
+                    self._wd_tracker.record_state({
+                        "round": round_count,
+                        "tool_count": len(_last_tool_calls),
+                        "last_tools": [tc.get("name") for tc in _last_tool_calls[-3:]],
+                    })
+                    _wd_registry.update_progress(run_id, self._wd_tracker.snapshot())
+                    if self._wd_tracker.is_state_stuck():
+                        logger.warning(f"[Watchdog] 状态卡死，第 {round_count} 轮")
+                        yield {
+                            "type": "cancelled",
+                            "reason": "state_stuck",
+                            "round": round_count,
+                        }
+                        return
+                    if self._wd_tracker.is_action_repeating():
+                        logger.warning(f"[Watchdog] 动作重复，第 {round_count} 轮")
+                        yield {
+                            "type": "cancelled",
+                            "reason": "action_repeating",
+                            "round": round_count,
+                        }
+                        return
+
                 # Increment round count and continue
                 round_count += 1
                 logger.info(f"[Round {round_count}] Completed, checking if more tools needed...")
@@ -771,7 +835,7 @@ class AgentManager:
                 if getattr(settings, "enable_tca", False):
                     from app.core.meta_policy.tca_helpers import record_tca_episode
 
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     record_tca_episode(
                         query=user_msg,
                         tool_calls=_last_tool_calls,
@@ -786,7 +850,7 @@ class AgentManager:
                 if getattr(settings, "enable_meta_policy", False):
                     from app.core.meta_policy.meta_policy_helpers import record_meta_policy_episode
 
-                    user_msg = messages[-1].get("content", "") if messages else ""
+                    user_msg = _content_to_str(messages[-1].get("content", "")) if messages else ""
                     record_meta_policy_episode(
                         query=user_msg,
                         tool_calls=_last_tool_calls,
@@ -803,7 +867,7 @@ class AgentManager:
 
                     # 收集完整的 agent 输出
                     agent_output = ""
-                    user_query = messages[-1].get("content", "") if messages else ""
+                    user_query = _content_to_str(messages[-1].get("content", "")) if messages else ""
 
                     # 从最近的 content_delta 提取输出（简化方式：用 LLM 最后响应）
                     if hasattr(locals().get("response"), "content"):
@@ -864,6 +928,44 @@ class AgentManager:
         }
 
         yield {"type": "done"}
+
+        # === Async pattern learning (fire-and-forget, after done) ===
+        try:
+            _user_query = _content_to_str(messages[-1].get("content", "")) if messages else ""
+            _agent_output = ""
+            if hasattr(locals().get("response"), "content"):
+                _agent_output = response.content or ""
+            if hasattr(locals().get("final_response"), "content") and not _agent_output:
+                _agent_output = final_response.content or ""
+            if _agent_output:
+                from app.core.reflection.helpers import post_execution_learning
+                asyncio.create_task(
+                    post_execution_learning(
+                        user_query=_user_query,
+                        agent_output=_agent_output,
+                        tool_calls=_last_tool_calls,
+                        execution_time=total_duration,
+                        execution_mode="normal",
+                    )
+                )
+        except Exception as _le:
+            logger.debug("[Learning] Agent post-learning trigger failed: %s", _le)
+
+        # === Online Distill (fire-and-forget, after done) ===
+        try:
+            if _agent_output:
+                from app.core.online_distill import online_distill_skill
+                asyncio.create_task(
+                    online_distill_skill(
+                        user_query=_user_query,
+                        agent_output=_agent_output,
+                        tool_calls=_last_tool_calls,
+                        execution_time=total_duration,
+                        execution_mode="normal",
+                    )
+                )
+        except Exception as _le:
+            logger.debug("[OnlineDistill] Agent trigger failed: %s", _le)
 
     def _convert_messages(
         self,
@@ -1005,6 +1107,17 @@ class AgentManager:
             )
             return None
 
+        # Inject skill-required env vars into os.environ so terminal subprocesses can access them
+        from app.config import get_settings as _get_settings
+        _settings = _get_settings()
+        _SKILL_ENV_KEYS = ["BAIDU_API_KEY", "ARXIV_API_KEY", "GITHUB_TOKEN"]
+        _env_backup = {}
+        for _key in _SKILL_ENV_KEYS:
+            _val = getattr(_settings, _key.lower(), None) or getattr(_settings, _key, None)
+            if _val:
+                _env_backup[_key] = os.environ.get(_key)
+                os.environ[_key] = str(_val)
+
         # Execute all steps in tool_plan via direct tool call (no re-interception)
         logger.info(
             "Agent skill intercept: '%s' compiled → %d step(s)",
@@ -1037,6 +1150,16 @@ class AgentManager:
                 '',
                 combined,
             ).strip()
+        # Store gen_images for the serial execution path to pick up
+        self._last_skill_images = gen_images if gen_images else []
+
+        # Restore env vars
+        for _key, _old_val in _env_backup.items():
+            if _old_val is None:
+                os.environ.pop(_key, None)
+            else:
+                os.environ[_key] = _old_val
+
         return combined
 
     async def _aexecute_tool_direct(self, name: str, arguments: dict) -> Any:
@@ -1247,9 +1370,9 @@ def create_agent_manager(
     Returns:
         Configured AgentManager
     """
-    # 如果未提供 LLM，从 provider 创建
+    # 如果未提供 LLM，通过角色路由系统获取 main 角色 LLM
     if llm is None:
-        from app.core.llm import create_llm
-        llm = create_llm(llm_provider)
+        from app.core.model_roles import get_role_llm
+        llm = get_role_llm("main")
 
     return AgentManager(tools=tools, llm=llm)

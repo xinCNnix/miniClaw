@@ -84,11 +84,11 @@ async def summarizer_node(state: dict) -> dict:
 
         obs_text = "\n\n".join(obs_text_parts)
 
-        # 调用 LLM 摘要
-        from app.core.llm import create_llm
+        # 调用 LLM 摘要 — 通过角色路由获取 main 角色 LLM
+        from app.core.model_roles import get_role_llm
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        llm = create_llm(get_settings().llm_provider)
+        llm = get_role_llm("main")
         bound_llm = llm.bind(max_tokens=max_tokens, temperature=0.0)
 
         messages = [

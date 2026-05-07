@@ -45,6 +45,18 @@ class SkillMatcher:
                 "arxiv", "paper", "论文", "学术", "academic", "research paper",
                 "论文搜索", "学术论文", "文献", "literature",
             },
+            "conference-paper": {
+                "conference", "iclr", "neurips", "icml", "ijcai", "cvpr",
+                "iccv", "acl", "会议论文", "顶会", "conference paper",
+                "proceedings", "openreview",
+                "顶会论文", "iclr 20", "neurips 20", "icml 20",
+            },
+            "agent-papers": {
+                "agent论文", "agent research", "多智能体", "agent survey",
+                "agent综述", "agent记忆", "agent规划", "agent工具",
+                "awesome agents", "agent research papers", "ai agent研究",
+                "agent papers", "agent paper",
+            },
             "find-skill": {
                 "find skill", "install skill", "搜索技能", "安装技能",
                 "skill search", "技能搜索", "download skill",
@@ -112,6 +124,9 @@ class SkillMatcher:
     def match_skill(self, query: str) -> Optional[str]:
         """根据查询匹配最相关的技能。
 
+        对每个 skill 取其所有命中关键词中最长的作为该 skill 的得分，
+        再比较各 skill 得分，取最高分的 skill。
+
         Args:
             query: 用户查询文本
 
@@ -124,7 +139,6 @@ class SkillMatcher:
 
         for keyword, skills in self._keyword_index.items():
             if keyword in query_lower:
-                # 匹配到的关键词越长，得分越高
                 score = len(keyword)
                 for skill in skills:
                     if skill in self._skills_snapshot and score > best_score:

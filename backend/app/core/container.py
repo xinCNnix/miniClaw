@@ -286,14 +286,15 @@ def setup_container() -> ServiceContainer:
     logger.debug("Registered settings provider")
 
     # LLM provider (factory - lazy initialization)
-    def _create_llm() -> LLMProvider:
-        """Create LLM instance based on configuration."""
-        from app.core.llm import create_llm
+    def _get_llm() -> LLMProvider:
+        """通过角色路由系统获取 LLM 实例。"""
+        from app.core.model_roles import get_role_llm
 
-        return create_llm(provider=settings.llm_provider)
+        # 获取 main 角色对应的 LLM 实例
+        return get_role_llm("main")
 
-    container.register(LLMProvider, _create_llm, alias="llm")
-    logger.debug(f"Registered LLM provider: {settings.llm_provider}")
+    container.register(LLMProvider, _get_llm, alias="llm")
+    logger.debug("Registered LLM provider via model_roles (main role)")
 
     # Embedding provider (factory)
     def _create_embeddings() -> EmbeddingProvider:

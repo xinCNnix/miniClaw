@@ -129,7 +129,7 @@ async def _extract_facts(text: str, logs: list) -> list[dict]:
     Returns a list of dicts with: text, confidence, layer, evidence, entity info.
     """
     try:
-        from app.core.llm import get_default_llm
+        from app.core.model_roles import get_role_llm
         from app.memory.engine.evidence_registry import MemoryEvidence
     except Exception as e:
         logs.append(f"[extract] LLM import failed: {e}")
@@ -152,7 +152,7 @@ Text:
 """ + text[:3000]
 
     try:
-        llm = get_default_llm()
+        llm = get_role_llm("main")
         response = await llm.ainvoke([{"role": "user", "content": prompt}])
         content = response.content.strip()
 

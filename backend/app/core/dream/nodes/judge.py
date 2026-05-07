@@ -20,6 +20,34 @@ from app.core.dream.prompts.judge import (
 
 logger = logging.getLogger(__name__)
 
+
+def _get_dream_llm(model_name: str = ""):
+    """获取 Dream 系统专用的 LLM 实例。
+
+    复用 main 角色的 base_url/api_key，覆盖 model 为指定模型名。
+    与 online_distill 的 _get_llm 采用相同模式。
+    """
+    from langchain_openai import ChatOpenAI
+    from app.core.model_roles import get_role_llm_config
+
+    if not model_name:
+        config = DreamConfig()
+        model_name = config.distiller_model
+
+    base_config = get_role_llm_config("main")
+    if not model_name:
+        model_name = base_config.model
+
+    logger.info(f"Dream Judge LLM 初始化: base_url={base_config.base_url}, model={model_name}")
+    return ChatOpenAI(
+        base_url=base_config.base_url,
+        api_key=base_config.api_key,
+        model=model_name,
+        temperature=0.1,
+        streaming=False,
+    )
+
+
 # Weight constants matching spec
 W_CORRECTNESS = 0.45
 W_EVIDENCE = 0.20
@@ -234,10 +262,18 @@ def _strip_code_fences(text: str) -> str:
 
 
 async def judge_node_async(state: DreamState) -> DreamState:
-    """Async version of judge node for LLM calls."""
+    """Async version of judge node — supports LLM/hybrid evaluation."""
     config = DreamConfig()
     judge_mode = config.judge_mode
     min_accept = state.get("min_accept_score", config.min_accept_score)
+
+    # 为 LLM/hybrid 模式创建 LLM 实例
+    llm = None
+    if judge_mode in ("llm", "hybrid"):
+        try:
+            llm = _get_dream_llm()
+        except Exception as e:
+            logger.warning(f"Dream judge LLM 创建失败，回退到 rule-based: {e}")
 
     scores: Dict[str, JudgeScore] = {}
     trajectories = state.get("dream_trajectories", [])
@@ -248,9 +284,9 @@ async def judge_node_async(state: DreamState) -> DreamState:
         if judge_mode == "rule":
             score = rule_based_judge(traj)
         elif judge_mode == "llm":
-            score = await llm_judge(traj, mutation_type=mutation_type)
+            score = await llm_judge(traj, llm=llm, mutation_type=mutation_type)
         else:  # hybrid
-            score = await hybrid_judge(traj, mutation_type=mutation_type)
+            score = await hybrid_judge(traj, llm=llm, mutation_type=mutation_type)
 
         score.accept = score.score_total >= min_accept and score.success
         if not score.accept and not score.reject_reason:

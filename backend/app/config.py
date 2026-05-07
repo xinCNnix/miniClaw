@@ -34,6 +34,7 @@ class LLMConfig:
     base_url: str
     api_key: str  # 仅在后端内存中使用，不发送到前端
     context_window: int = 128_000
+    service_type: str = "llm"  # "llm" | "asr" | "tts" | "ocr"
 
     def to_dict(self, include_api_key: bool = False) -> Dict[str, Any]:
         """转换为字典（前端显示时不包含 API Key）"""
@@ -44,6 +45,7 @@ class LLMConfig:
             "model": self.model,
             "base_url": self.base_url,
             "context_window": self.context_window,
+            "service_type": self.service_type,
         }
 
         if include_api_key:
@@ -132,7 +134,7 @@ class Settings(BaseSettings):
     # 仅在开发和调试时启用，生产环境务必保持为 false
     langchain_api_key: str = Field(default="", env="LANGCHAIN_API_KEY")
     langchain_tracing_v2: bool = False
-    langchain_project: str = "mini-openclaw"
+    langchain_project: str = "mini-claw"
 
     # File Paths
     base_dir: str = "."
@@ -369,9 +371,13 @@ class Settings(BaseSettings):
     }
 
     # Context Window Management
+    # 上下文窗口管理配置
+    # context_window_reserved_output: 预留给 LLM 输出的 token 数量
+    # compression_ratio: 压缩触发阈值（60%），当消息 token 占用超过此比例时触发首次压缩
+    # switch_ratio: 切换阈值（80%），当消息 token 占用超过此比例时触发 checkpoint
     context_window_reserved_output: int = 4000
-    context_window_trigger_ratio: float = 0.80
-    context_window_critical_ratio: float = 0.95
+    context_window_compression_ratio: float = 0.60
+    context_window_switch_ratio: float = 0.80
 
     # Memory System
     enable_memory_extraction: bool = True

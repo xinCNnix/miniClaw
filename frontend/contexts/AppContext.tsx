@@ -19,7 +19,7 @@ interface AppContextType {
   closeFile: () => void
 }
 
-const AppContext = createContext<AppContextType | undefined>(undefined)
+export const AppContext = createContext<AppContextType | undefined>(undefined)
 
 const LOCALE_STORAGE_KEY = 'app-locale'
 

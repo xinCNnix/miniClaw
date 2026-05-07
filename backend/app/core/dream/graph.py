@@ -22,22 +22,22 @@ def build_dream_subgraph() -> StateGraph:
     from app.core.dream.nodes.sampler import dream_sampler_node
     from app.core.dream.nodes.mutator import mutator_node
     from app.core.dream.nodes.executor import executor_node
-    from app.core.dream.nodes.judge import judge_node
-    from app.core.dream.nodes.distiller import distiller_node
-    from app.core.dream.nodes.skill_dedup import skill_dedup_node
+    from app.core.dream.nodes.judge import judge_node_async
+    from app.core.dream.nodes.distiller import distiller_node_async
+    from app.core.dream.nodes.skill_dedup import skill_dedup_node_async
     from app.core.dream.nodes.regression import regression_test_node
     from app.core.dream.nodes.memory_writer import memory_writer_node
 
     g = StateGraph(DreamState)
 
-    # Register all 9 nodes
+    # Register all 9 nodes (Judge/Distiller/Dedup 使用 async 版本以支持 LLM 调用)
     g.add_node("trajectory_store", trajectory_store_node)
     g.add_node("sampler", dream_sampler_node)
     g.add_node("mutator", mutator_node)
     g.add_node("executor", executor_node)
-    g.add_node("judge", judge_node)
-    g.add_node("distiller", distiller_node)
-    g.add_node("skill_dedup", skill_dedup_node)
+    g.add_node("judge", judge_node_async)
+    g.add_node("distiller", distiller_node_async)
+    g.add_node("skill_dedup", skill_dedup_node_async)
     g.add_node("regression_test", regression_test_node)
     g.add_node("memory_writer", memory_writer_node)
 

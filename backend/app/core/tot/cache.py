@@ -120,7 +120,7 @@ class ToolResultCache:
         """
         # Sort args for consistent hashing
         args_json = json.dumps(tool_args, sort_keys=True)
-        args_hash = hashlib.md5(args_json.encode()).hexdigest()[:8]
+        args_hash = hashlib.md5(args_json.encode()).hexdigest()[:16]
 
         return f"{tool_name}:{args_hash}"
 

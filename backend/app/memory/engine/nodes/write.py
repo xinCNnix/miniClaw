@@ -161,9 +161,9 @@ async def _check_conflicts(item: dict) -> dict | None:
         from app.core.database import get_db_session
         from sqlalchemy import text
 
-        async with get_db_session() as session:
+        with get_db_session() as session:
             # Find wiki pages with similar content (by tag or title overlap)
-            result = await session.execute(
+            result = session.execute(
                 text("SELECT page_id, title, summary, confidence FROM wiki_pages"),
             )
             pages = result.fetchall()
@@ -210,7 +210,7 @@ async def _resolve_conflict(item: dict, conflict_info: dict) -> None:
             from app.core.database import get_db_session
             from sqlalchemy import text
 
-            async with get_db_session() as session:
+            with get_db_session() as session:
                 session.execute(
                     text(
                         "UPDATE wiki_pages SET summary = :summary, "
@@ -252,6 +252,7 @@ async def _write_semantic(item: dict, settings) -> None:
 
             from app.memory.wiki.models import WikiPage
             page = WikiPage(
+                page_id="",
                 title=item.get("text", "")[:200],
                 summary=item.get("text", ""),
                 content=f"# {item.get('text', '')[:200]}\n\n## Summary\n{item.get('text', '')}\n",

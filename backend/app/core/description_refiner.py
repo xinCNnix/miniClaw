@@ -7,7 +7,7 @@ Uses LLM to refine skill descriptions into short, UI-friendly summaries.
 import re
 from typing import Optional
 from langchain_core.prompts import ChatPromptTemplate
-from app.core.llm import get_default_llm
+from app.core.model_roles import get_role_llm
 from app.config import get_settings
 
 
@@ -21,7 +21,7 @@ class DescriptionRefiner:
 
     def __init__(self):
         """Initialize the description refiner."""
-        self.llm = get_default_llm()
+        self.llm = get_role_llm("main")
         self._init_prompts()
 
     def _init_prompts(self):

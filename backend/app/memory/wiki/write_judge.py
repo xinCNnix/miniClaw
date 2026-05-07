@@ -26,10 +26,11 @@ class WikiWriteJudge:
         self._llm = None
 
     def _get_llm(self):
-        """Lazy-load the LLM."""
+        """延迟加载 LLM 实例（通过角色路由系统）。"""
         if self._llm is None:
-            from app.core.llm import get_default_llm
-            self._llm = get_default_llm()
+            from app.core.model_roles import get_role_llm
+            # 获取 main 角色对应的 LLM，用于 Wiki 写入决策
+            self._llm = get_role_llm("main")
         return self._llm
 
     async def judge(

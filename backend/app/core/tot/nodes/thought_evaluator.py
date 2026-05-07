@@ -166,8 +166,12 @@ def _select_with_subtree_diversity(
     candidates: List[Dict],
     beam_width: int,
     is_last_layer: bool,
+    min_per_beam: int = 2,
 ) -> List[Dict]:
-    """从候选中选择 top-B，确保子树多样性（最后一层除外）。"""
+    """从候选中选择 top-B，确保子树多样性（最后一层除外）。
+
+    中间层保证每个 beam 至少 min_per_beam 个子树入选。
+    """
     if is_last_layer:
         # 最后一层：纯粹按分数
         return candidates[:beam_width]
@@ -175,28 +179,27 @@ def _select_with_subtree_diversity(
     # 防御性排序：确保高分候选优先处理
     sorted_candidates = sorted(candidates, key=lambda c: c["path_score"], reverse=True)
 
-    unique_parents = len(set(c["parent_id"] for c in sorted_candidates))
-    max_per_parent = max(1, beam_width // max(1, unique_parents))
-    parent_count: Dict[str, int] = {}
-    selected = []
+    # 按 beam 分组
+    by_beam: Dict[int, List[Dict]] = {}
+    for c in sorted_candidates:
+        idx = c.get("parent_beam_idx", -1)
+        by_beam.setdefault(idx, []).append(c)
 
-    for cand in sorted_candidates:
-        pid = cand["parent_id"]
-        current_count = parent_count.get(pid, 0)
-        if current_count < max_per_parent:
-            selected.append(cand)
-            parent_count[pid] = current_count + 1
-            if len(selected) >= beam_width:
-                break
+    # 第一轮：每个 beam 保 top-min_per_beam 个
+    selected: List[Dict] = []
+    selected_ids: set = set()
+    for beam_idx, group in by_beam.items():
+        for cand in group[:min_per_beam]:
+            if id(cand["thought"]) not in selected_ids:
+                selected.append(cand)
+                selected_ids.add(id(cand["thought"]))
 
-    # 如果因多样性约束导致不足，从剩余候选中补充
-    if len(selected) < beam_width:
-        selected_ids = {id(s["thought"]) for s in selected}
-        remaining = [c for c in sorted_candidates if id(c["thought"]) not in selected_ids]
-        for cand in remaining:
-            selected.append(cand)
-            if len(selected) >= beam_width:
-                break
+    # 第二轮：剩余名额按分数全局分配
+    remaining = [c for c in sorted_candidates if id(c["thought"]) not in selected_ids]
+    for cand in remaining:
+        if len(selected) >= beam_width:
+            break
+        selected.append(cand)
 
     return selected[:beam_width]
 
@@ -225,6 +228,23 @@ async def _update_beam_selection(state: ToTState) -> None:
 
         state["active_beams"] = [[t.id] for t in selected]
         state["beam_scores"] = [t.evaluation_score or 0.0 for t in selected]
+
+        # 非最后一层：低分 thought 标记回溯而非剪枝
+        is_last_layer = current_depth >= max_depth - 1
+        if not is_last_layer:
+            backtrack_threshold = state.get("backtrack_score_threshold", 5.0)
+            low_score_beams = []
+            for i, thought in enumerate(selected):
+                score = thought.evaluation_score or 0.0
+                if score < backtrack_threshold:
+                    low_score_beams.append(i)
+                    logger.info(
+                        f"[Depth0-Backtrack] Beam {i} score {score:.2f} < {backtrack_threshold}, "
+                        f"marking for regeneration"
+                    )
+            if low_score_beams:
+                state["needs_regeneration"] = low_score_beams
+                state["backtrack_count"] = state.get("backtrack_count", 0) + len(low_score_beams)
     else:
         # Depth > 0: 收集所有活跃束尖端的新子节点 → B*k 候选
         candidates = []
@@ -285,6 +305,14 @@ async def _update_beam_selection(state: ToTState) -> None:
             state["needs_regeneration"] = beams_to_regenerate
             state["regenerate_count"] = state.get("regenerate_count", 0) + len(beams_to_regenerate)
             state["backtrack_count"] = state.get("backtrack_count", 0) + len(beams_to_regenerate)
+            # Save old beam paths for regeneration before filtering candidates
+            regenerated_beam_paths = {}
+            for bi in beams_to_regenerate:
+                if bi < len(active_beams):
+                    regenerated_beam_paths[bi] = {
+                        "beam": list(active_beams[bi]),
+                        "score": beam_scores[bi] if bi < len(beam_scores) else 0.0,
+                    }
             candidates = [c for c in candidates if c["parent_beam_idx"] not in beams_to_regenerate]
             for beam_idx in beams_to_regenerate:
                 state["reasoning_trace"].append({
@@ -335,6 +363,13 @@ async def _update_beam_selection(state: ToTState) -> None:
 
         state["active_beams"] = new_beams
         state["beam_scores"] = new_scores
+
+        # Re-insert old beam paths for beams marked for regeneration
+        # so the generator has valid parents to regenerate from
+        if beams_to_regenerate and regenerated_beam_paths:
+            for bi, info in regenerated_beam_paths.items():
+                new_beams.append(info["beam"])
+                new_scores.append(info["score"])
 
     # 同步更新 best_path（向后兼容）
     if state.get("active_beams"):
@@ -417,6 +452,114 @@ def _parse_batch_scores(content: str, thoughts: List[Thought]) -> Dict[str, Dict
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         logger.warning(f"Batch score parsing failed: {e}, returning empty map")
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Research mode: 6-dimension plan evaluation
+# ---------------------------------------------------------------------------
+
+async def _research_evaluate_thoughts(thoughts: List[Thought], state: ToTState) -> List[Dict]:
+    """Evaluate research plans using 6-dimension research evaluator prompt.
+
+    Scoring formula:
+      total = 0.30*coverage_gain + 0.25*evidence_quality
+            + 0.15*contradiction_resolution + 0.15*falsifiability
+            + 0.15*feasibility - 0.20*redundancy_penalty
+    """
+    if not thoughts:
+        return []
+
+    llm = state["llm"]
+    user_query = state["user_query"]
+
+    from app.core.tot.research.prompts import get_evaluator_prompt, parse_json_output
+    from app.core.tot.research.evidence_utils import format_evidence_for_prompt
+
+    candidate_plans = []
+    for i, t in enumerate(thoughts):
+        queries = []
+        for tc in (t.tool_calls or []):
+            args = tc.get("args", {})
+            if tc.get("name") == "search_kb" and args.get("query"):
+                queries.append(args["query"])
+
+        candidate_plans.append({
+            "plan_id": f"P{i + 1}",
+            "thought_id": t.id,
+            "goal": t.content,
+            "queries": queries,
+        })
+
+    candidate_plans_json = json.dumps(candidate_plans, ensure_ascii=False, indent=2)
+    evidence_summary = format_evidence_for_prompt(state.get("evidence_store", []))
+
+    prompt = get_evaluator_prompt(
+        user_query=user_query,
+        candidate_plans=candidate_plans_json,
+        evidence_summary=evidence_summary,
+    )
+
+    from app.core.tot.prompt_composer import compose_system_prompt
+    eval_system = compose_system_prompt(
+        base_system_prompt=state.get("system_prompt", ""),
+        node_role="evaluator",
+        domain_profile=state.get("domain_profile"),
+        tools=state.get("tools"),
+        prompt_level="analysis",
+    )
+
+    try:
+        response = await llm.ainvoke([
+            SystemMessage(content=eval_system),
+            HumanMessage(content=prompt),
+        ])
+
+        parsed = parse_json_output(response.content)
+        ranked_plans = parsed.get("ranked_plans", [])
+
+        scores_map: Dict[str, Dict] = {}
+        for item in ranked_plans:
+            pid = item.get("plan_id", "")
+            scores_map[pid] = {
+                "scores": item.get("scores", {}),
+                "total_score": item.get("total_score", 0.0),
+                "reason": item.get("reason", ""),
+            }
+
+        eval_scores = []
+        for i, thought in enumerate(thoughts):
+            plan_key = f"P{i + 1}"
+            plan_data = scores_map.get(plan_key, {})
+            scores = plan_data.get("scores", {})
+            total_score = plan_data.get("total_score", 0.0)
+
+            thought.evaluation_score = total_score
+            thought.criteria_scores = scores
+            thought.status = "evaluated"
+
+            eval_scores.append({
+                "thought_id": thought.id,
+                "score": total_score,
+                "criteria": scores,
+                "fatal_flaw": None,
+            })
+
+            logger.info(
+                f"[Research-Eval] {plan_key} ({thought.id}): "
+                f"total={total_score:.2f}, "
+                f"cov={scores.get('coverage_gain', 0):.1f}, "
+                f"qual={scores.get('evidence_quality', 0):.1f}, "
+                f"contra={scores.get('contradiction_resolution', 0):.1f}, "
+                f"falsify={scores.get('falsifiability', 0):.1f}, "
+                f"feas={scores.get('feasibility', 0):.1f}, "
+                f"redun={scores.get('redundancy_penalty', 0):.1f}"
+            )
+
+        return eval_scores
+
+    except Exception as e:
+        logger.error(f"Research evaluation failed: {e}, falling back to generic")
+        return await _batch_evaluate_thoughts(thoughts, state)
 
 
 async def _batch_evaluate_thoughts(thoughts: List[Thought], state: ToTState) -> List[Dict]:
@@ -575,8 +718,11 @@ async def thought_evaluator_node(state: ToTState) -> ToTState:
 
     eval_start = time.time()
 
-    # ---- 评估阶段 ----
-    if beam_width:
+    # ---- Research mode: use 6-dimension evaluator ----
+    task_mode = state.get("task_mode", "standard")
+    if task_mode == "research":
+        eval_scores = await _research_evaluate_thoughts(pending_thoughts, state)
+    elif beam_width:
         # Phase 2: 批量评估
         eval_scores = await _batch_evaluate_thoughts(pending_thoughts, state)
     else:

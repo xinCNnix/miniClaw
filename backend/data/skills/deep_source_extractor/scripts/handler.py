@@ -1,5 +1,7 @@
 import json
 import logging
+
+from app.core.perv.json_repair import repair_json_or_none
 from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
@@ -81,9 +83,8 @@ async def run(inputs: dict, context: dict) -> dict:
 
     resp = await llm.ainvoke([HumanMessage(content=prompt)])
 
-    try:
-        extracted = json.loads(resp.content)
-    except json.JSONDecodeError:
+    extracted = repair_json_or_none(resp.content)
+    if extracted is None:
         logger.warning("deep_source_extractor: LLM 输出非合法 JSON，降级返回原文")
         extracted = {
             "source_id": source_id,

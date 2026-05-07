@@ -410,10 +410,10 @@ SETTINGS_DEFINITIONS: List[SettingDefinition] = [
         default=False,
         group="memory",
         section="master_switches",
-        description_zh="实体画像",
-        description_en="Entity Profile",
-        tooltip_zh="自动构建用户和话题实体的画像档案（实验性）。",
-        tooltip_en="Automatically build profile archives for users and topic entities (experimental).",
+        description_zh="实体关系画像",
+        description_en="Entity & Relation Profiling",
+        tooltip_zh="自动识别对话中的实体（人名、地点、概念等），构建关系图谱，帮助 Agent 理解上下文关联（实验性）。",
+        tooltip_en="Automatically identify entities (people, places, concepts) in conversations and build relationship graphs to help Agent understand contextual connections (experimental).",
     ),
 
     # ===== Group: Memory — Extraction =====
@@ -1292,7 +1292,7 @@ SETTINGS_DEFINITIONS: List[SettingDefinition] = [
     SettingDefinition(
         key="langchain_project",
         type="str",
-        default="mini-openclaw",
+        default="mini-claw",
         group="logging",
         section="langsmith",
         description_zh="LangSmith 项目",

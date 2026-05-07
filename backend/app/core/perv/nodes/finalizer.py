@@ -11,10 +11,11 @@ import time
 from langchain_core.messages import HumanMessage
 
 from app.config import get_settings
-from app.core.llm import create_llm
+from app.core.model_roles import get_role_llm
 from app.core.llm_retry import retry_llm_call
 from app.core.perv.prompts import build_finalizer_prompt, extract_system_style
-from app.core.perv.pevr_logger import PEVRLogger, extract_token_usage
+from app.core.execution_trace.perv_trace import PEVRTrace as PEVRLogger
+from app.core.execution_trace.token_utils import extract_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,8 @@ async def finalizer_node(state: dict) -> dict:
             len(observations),
         )
 
-        # --- Call LLM ---
-        settings = get_settings()
-        provider = settings.llm_provider
-        llm = create_llm(provider)
+        # --- 通过角色路由获取 main 角色 LLM（最终输出是核心功能） ---
+        llm = get_role_llm("main")
 
         response = await retry_llm_call(
             coro_factory=lambda: llm.ainvoke([HumanMessage(content=prompt_text)]),

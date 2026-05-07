@@ -3,7 +3,7 @@ name: cluster_reduce_synthesis
 description: |
   将多个源的结构化提取结果，进行聚类合并压缩。
   输出 cluster summaries + contradictions + consensus。
-version: 1.0
+version: "1.0"
 dependencies: {}
 inputs:
   - extracted_list: list   # List[dict]，来自 deep_source_extractor

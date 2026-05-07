@@ -101,12 +101,14 @@ class MemoryManager:
                 logger.info(f"Updated long-term memory from session {session_id}")
 
             # Step 5: Write to Wiki (if enabled)
-            if self.settings.enable_wiki and extraction_result.memories:
+            # wiki 内部独立判断写入条件，不依赖 extraction_result.memories
+            if self.settings.enable_wiki:
                 await self.write_to_wiki(session_id, extraction_result)
                 logger.info(f"Wrote to Wiki from session {session_id}")
 
             # Step 6: Write to KG (if enabled)
-            if self.settings.enable_kg and extraction_result.memories:
+            # KG 内部独立判断写入条件，不依赖 extraction_result.memories
+            if self.settings.enable_kg:
                 await self.write_to_kg(session_id, extraction_result)
                 logger.info(f"Wrote to KG from session {session_id}")
 
@@ -301,7 +303,10 @@ class MemoryManager:
 
             # Anti-hallucination validation
             if self.settings.wiki_evidence_required:
-                await judge.validate_evidence(decision, conversation_text)
+                evidence_valid = await judge.validate_evidence(decision, conversation_text)
+                if not evidence_valid:
+                    logger.info("Wiki write skipped: evidence validation failed")
+                    return
 
             if decision.is_new_page:
                 # Create new page
@@ -362,7 +367,14 @@ class MemoryManager:
             if not conversation_text.strip():
                 return
 
-            pipeline = KGWritePipeline()
+            from app.memory.kg.extractor import KGExtractor
+            from app.memory.kg.entity_resolver import EntityResolver
+            from app.memory.kg.conflict_resolver import ConflictResolver
+
+            extractor = KGExtractor()
+            entity_resolver = EntityResolver(kg_store)
+            conflict_resolver = ConflictResolver(kg_store)
+            pipeline = KGWritePipeline(kg_store, extractor, entity_resolver, conflict_resolver)
             await pipeline.process_conversation(conversation_text, session_id)
             logger.info(f"KG write pipeline completed for session {session_id}")
 

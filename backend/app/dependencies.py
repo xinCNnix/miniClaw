@@ -60,7 +60,7 @@ async def get_agent_dependency():
         HTTPException: If agent initialization fails
     """
     from fastapi import HTTPException, status
-    from app.api.chat import get_agent_manager
+    from app.core.llm import get_agent_manager
 
     try:
         return get_agent_manager()

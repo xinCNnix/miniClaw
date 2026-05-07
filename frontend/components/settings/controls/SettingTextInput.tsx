@@ -9,9 +9,11 @@ import { useCallback } from "react"
 interface SettingTextInputProps {
   setting: SettingItem
   onChange: (key: string, value: string) => void
+  locale: "zh" | "en"
 }
 
-export function SettingTextInput({ setting, onChange }: SettingTextInputProps) {
+export function SettingTextInput({ setting, onChange, locale }: SettingTextInputProps) {
+  const label = locale === "zh" ? setting.description_zh : setting.description_en
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       onChange(setting.key, e.target.value)
@@ -23,9 +25,9 @@ export function SettingTextInput({ setting, onChange }: SettingTextInputProps) {
     <div className="py-2 space-y-1">
       <div className="flex items-center gap-2">
         <Label htmlFor={setting.key} className="text-sm font-medium">
-          {setting.description_zh}
+          {label}
         </Label>
-        <SettingTooltip tooltip_zh={setting.tooltip_zh} tooltip_en={setting.tooltip_en} />
+        <SettingTooltip setting={setting} locale={locale} />
       </div>
       <Input
         id={setting.key}

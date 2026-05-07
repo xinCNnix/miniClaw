@@ -15,7 +15,7 @@ interface UseChatReturn {
   thinkingEvents: ThinkingEvent[]
   isLoading: boolean
   currentSessionId: string | null
-  sendMessage: (content: string, images?: any[], context?: Record<string, any>) => Promise<void>
+  sendMessage: (content: string, attachments?: any[], context?: Record<string, any>) => Promise<void>
   stopGeneration: () => void
   clearMessages: () => void
   loadMessages: (messages: Message[]) => void
@@ -58,18 +58,22 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   const [isLoading, setIsLoading] = useState(false)
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const currentRunIdRef = useRef<string | null>(null)
 
-  const sendMessage = useCallback(async (content: string, images: any[] = [], context: Record<string, any> = {}) => {
+  const sendMessage = useCallback(async (content: string, attachments: any[] = [], context: Record<string, any> = {}) => {
+    const mappedAttachments = attachments.map(att => ({
+      type: att.category || 'image',
+      content: att.base64,
+      mime_type: att.file.type,
+      filename: att.filename || att.file.name,
+    }))
+
     // Add user message
     const userMessage: Message = {
       role: "user",
       content,
       timestamp: new Date().toISOString(),
-      ...(images.length > 0 && { images: images.map(img => ({
-        type: "image",
-        content: img.base64,
-        mime_type: img.file.type,
-      })) }),
+      ...(mappedAttachments.length > 0 && { attachments: mappedAttachments }),
     }
     setMessages((prev) => [...prev, userMessage])
 
@@ -86,11 +90,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         session_id: currentSessionId || "default",
         stream: true,
         context: Object.keys(context).length > 0 ? context : undefined,
-        ...(images.length > 0 && { images: images.map(img => ({
-          type: "image",
-          content: img.base64,
-          mime_type: img.file.type,
-        })) }),
+        ...(mappedAttachments.length > 0 && { attachments: mappedAttachments }),
       }
 
       let assistantContent = ""
@@ -467,6 +467,23 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   setCurrentSessionId(sessionId)
                   break
 
+                case "run_id":
+                  currentRunIdRef.current = data.run_id
+                  break
+
+                case "cancelled":
+                  console.warn(`Run cancelled: ${data.reason}`)
+                  setIsLoading(false)
+                  abortControllerRef.current = null
+                  currentRunIdRef.current = null
+                  setMessages(prev => [...prev, {
+                    id: `cancelled-${Date.now()}`,
+                    role: 'assistant',
+                    content: `[执行已取消: ${data.reason}]`,
+                    timestamp: new Date().toISOString(),
+                  }])
+                  return
+
                 case "error":
                   throw new Error(data.error || "Unknown error")
 
@@ -474,6 +491,121 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   if (data.generated_images && data.generated_images.length > 0) {
                     appendImagesDedup(collectedImages, data.generated_images)
                   }
+                  // Also emit as thinkingEvent for PervCard
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_execution_complete",
+                      steps_completed: data.steps_completed ?? 0,
+                      parallel: data.parallel ?? false,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                // PERV SSE events (backend uses pevr_ / perv_ mixed prefixes)
+                case "pevr_start":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    { type: "perv_start", timestamp: new Date().toISOString() },
+                  ])
+                  break
+
+                case "perv_router_decision":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_router_decision",
+                      decision: data.decision ?? data,
+                      duration_ms: data.duration_ms ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "pevr_planning":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_planning",
+                      plan: data.plan ?? [],
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "pevr_layer_start":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_layer_start",
+                      layers: data.layers ?? [],
+                      total_steps: data.total_steps ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "pevr_step_complete":
+                  // Dedup by step_id — keep only latest per step
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(
+                      e => !(e.type === 'perv_step_complete' && (e as any).step_id === data.step_id)
+                    )
+                    return [...filtered, {
+                      type: "perv_step_complete",
+                      step_id: data.step_id ?? "",
+                      status: data.status ?? "pending",
+                      tool: data.tool ?? "",
+                      timestamp: new Date().toISOString(),
+                    }]
+                  })
+                  break
+
+                case "pevr_verification":
+                  // Replace — keep only latest verification
+                  setThinkingEvents((prev) => {
+                    const filtered = prev.filter(e => e.type !== 'perv_verification')
+                    return [...filtered, {
+                      type: "perv_verification",
+                      report: data.report ?? { verdict: "unknown", confidence: 0, checks: [] },
+                      timestamp: new Date().toISOString(),
+                    }]
+                  })
+                  break
+
+                case "pevr_replan":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_replan",
+                      retry_count: data.retry_count ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "perv_skill_policy":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_skill_policy",
+                      matched: data.matched ?? 0,
+                      compiled: data.compiled ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
+                  break
+
+                case "perv_summarized":
+                  setThinkingEvents((prev) => [
+                    ...prev,
+                    {
+                      type: "perv_summarized",
+                      summary_count: data.summary_count ?? 0,
+                      timestamp: new Date().toISOString(),
+                    },
+                  ])
                   break
 
                 case "done":
@@ -548,10 +680,20 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   }, [currentSessionId, apiUrl, onError])
 
   const stopGeneration = useCallback(() => {
+    if (currentRunIdRef.current) {
+      const runId = currentRunIdRef.current
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8002'
+      fetch(`${baseUrl}/api/chat/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_id: runId }),
+      }).catch(e => console.error('Cancel request failed:', e))
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
       abortControllerRef.current = null
     }
+    currentRunIdRef.current = null
     setIsLoading(false)
   }, [])
 
@@ -581,7 +723,8 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         content: msg.content,
         timestamp: msg.timestamp,
         ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
-        ...(msg.images && { images: msg.images }),
+        ...(msg.attachments && { attachments: msg.attachments }),
+        ...(msg.images && !msg.attachments && { attachments: msg.images }),
         ...(msg.generated_images && { generated_images: msg.generated_images }),
       }))
 

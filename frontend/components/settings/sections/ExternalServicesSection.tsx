@@ -6,8 +6,10 @@ import type { ExternalService } from "@/types/config"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Key, Check, X } from "lucide-react"
+import { useApp } from "@/contexts/AppContext"
 
 export function ExternalServicesSection() {
+  const { locale } = useApp()
   const [services, setServices] = useState<ExternalService[]>([])
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [keyValue, setKeyValue] = useState("")
@@ -24,14 +26,20 @@ export function ExternalServicesSection() {
     setServices(res.services)
   }
 
+  const isZh = locale === "zh"
+
   return (
     <div className="space-y-4">
       {services.map((svc) => (
         <div key={svc.key} className="flex items-center gap-3 py-2">
-          <Key className="h-4 w-4 text-muted-foreground shrink-0" />
+          <Key className="h-4 w-4 text-gray-400 shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium">{svc.name_zh}</div>
-            <div className="text-xs text-muted-foreground">{svc.description_zh}</div>
+            <div className="text-sm font-medium">
+              {isZh ? svc.name_zh : svc.name_en}
+            </div>
+            <div className="text-xs text-gray-400">
+              {isZh ? svc.description_zh : svc.description_en}
+            </div>
           </div>
           {editingKey === svc.key ? (
             <div className="flex items-center gap-2">
@@ -39,7 +47,7 @@ export function ExternalServicesSection() {
                 type="password"
                 value={keyValue}
                 onChange={(e) => setKeyValue(e.target.value)}
-                placeholder="输入 API Key"
+                placeholder={isZh ? "输入 API Key" : "Enter API Key"}
                 className="w-48"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleSave(svc.key)
@@ -57,13 +65,15 @@ export function ExternalServicesSection() {
             <div className="flex items-center gap-2">
               {svc.has_key ? (
                 <span className="text-xs text-green-600 flex items-center gap-1">
-                  <Check className="h-3 w-3" /> 已配置
+                  <Check className="h-3 w-3" /> {isZh ? "已配置" : "Configured"}
                 </span>
               ) : (
-                <span className="text-xs text-muted-foreground">未配置</span>
+                <span className="text-xs text-gray-400">{isZh ? "未配置" : "Not configured"}</span>
               )}
-              <Button size="sm" variant="outline" onClick={() => setEditingKey(svc.key)}>
-                {svc.has_key ? "更换" : "配置"}
+              <Button size="sm" variant="secondary" onClick={() => setEditingKey(svc.key)}>
+                {svc.has_key
+                  ? (isZh ? "更换" : "Update")
+                  : (isZh ? "配置" : "Configure")}
               </Button>
             </div>
           )}

@@ -17,10 +17,33 @@ logger = logging.getLogger(__name__)
 
 
 def _get_llm(model_name: str):
-    """Get LLM instance for distillation."""
-    from app.core.llm import get_llm
+    """获取蒸馏专用的 LLM 实例。
 
-    return get_llm(model_name)
+    复用 main 角色的 base_url/api_key，但覆盖 model 为蒸馏专用模型名称。
+    通过 get_role_llm_config 获取原始配置（而非 LLM 实例），
+    以便构造自定义参数的 ChatOpenAI 实例。
+
+    Args:
+        model_name: 蒸馏目标模型名称
+
+    Returns:
+        ChatOpenAI: 配置了蒸馏模型参数的 LLM 实例
+    """
+    from langchain_openai import ChatOpenAI
+    from app.core.model_roles import get_role_llm_config
+
+    # 获取 main 角色的原始 LLM 配置（base_url/api_key）
+    base_config = get_role_llm_config("main")
+    logger.info(
+        f"蒸馏 LLM 初始化: base_url={base_config.base_url}, model={model_name}"
+    )
+    return ChatOpenAI(
+        base_url=base_config.base_url,
+        api_key=base_config.api_key,
+        model=model_name,
+        temperature=0.1,
+        streaming=False,
+    )
 
 
 def _parse_skill_json(content: str) -> Optional[Dict]:

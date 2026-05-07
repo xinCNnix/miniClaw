@@ -14,7 +14,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import get_settings
-from app.core.llm import get_default_llm
+from app.core.model_roles import get_role_llm
 from app.memory.kg.models import KGTriple
 from app.memory.kg.prompts import (
     MEMORY_CLASSIFY_PROMPT,
@@ -54,7 +54,7 @@ class KGExtractor:
         llm: BaseChatModel | None = None,
         max_retries: int = 2,
     ) -> None:
-        self.llm: BaseChatModel = llm or get_default_llm()
+        self.llm: BaseChatModel = llm or get_role_llm("main")
         self.max_retries = max_retries
 
     # ------------------------------------------------------------------

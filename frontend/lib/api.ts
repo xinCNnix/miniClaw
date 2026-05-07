@@ -7,6 +7,7 @@ import type {
   Session,
   SessionListResponse
 } from '@/types/api';
+import type { RoleInfo, Capabilities } from '@/types/model-roles';
 import type {
   KBDocument,
   KBDocumentListResponse,
@@ -743,6 +744,59 @@ export class APIClient {
       throw new Error(`Failed to delete LLM: ${error}`);
     }
 
+    return response.json();
+  }
+
+  // ========== Model Roles ==========
+
+  /**
+   * 获取所有角色定义和绑定状态
+   */
+  async listRoles(): Promise<{ roles: RoleInfo[] }> {
+    const response = await fetch(`${this.baseUrl}/api/config/roles`);
+    if (!response.ok) {
+      throw new Error(`Failed to list roles: ${await response.text()}`);
+    }
+    return response.json();
+  }
+
+  /**
+   * 绑定 LLM 到角色（有序优先级列表）
+   */
+  async bindRole(roleId: string, llmIds: string[]): Promise<{ success: boolean; role_id: string }> {
+    const response = await fetch(`${this.baseUrl}/api/config/roles/${roleId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ llm_ids: llmIds }),
+    });
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Failed to bind role: ${error}`);
+    }
+    return response.json();
+  }
+
+  /**
+   * 解除角色绑定
+   */
+  async unbindRole(roleId: string): Promise<{ success: boolean }> {
+    const response = await fetch(`${this.baseUrl}/api/config/roles/${roleId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to unbind role: ${await response.text()}`);
+    }
+    return response.json();
+  }
+
+  /**
+   * 查询已启用的能力（用于条件渲染）
+   */
+  async getCapabilities(): Promise<Capabilities> {
+    const response = await fetch(`${this.baseUrl}/api/config/capabilities`);
+    if (!response.ok) {
+      throw new Error(`Failed to get capabilities: ${await response.text()}`);
+    }
     return response.json();
   }
 

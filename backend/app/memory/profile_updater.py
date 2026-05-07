@@ -13,7 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.models.memory import Memory
-from app.core.llm import get_default_llm
+from app.core.model_roles import get_role_llm
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ class UserProfileUpdater:
         Args:
             llm: Optional LLM instance. If not provided, uses default LLM.
         """
-        self.llm = llm or get_default_llm()
+        self.llm = llm or get_role_llm("main")
         self.settings = get_settings()
         self.user_md_path = Path(self.settings.workspace_dir) / "USER.md"
 

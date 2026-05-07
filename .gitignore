@@ -275,6 +275,9 @@ test_results.txt
 # Playwright MCP
 .playwright-mcp/
 
+# Trained model weights (recreated by training)
+*.pth
+
 # Runtime / generated data
 backend/data/*.csv
 backend/data/*.svg

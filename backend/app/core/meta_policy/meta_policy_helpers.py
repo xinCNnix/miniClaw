@@ -82,7 +82,7 @@ def get_meta_policy_decision(
 
         # 通过 scheduler 获取策略建议 (含渐进比例控制)
         meta_advice = scheduler.get_meta_policy_advice(
-            nn_model, state_vec, None, tool_index_map, skill_index_map
+            nn_model, state_vec, None, tool_index_map, skill_index_map, prompt_decoder=None
         )
 
         if not meta_advice:
@@ -128,6 +128,8 @@ def get_meta_policy_decision(
             action_type.value, tool_suggestion, skill_suggestion,
             confidence, stage, strategy_type,
         )
+
+        scheduler._last_strategy_type = strategy_type
 
         return {
             "injection_text": injection_text,

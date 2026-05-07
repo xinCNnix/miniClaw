@@ -18,8 +18,10 @@ interface ThoughtNode {
   content: string
   parent_id?: string
   score?: number
-  status: 'pending' | 'evaluated' | 'selected' | 'pruned'
+  status: 'pending' | 'evaluated' | 'selected' | 'pruned' | 'executing' | 'done'
+  skill_name?: string
   tool_calls?: Array<{ name: string; args: Record<string, unknown> }>
+  tool_statuses?: Array<{ tool: string; status: string }>
   children: ThoughtNode[]
 }
 
@@ -71,7 +73,7 @@ const ThoughtTreeInner = ({ events, maxHeight = '400px', 'data-testid': testId }
                 {idx + 1}
               </span>
               <span className="flex-1 text-gray-700 truncate">{truncateText(node.content, 80)}</span>
-              <ToolBadge toolCalls={node.tool_calls} t={t} />
+              <ToolBadge toolCalls={node.tool_calls} skillName={node.skill_name} toolStatuses={node.tool_statuses} />
               {node.score != null && <ScoreBadge score={node.score} />}
             </div>
           ))}
@@ -103,7 +105,7 @@ const ThoughtTreeInner = ({ events, maxHeight = '400px', 'data-testid': testId }
           const isBest = bestPathSet.has(node.id)
           const isActive = activeBeamSet.has(node.id)
           return (
-            <ThoughtCard key={node.id} node={node} isBest={isBest} isActive={isActive} t={t} />
+            <ThoughtCard key={node.id} node={node} isBest={isBest} isActive={isActive} />
           )
         })}
       </div>
@@ -132,7 +134,7 @@ function Header({ step, total, label, labelKey }: { step: number; total: number;
           ))}
         </div>
         <span className="text-xs font-medium text-green-800">
-          Step {step}/{total}
+          Depth {step - 1}/{total}
         </span>
       </div>
       <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -164,7 +166,8 @@ function Breadcrumb({ history }: { history: ThoughtNode[] }) {
   )
 }
 
-function ThoughtCard({ node, isBest, isActive, t }: { node: ThoughtNode; isBest: boolean; isActive: boolean; t: (key: string, params?: Record<string, string | number>) => string }) {
+function ThoughtCard({ node, isBest, isActive }: { node: ThoughtNode; isBest: boolean; isActive: boolean }) {
+  const { t } = useTranslation()
   return (
     <div
       className={`rounded-lg bg-white/80 p-3 transition-all ${
@@ -187,7 +190,7 @@ function ThoughtCard({ node, isBest, isActive, t }: { node: ThoughtNode; isBest:
 
       {/* Row 2: tool badge + score */}
       <div className="flex items-center gap-2 mt-2">
-        <ToolBadge toolCalls={node.tool_calls} t={t} />
+        <ToolBadge toolCalls={node.tool_calls} skillName={node.skill_name} toolStatuses={node.tool_statuses} />
         {node.score != null ? (
           <ScoreBadge score={node.score} />
         ) : (
@@ -198,20 +201,32 @@ function ThoughtCard({ node, isBest, isActive, t }: { node: ThoughtNode; isBest:
   )
 }
 
-function ToolBadge({ toolCalls, t }: { toolCalls?: ThoughtNode['tool_calls']; t: (key: string, params?: Record<string, string | number>) => string }) {
+function ToolBadge({ toolCalls, skillName, toolStatuses }: {
+  toolCalls?: ThoughtNode['tool_calls']
+  skillName?: string
+  toolStatuses?: ThoughtNode['tool_statuses']
+}) {
   if (!toolCalls || toolCalls.length === 0) return null
+
+  const hasError = toolStatuses?.some(ts => ts.status === 'error')
+  const hasSuccess = toolStatuses?.some(ts => ts.status === 'success')
+  const label = skillName || toolCalls[0].name
 
   if (toolCalls.length === 1) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-mono">
-        {toolCalls[0].name}
+      <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-mono ${
+        hasError ? 'bg-red-50 text-red-700' : hasSuccess ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-700'
+      }`}>
+        {hasError ? '✗' : hasSuccess ? '✓' : '○'} {label}
       </span>
     )
   }
 
   return (
-    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-mono">
-      {t('thought_tree.tools', { count: toolCalls.length })}
+    <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-mono ${
+      hasError ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'
+    }`}>
+      {skillName || `${toolCalls.length} tools`}
     </span>
   )
 }

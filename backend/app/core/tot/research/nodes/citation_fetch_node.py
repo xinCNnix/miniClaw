@@ -69,7 +69,11 @@ async def citation_fetch_node(state: ToTState) -> Dict:
 
     if not targets:
         logger.debug("citation_fetch_node: no citation targets, skipping")
-        return {}
+        chase_rounds = int(state.get("citation_chase_rounds", 0)) + 1
+        return {
+            "citation_chase_rounds": chase_rounds,
+            "research_sub_rounds": state.get("research_sub_rounds", 0) + 1,
+        }
 
     tools: List[BaseTool] = state.get("tools") or []
     existing_sources: List[Dict] = state.get("raw_sources") or []
@@ -147,6 +151,7 @@ async def citation_fetch_node(state: ToTState) -> Dict:
         "raw_sources": combined_sources,
         "citation_chase_rounds": chase_rounds,
         "citation_targets": [],  # Clear targets after fetching
+        "research_sub_rounds": state.get("research_sub_rounds", 0) + 1,
     }
 
 
@@ -283,12 +288,14 @@ def _build_tool_args(tool_name: str, query: str, source_type: str) -> Dict:
         Dict of tool arguments.
     """
     if tool_name == "arxiv-search":
-        # 通过 terminal 工具直接执行 arxiv_search.py 脚本
         escaped_query = query.replace('"', '\\"')
         return {
             "command": (
                 f'python data/skills/arxiv-search/scripts/arxiv_search.py'
-                f' --query "{escaped_query}" --max-results 3'
+                f' --query "{escaped_query}"'
+                f' --max-results 15'
+                f' --sort-by submittedDate'
+                f' --order descending'
             )
         }
     elif tool_name in ("web_search", "search"):

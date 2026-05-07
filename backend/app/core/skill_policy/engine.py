@@ -12,8 +12,11 @@ The ``run_skill_policy`` function is the unified entry point.  Each mode
 PolicyOutput.
 """
 
+import asyncio
 import json
 import logging
+import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +29,11 @@ from .types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def get_python_command() -> str:
+    return sys.executable or "python"
+
 
 # Default tool whitelist for GUARD stage
 _DEFAULT_GUARD_TOOLS = frozenset({
@@ -46,9 +54,9 @@ _DEFAULT_GUARD_CONFIG = {
 # headroom so multi-skill plans and skills without keyword catalogs are
 # not accidentally blocked.
 _STATUS_THRESHOLDS = {
-    "stable":      {"min_sim": 0.50},
-    "candidate":   {"min_sim": 0.65, "min_confidence": 0.7},
-    "provisional": {"min_sim": 0.75, "min_confidence": 0.6, "require_success": True},
+    "stable":      {"min_sim": 0.35},
+    "candidate":   {"min_sim": 0.50, "min_confidence": 0.7},
+    "provisional": {"min_sim": 0.65, "min_confidence": 0.6, "require_success": True},
 }
 
 # Phase 2: policy_score formula weights (docs/skill节点.md Section 3)
@@ -537,7 +545,7 @@ def _load_skill_content(skill_name: str) -> Optional[str]:
 
 
 _COMPILE_SYSTEM_PROMPT = """\
-You are a Tool Policy Compiler. You MUST output a JSON tool_plan only — no markdown, no commentary.
+You are a Tool Policy Compiler. You MUST output a JSON tool_plan only — no markdown, no commentary, no Chinese text.
 
 RULES:
 - Only use tools from the [AVAILABLE_TOOLS] list.
@@ -545,10 +553,15 @@ RULES:
 - Output a JSON array. Nothing else.
 - Never exceed [MAX_TOOL_CALLS] total tool calls.
 - Each tool call should serve the [STEP_INTENT] purpose.
+- 禁止输出任何中文解释，只输出纯 JSON 数组。
+
+OUTPUT FORMAT (MANDATORY):
+Output ONLY a raw JSON array. No markdown fences. No explanation.
+Example: [{{"tool": "python_repl", "args": {{"code": "import importlib.util\\n..."}}}}]
 
 TYPE-SPECIFIC RULES:
 - For **instruction** type: Read the skill instructions carefully. Generate the ACTUAL tool calls described in the instructions, with parameters extracted from the user query. For example, if the skill says to run a curl command, generate a terminal tool call with that curl command. NEVER output read_file — that step is already done.
-- For **script** type: generate a `terminal` command running the correct Python script with correct arguments extracted from the user query.
+- For **script** type: generate a `terminal` command running the correct Python script with correct arguments extracted from the user query. Use `python` (not `python3`) for the command.
 - For **module** type: generate `python_repl` code that uses importlib to load handler.py and calls run() with properly extracted parameters.
 - For **handler_module** type: generate `python_repl` code that uses importlib to load handler.py and calls the correct function with parameters extracted from the user query.
 
@@ -577,6 +590,10 @@ def _parse_tool_plan_json(raw: str) -> Optional[List[Dict[str, Any]]]:
         text = text.split("\n", 1)[-1]
     if text.endswith("```"):
         text = text.rsplit("```", 1)[0]
+    text = text.strip()
+    # Strip JavaScript-style comments (LLM sometimes adds these)
+    text = re.sub(r"(?<!:)//.*?$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     text = text.strip()
 
     try:
@@ -630,25 +647,44 @@ async def _llm_compile(
     )
     user_msg = _COMPILE_USER_PROMPT.format(
         user_query=user_query,
-        skill_content=skill_content[:6000],  # truncate to stay within context
+        skill_content=skill_content[:10000],  # truncate to stay within context
     )
 
     logger.info("SkillPolicy COMPILE: '%s' (%s) → calling LLM", skill_name, skill_type)
 
-    response = await llm.ainvoke([
-        SystemMessage(content=system_msg),
-        HumanMessage(content=user_msg),
-    ])
+    # Bind response_format to force JSON output (provider-dependent)
+    compile_llm = llm
+    try:
+        compile_llm = llm.bind(response_format={"type": "json_object"})
+    except Exception:
+        pass  # Provider may not support response_format
 
-    raw = response.content.strip()
-    parsed = _parse_tool_plan_json(raw)
+    max_retries = 2
+    for attempt in range(1, max_retries + 1):
+        response = await compile_llm.ainvoke([
+            SystemMessage(content=system_msg),
+            HumanMessage(content=user_msg),
+        ])
+
+        raw = response.content.strip()
+        parsed = _parse_tool_plan_json(raw)
+
+        if parsed:
+            break
+
+        logger.warning(
+            "SkillPolicy COMPILE: '%s' attempt %d/%d invalid JSON: %s",
+            skill_name, attempt, max_retries, raw[:200],
+        )
+        if attempt < max_retries:
+            await asyncio.sleep(0.5)
 
     if not parsed:
         logger.warning(
-            "SkillPolicy COMPILE: LLM returned invalid JSON for '%s': %s",
-            skill_name, raw[:200],
+            "SkillPolicy COMPILE: LLM returned invalid JSON for '%s' after %d attempts: %s",
+            skill_name, max_retries, raw[:200],
         )
-        raise RuntimeError(f"LLM compile failed for {skill_name}: invalid JSON output")
+        raise RuntimeError(f"LLM compile failed for {skill_name}: invalid JSON output after {max_retries} attempts")
 
     # Tag each step with source metadata for guard validation
     for step in parsed:
@@ -787,7 +823,7 @@ def _remap_args(
                 "Guard _remap_args: saved LLM code to %s, running via terminal",
                 temp_script,
             )
-            return {"command": f'python "{temp_script}"'}
+            return {"command": f'"{get_python_command()}" "{temp_script}"'}
 
         # No usable python_repl code — fall back to running the skill's main script
         script_path = _find_main_script(skill_name)
@@ -800,7 +836,7 @@ def _remap_args(
             return {"command": cmd}
         except Exception as e:
             logger.warning("Guard _remap_args: build_cli_command failed: %s", e)
-            return {"command": f"python {script_path}"}
+            return {"command": f'"{get_python_command()}" {script_path}'}
 
     if skill_type == "handler_module":
         skills_dir = _get_skills_dir()
@@ -808,10 +844,11 @@ def _remap_args(
 
         # Build importlib preamble to load handler.py
         importlib_preamble = (
-            "import importlib.util\n"
+            "import importlib.util, asyncio\n"
             f"spec = importlib.util.spec_from_file_location('handler', r'{handler_path}')\n"
             "mod = importlib.util.module_from_spec(spec)\n"
             "spec.loader.exec_module(mod)\n"
+            "_call = lambda fn, *a, **kw: asyncio.run(fn(*a, **kw)) if asyncio.iscoroutinefunction(fn) else fn(*a, **kw)\n"
         )
 
         code = current_args.get("code", "")
@@ -829,11 +866,15 @@ def _remap_args(
             code = re.sub(r'^import handler\n?', '', code, flags=re.MULTILINE)
             # Replace handler.xxx references with mod.xxx
             code = re.sub(r'\bhandler\.', 'mod.', code)
+            # Wrap async handler calls: mod.run(...) → _call(mod.run, ...)
+            code = re.sub(r'\bmod\.run\(', '_call(mod.run, ', code)
             # Build alias assignments: draw = mod.draw
             aliases = "\n".join(f"{n} = mod.{n}" for n in imported_names) + "\n" if imported_names else ""
-            # Escape backslashes in LLM code to prevent Python string escapes
-            # corrupting LaTeX (e.g. \times → tab+imes, \frac → formfeed+rac)
-            code = code.replace('\\', '\\\\')
+            # NOTE: Disabled backslash escaping — too fragile for code containing
+            # LaTeX.  The LLM is responsible for correct Python string escaping;
+            # handler.py's _safe_text() catches mathtext parse failures.
+            # if "r'" not in code and 'r"' not in code:
+            #     code = re.sub(r'\\(?=[tnrfvba xuU0-7])', r'\\\\', code)
             code = importlib_preamble + "\n" + aliases + code
         else:
             # No usable code from LLM — inject discovery template as fallback
@@ -862,24 +903,26 @@ def _remap_args(
             code = re.sub(r'^import handler\n?', '', code, flags=re.MULTILINE)
             code = re.sub(r'\bhandler\.', 'mod.', code)
             importlib_preamble = (
-                "import importlib.util\n"
+                "import importlib.util, asyncio\n"
                 f"spec = importlib.util.spec_from_file_location('handler', r'{handler_path}')\n"
                 "mod = importlib.util.module_from_spec(spec)\n"
                 "spec.loader.exec_module(mod)\n"
+                "_call = lambda fn, *a, **kw: asyncio.run(fn(*a, **kw)) if asyncio.iscoroutinefunction(fn) else fn(*a, **kw)\n"
             )
             aliases = "\n".join(f"{n} = mod.{n}" for n in imported_names) + "\n" if imported_names else ""
             code = code.replace('\\', '\\\\')
             return {"code": importlib_preamble + "\n" + aliases + code}
 
         if not code:
-            # No code at all — inject run() template
+            # No code at all — inject run() template (async-safe)
             code = (
-                "import importlib.util\n"
+                "import importlib.util, asyncio\n"
                 f"spec = importlib.util.spec_from_file_location('handler', r'{handler_path}')\n"
                 "mod = importlib.util.module_from_spec(spec)\n"
                 "spec.loader.exec_module(mod)\n"
-                f"result = mod.run(inputs={{'query': {user_query!r}}}, context={{}})\n"
-                "print(result)"
+                f"_r = mod.run(inputs={{'query': {user_query!r}}}, context={{}})\n"
+                "if asyncio.iscoroutine(_r): _r = asyncio.run(_r)\n"
+                "print(_r)"
             )
             return {"code": code}
         return {"code": code}
@@ -936,6 +979,40 @@ def guard_compiled_plan(
                     skill_type, skill_name or "",
                     plan.get("args", {}), user_query,
                 )
+        elif skill_type == "script" and actual_tool == "terminal":
+            # Tool is correct but LLM may use wrong field name or wrong path.
+            args = plan.get("args", {})
+            needs_fix = False
+
+            # Fix 1: 'code' → 'command' (terminal expects 'command')
+            if "code" in args and "command" not in args:
+                args = {"command": args["code"]}
+                needs_fix = True
+
+            # Fix 2: correct script path (LLM often omits 'data/' prefix)
+            cmd = args.get("command", "")
+            correct_script = _find_main_script(skill_name)
+            if correct_script and correct_script not in cmd:
+                # LLM used wrong path, rebuild command with correct script
+                from app.core.tot.skill_orchestrator import build_cli_command
+                try:
+                    args = {"command": build_cli_command(correct_script, user_query)}
+                except Exception:
+                    args = {"command": f'"{get_python_command()}" {correct_script}'}
+                needs_fix = True
+
+            if needs_fix:
+                logger.info(
+                    "Guard ARGS-CORRECT: '%s' script — fixed terminal args",
+                    skill_name,
+                )
+                plan["args"] = args
+
+        # Restore metadata for downstream (skill name display, executor propagation)
+        if skill_type:
+            plan["_source_skill_type"] = skill_type
+        if skill_name:
+            plan["_source_skill_name"] = skill_name
 
     # 2. Standard checks on the (now-corrected) plan
     for plan in tool_plans:
@@ -958,25 +1035,41 @@ def guard_compiled_plan(
             f"Tool plan exceeds max_tool_calls: {len(tool_plans)} > {config['max_tool_calls']}"
         )
 
-    # Duplicate tool call detection
+    # Duplicate tool call detection — auto-fix by removing duplicates
     if config["detect_dead_loop"]:
         seen_calls: set = set()
+        deduped_plans: List[Dict[str, Any]] = []
+        dup_count = 0
         for plan in tool_plans:
             call_sig = _tool_call_signature(plan)
             if call_sig in seen_calls:
-                issues.append(f"Duplicate tool call detected: {call_sig}")
-            seen_calls.add(call_sig)
+                dup_count += 1
+                logger.info("Guard DEDUP: removing duplicate call %s", call_sig[:80])
+            else:
+                seen_calls.add(call_sig)
+                deduped_plans.append(plan)
+        if dup_count:
+            logger.info("Guard DEDUP: removed %d duplicate call(s), %d remaining", dup_count, len(deduped_plans))
+            tool_plans = deduped_plans
 
-    # Duplicate URL detection
+    # Duplicate URL detection — auto-fix by removing duplicates
     if config["detect_duplicate_url"]:
         urls: List[str] = []
+        url_deduped: List[Dict[str, Any]] = []
+        dup_url_count = 0
         for plan in tool_plans:
             args = plan.get("args", {})
             url = args.get("url") or args.get("address", "")
             if url:
                 if url in urls:
-                    issues.append(f"Duplicate URL in tool plan: {url}")
+                    dup_url_count += 1
+                    logger.info("Guard DEDUP: removing duplicate URL %s", url[:80])
+                    continue
                 urls.append(url)
+            url_deduped.append(plan)
+        if dup_url_count:
+            logger.info("Guard DEDUP: removed %d duplicate URL(s), %d remaining", dup_url_count, len(url_deduped))
+            tool_plans = url_deduped
 
     if issues:
         return GuardResult(passed=False, issues=issues, final_plan=None)

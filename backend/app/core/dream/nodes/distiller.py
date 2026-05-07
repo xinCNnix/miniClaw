@@ -19,6 +19,40 @@ from app.core.dream.prompts.distiller import (
 logger = logging.getLogger(__name__)
 
 
+def _get_dream_llm(model_name: str = ""):
+    """获取 Dream 系统专用的 LLM 实例。
+
+    复用 main 角色的 base_url/api_key，覆盖 model 为指定模型名。
+    与 online_distill 的 _get_llm 采用相同模式。
+
+    Args:
+        model_name: 目标模型名称，为空则使用 DreamConfig.distiller_model
+
+    Returns:
+        ChatOpenAI 实例
+    """
+    from langchain_openai import ChatOpenAI
+    from app.core.model_roles import get_role_llm_config
+
+    if not model_name:
+        config = DreamConfig()
+        model_name = config.distiller_model
+
+    # 如果仍然为空，从 main 角色获取默认模型
+    base_config = get_role_llm_config("main")
+    if not model_name:
+        model_name = base_config.model
+
+    logger.info(f"Dream LLM 初始化: base_url={base_config.base_url}, model={model_name}")
+    return ChatOpenAI(
+        base_url=base_config.base_url,
+        api_key=base_config.api_key,
+        model=model_name,
+        temperature=0.1,
+        streaming=False,
+    )
+
+
 def _format_steps_for_distill(traj: DreamTrajectory) -> str:
     """Format trajectory steps for the distiller prompt."""
     lines = []
@@ -227,11 +261,18 @@ def _infer_trigger(traj: DreamTrajectory) -> str:
 
 
 async def distiller_node_async(state: DreamState) -> DreamState:
-    """Async version of distiller node for LLM calls."""
+    """Async version of distiller node — uses LLM for distillation."""
     config = DreamConfig()
     min_accept = state.get("min_accept_score", config.min_accept_score)
     trajectories = state.get("dream_trajectories", [])
     scores = state.get("judge_scores", {})
+
+    # 创建 LLM 实例
+    try:
+        llm = _get_dream_llm()
+    except Exception as e:
+        logger.warning(f"Dream distiller LLM 创建失败，回退到 rule-based: {e}")
+        llm = None
 
     skills: List[SkillCard] = []
     for traj in trajectories:
@@ -239,7 +280,7 @@ async def distiller_node_async(state: DreamState) -> DreamState:
         if not js or not js.accept or js.score_total < min_accept:
             continue
 
-        skill = await _distill_with_llm(traj, js)
+        skill = await _distill_with_llm(traj, js, llm=llm)
         if skill is not None:
             skills.append(skill)
 

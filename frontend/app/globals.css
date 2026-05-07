@@ -92,6 +92,13 @@ body {
   color: white;
 }
 
+/* 用户消息气泡：白底绿字反色，让选中可见 */
+.user-bubble-selection::selection,
+.user-bubble-selection *::selection {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink-green);
+}
+
 /* Focus Ring */
 :focus-visible {
   outline: 2px solid var(--ink-green);

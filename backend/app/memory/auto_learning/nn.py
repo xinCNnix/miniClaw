@@ -479,10 +479,10 @@ class PatternNN(nn.Module):
         try:
             # Load checkpoint
             try:
-                checkpoint = torch.load(path, weights_only=True)
+                checkpoint = torch.load(path, map_location="cpu", weights_only=True)
             except TypeError:
                 # PyTorch < 2.1 doesn't support weights_only
-                checkpoint = torch.load(path)
+                checkpoint = torch.load(path, map_location="cpu")
 
             # Handle both old format (state_dict only) and new format (with metadata)
             if isinstance(checkpoint, dict):

@@ -3,7 +3,7 @@ name: research_report_writer
 description: |
   基于综合后的 reduced_json 撰写研究报告，
   强制使用引用标注 [S1][S2]。
-version: 1.0
+version: "1.0"
 dependencies: {}
 inputs:
   - reduced_json: dict

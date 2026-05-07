@@ -15,7 +15,7 @@ from typing import List
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.core.llm import get_default_llm
+from app.core.model_roles import get_role_llm
 from app.memory.kg.models import KGQueryIntent, KGRetrievalResult, KGRelation
 from app.memory.kg.prompts import QUERY_ROUTE_PROMPT
 from app.memory.kg.store_interface import KGStoreInterface
@@ -76,7 +76,7 @@ class KGRetriever:
         llm: BaseChatModel | None = None,
     ) -> None:
         self.store = store
-        self.llm: BaseChatModel = llm or get_default_llm()
+        self.llm: BaseChatModel = llm or get_role_llm("main")
 
     async def retrieve(self, query: str) -> KGRetrievalResult:
         """Retrieve KG facts for a user query.

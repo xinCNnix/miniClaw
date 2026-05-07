@@ -10,6 +10,16 @@ import "katex/dist/katex.min.css"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import type { Message, GeneratedImage } from "@/types/chat"
+import MermaidRenderer from "./MermaidRenderer"
+
+const _BOX_DRAWING_RE = /[\u2500-\u257F\u2580-\u259F\u2190-\u21FF\u2B00-\u2BFF▶►]/
+
+function _isBoxDrawingText(text: string): boolean {
+  if (!text) return false
+  const lines = text.split('\n')
+  const boxLines = lines.filter((l) => _BOX_DRAWING_RE.test(l))
+  return boxLines.length >= 2
+}
 
 interface MessageBubbleProps {
   message: Message
@@ -38,9 +48,9 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
       {/* Content */}
       <div
         className={clsx(
-          "max-w-[80%] rounded-lg px-4 py-2",
+          "max-w-[80%] rounded-lg px-4 py-2 select-text",
           isUser
-            ? "bg-[var(--ink-green)] text-white"
+            ? "bg-[var(--ink-green)] text-white user-bubble-selection"
             : "bg-white border border-gray-200 text-gray-900"
         )}
       >
@@ -57,6 +67,58 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
                   className="max-w-[200px] rounded-md border border-gray-300 dark:border-gray-600"
                 />
               ))}
+          </div>
+        )}
+
+        {/* User-attached files (attachments) */}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {message.attachments.map((att, idx) => {
+              if (att.type === 'image' && att.content && att.mime_type) {
+                return (
+                  <img
+                    key={`att-${idx}`}
+                    src={`data:${att.mime_type};base64,${att.content}`}
+                    alt={att.filename || `Attachment ${idx + 1}`}
+                    className="max-w-[200px] rounded-md border border-gray-300 dark:border-gray-600"
+                  />
+                );
+              }
+              if (att.type === 'audio' && att.content && att.mime_type) {
+                return (
+                  <audio
+                    key={`att-${idx}`}
+                    controls
+                    src={`data:${att.mime_type};base64,${att.content}`}
+                    className="max-w-[300px]"
+                  />
+                );
+              }
+              if (att.type === 'video' && att.content && att.mime_type) {
+                return (
+                  <video
+                    key={`att-${idx}`}
+                    controls
+                    src={`data:${att.mime_type};base64,${att.content}`}
+                    className="max-w-[300px] rounded-md"
+                  />
+                );
+              }
+              // document or fallback: show filename chip
+              return (
+                <span
+                  key={`att-${idx}`}
+                  className={clsx(
+                    "inline-flex items-center gap-1 px-2 py-1 rounded text-xs",
+                    isUser
+                      ? "bg-white/20 text-green-900"
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  )}
+                >
+                  {att.filename || `File ${idx + 1}`}
+                </span>
+              );
+            })}
           </div>
         )}
 
@@ -84,6 +146,13 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
                 },
                 code({ className, children, inline, ...props }: any) {
                   const match = /language-(\w+)/.exec(className || '')
+                  const language = match ? match[1] : null
+
+                  if (language === 'mermaid') {
+                    const code = String(children).replace(/\n$/, '')
+                    return <MermaidRenderer code={code} />
+                  }
+
                   return !inline && match ? (
                     <SyntaxHighlighter
                       style={oneDark}
@@ -152,6 +221,44 @@ export function MessageBubble({ message, className }: MessageBubbleProps) {
                       {children}
                     </blockquote>
                   )
+                },
+                table({ children }) {
+                  return (
+                    <div className="overflow-x-auto my-2">
+                      <table className="min-w-full border-collapse border border-gray-300 text-sm">
+                        {children}
+                      </table>
+                    </div>
+                  )
+                },
+                thead({ children }) {
+                  return <thead className="bg-gray-50 dark:bg-gray-800">{children}</thead>
+                },
+                th({ children }) {
+                  return (
+                    <th className="border border-gray-300 px-3 py-1.5 text-left font-semibold">
+                      {children}
+                    </th>
+                  )
+                },
+                td({ children }) {
+                  return (
+                    <td className="border border-gray-300 px-3 py-1.5">{children}</td>
+                  )
+                },
+                pre({ children }) {
+                  const text = String(children)
+                  if (_isBoxDrawingText(text)) {
+                    return (
+                      <pre
+                        className="my-2 p-3 rounded-md bg-gray-50 dark:bg-gray-900 border border-gray-200 overflow-x-auto text-sm leading-tight"
+                        style={{ fontFamily: 'var(--font-mono)' }}
+                      >
+                        {children}
+                      </pre>
+                    )
+                  }
+                  return <pre className="my-2">{children}</pre>
                 },
               }}
             >

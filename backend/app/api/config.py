@@ -52,6 +52,7 @@ class SaveLLMRequest(BaseModel):
     base_url: str = Field(..., description="Base URL")
     api_key: Optional[str] = Field(None, description="API key (empty if not changing)")
     user_confirmed: Optional[bool] = Field(False, description="User confirmed untrusted domain")
+    service_type: Optional[str] = Field("llm", description="Service type: llm, asr, tts, ocr")
 
 
 class SwitchLLMRequest(BaseModel):
@@ -142,6 +143,7 @@ async def save_llm(request: SaveLLMRequest):
             model=request.model,
             base_url=request.base_url,
             api_key=api_key,
+            service_type=request.service_type or "llm",
         )
 
         # 保存
@@ -152,7 +154,7 @@ async def save_llm(request: SaveLLMRequest):
         if len(all_llms) == 1:
             set_current_llm(llm_id)
             # 重置 Agent Manager 以使用新的 LLM
-            from app.api.chat import reset_agent_manager
+            from app.core.llm import reset_agent_manager
             reset_agent_manager()
 
         return {
@@ -182,7 +184,7 @@ async def switch_llm(request: SwitchLLMRequest):
         set_current_llm(request.llm_id)
 
         # 重置 Agent Manager
-        from app.api.chat import reset_agent_manager
+        from app.core.llm import reset_agent_manager
         reset_agent_manager()
 
         return {
@@ -242,6 +244,7 @@ class LegacySaveRequest(BaseModel):
     base_url: Optional[str] = Field(None, description="Base URL")
     user_confirmed: Optional[bool] = Field(False, description="User confirmed untrusted domain")
     name: Optional[str] = Field(None, description="Display name")
+    service_type: Optional[str] = Field("llm", description="Service type: llm, asr, tts, ocr")
 
 
 @router.post("/save")
@@ -304,6 +307,7 @@ async def save_config(request: LegacySaveRequest):
             model=request.model or "default",
             base_url=request.base_url or "",
             api_key=api_key,
+            service_type=request.service_type or "llm",
         )
 
         # Save
@@ -314,7 +318,7 @@ async def save_config(request: LegacySaveRequest):
         if len(all_llms) == 1:
             set_current_llm(llm_id)
             # 重置 Agent Manager 以使用新的 LLM
-            from app.api.chat import reset_agent_manager
+            from app.core.llm import reset_agent_manager
             reset_agent_manager()
 
         return {

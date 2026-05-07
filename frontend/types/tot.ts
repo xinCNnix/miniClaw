@@ -88,7 +88,10 @@ export interface ThoughtTreeNode {
   content: string
   parent_id?: string
   score?: number
-  status: 'pending' | 'evaluated' | 'selected' | 'pruned'
+  status: 'pending' | 'evaluated' | 'selected' | 'pruned' | 'executing' | 'done'
+  skill_name?: string
+  tool_calls?: Array<{ name: string; args: Record<string, unknown> }>
+  tool_statuses?: Array<{ tool: string; status: string }>
   children: ThoughtTreeNode[]
 }
 

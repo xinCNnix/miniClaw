@@ -10,6 +10,7 @@ Key Design:
 - Agent Macro: Post-execution, explicit, persisted (should_persist=True)
 """
 
+import copy
 import hashlib
 import json
 import logging
@@ -120,8 +121,8 @@ class UnifiedEvaluator:
         Returns:
             EvaluationResult: 评估结果
         """
-        # 检查缓存
-        if self.cache_enabled:
+        # 检查缓存（仅缓存微观评估）
+        if self.cache_enabled and evaluation_type.startswith("micro_"):
             cached = self._get_from_cache(evaluation_type, context)
             if cached:
                 logger.debug(f"Cache hit for {evaluation_type}")
@@ -398,7 +399,9 @@ class UnifiedEvaluator:
             )
 
             # 失败情况下质量分数较低
-            quality_score = 3.0
+            quality_score = min(
+                getattr(reflection, 'quality_score', 3.0), 5.0
+            )
 
             logger.info(f"Failure evaluation: problems={len(reflection.problems)}")
 
@@ -432,7 +435,7 @@ class UnifiedEvaluator:
             entry = self._cache[key]
             if time.time() - entry["timestamp"] < 300:  # 5分钟TTL
                 logger.debug(f"Cache hit: {evaluation_type}")
-                return entry["result"]
+                return copy.deepcopy(entry["result"])
             else:
                 del self._cache[key]  # 过期，删除
 
@@ -516,11 +519,11 @@ def get_unified_evaluator() -> UnifiedEvaluator:
     global _evaluator
     if _evaluator is None:
         from app.config import get_settings
-        from app.core.llm import get_default_llm
+        from app.core.model_roles import get_role_llm
 
         settings = get_settings()
-        # 复用统一 LLM 工厂，跟 agent 用同一个 LLM
-        llm = get_default_llm()
+        # supervisor 角色：反思评估专用 LLM，回落到 main
+        llm = get_role_llm("supervisor")
         cache_enabled = getattr(settings, "evaluation_cache_enabled", True)
 
         _evaluator = UnifiedEvaluator(

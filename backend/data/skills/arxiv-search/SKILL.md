@@ -24,7 +24,7 @@ This skill enables searching arXiv's extensive database of academic papers using
 Search papers by keywords or topics:
 
 ```bash
-python data/skills/arxiv-search/scripts/arxiv_search.py --query "large language models" --max-results 10
+python data/skills/arxiv-search/scripts/arxiv_search.py --query "large language models" --sort-by submittedDate --order descending --max-results 10
 ```
 
 ### Search by Author
@@ -42,6 +42,16 @@ Retrieve specific paper using arXiv ID:
 ```bash
 python data/skills/arxiv-search/scripts/arxiv_search.py --id "2307.09288"
 ```
+
+## Mandatory Rules for Agent
+
+When using this skill for research or literature review tasks, the agent MUST follow these rules:
+
+1. **Time sorting is mandatory**: Always include `--sort-by submittedDate --order descending` unless the user explicitly asks for relevance-based sorting.
+2. **Prefer recent papers**: For research tasks, prefer recently published papers. Use narrower queries combined with time sorting to find the latest work.
+3. **Query specificity**: Use specific, targeted queries rather than broad keywords. For example, prefer `"diffusion language models 2025"` over just `"diffusion models"`.
+4. **Combine multiple searches**: If the first search returns irrelevant results, refine the query and search again with different keywords.
+5. **Category filtering**: When appropriate, use `--category` to narrow results (e.g., `--category cs.CL` for NLP papers, `--category cs.CV` for computer vision).
 
 ## Search Parameters
 

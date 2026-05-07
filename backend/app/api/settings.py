@@ -12,6 +12,7 @@ import json
 import os
 import logging
 import shutil
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,6 +32,8 @@ from app.core.settings_registry import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["settings"])
+
+_config_write_lock = threading.Lock()
 
 RUNTIME_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -202,9 +205,10 @@ async def update_settings(request: Dict[str, Any]):
         logger.warning(f"[settings] PUT /settings rejected {len(errors)} invalid keys: {errors[:3]}")
         raise HTTPException(status_code=400, detail="; ".join(errors))
 
-    config = _read_runtime_config()
-    config.update(clean_updates)
-    _write_runtime_config(config)
+    with _config_write_lock:
+        config = _read_runtime_config()
+        config.update(clean_updates)
+        _write_runtime_config(config)
 
     # Determine restart requirement
     restart_required = any(
