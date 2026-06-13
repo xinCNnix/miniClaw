@@ -319,3 +319,15 @@ backend/data/credentials.json
 *.key
 
 *.sqlite3
+
+# 不应同步的文件
+.claude/
+.github/
+.superpowers/
+*.sqlite3
+*.bak
+CLAUDE.md
+API_KEY_SECURITY_GUIDELINES.md
+COMPLETION_SUMMARY.md
+IMPLEMENTATION_GUIDE*.md
+LLM_CONFIG_REFACTOR_PLAN*.md
