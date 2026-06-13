@@ -14,6 +14,59 @@ from typing import AsyncIterator
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
+
+async def _keepalive_stream(
+    event_iter: AsyncIterator,
+    interval: float = 25.0,
+    wd_info=None,
+):
+    """异步事件迭代器的 keep-alive 包装器。
+
+    在事件间隔超过 interval 秒时发送 SSE 注释心跳，
+    防止浏览器/代理因空闲断开连接。同时更新 watchdog 心跳。
+
+    使用后台任务消费原始迭代器，避免取消底层 LLM 流式调用。
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _producer():
+        try:
+            async for event in event_iter:
+                await queue.put(("event", event))
+        except Exception as e:
+            await queue.put(("error", e))
+        finally:
+            await queue.put(("done", None))
+
+    producer = asyncio.create_task(_producer())
+    try:
+        while True:
+            try:
+                item_type, item = await asyncio.wait_for(
+                    queue.get(), timeout=interval
+                )
+            except asyncio.TimeoutError:
+                # SSE comment as keep-alive (browsers ignore lines starting with :)
+                if wd_info is not None:
+                    wd_info.last_heartbeat = time.time()
+                yield ": keep-alive\n\n"
+                continue
+
+            if item_type == "done":
+                break
+            elif item_type == "error":
+                raise item
+            elif item_type == "event":
+                if wd_info is not None:
+                    wd_info.last_heartbeat = time.time()
+                yield item
+    finally:
+        producer.cancel()
+        try:
+            await producer
+        except asyncio.CancelledError:
+            pass
+
 from app.models.chat import ChatRequest, ChatEvent, ToolCall
 from app.core.llm import get_agent_manager, reset_agent_manager
 from app.core.tools import get_registered_tools
@@ -567,12 +620,22 @@ async def chat_stream_generator(
             _wd_cancel = _wd_info.cancel_event
             yield format_sse_event(ChatEvent(type="run_id", run_id=_wd_run_id))
 
-            async for event in agent.astream(
-                messages=messages,
-                system_prompt=system_prompt,
-                cancel_event=_wd_cancel,
-                run_id=_wd_run_id,
+            async for raw in _keepalive_stream(
+                agent.astream(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    cancel_event=_wd_cancel,
+                    run_id=_wd_run_id,
+                ),
+                interval=25.0,
+                wd_info=_wd_info,
             ):
+                # keep-alive SSE 注释直接透传
+                if isinstance(raw, str):
+                    yield raw
+                    continue
+
+                event = raw
                 event_count += 1
 
                 # Log each event
@@ -809,15 +872,30 @@ async def tot_stream_generator(
         _wd_info = _wd_registry.register(_wd_run_id, session_id=request.session_id)
         _wd_cancel = _wd_info.cancel_event
         yield format_sse_event(ChatEvent(type="run_id", run_id=_wd_run_id))
+        yield format_sse_event(ChatEvent(type="thinking_start"))
 
-        async for event in orchestrator.process_request(
-            messages=tot_messages,
-            system_prompt=system_prompt,
-            enable_tot=True,
-            cancel_event=_wd_cancel,
-            run_id=_wd_run_id,
+        async for raw in _keepalive_stream(
+            orchestrator.process_request(
+                messages=tot_messages,
+                system_prompt=system_prompt,
+                enable_tot=True,
+                cancel_event=_wd_cancel,
+                run_id=_wd_run_id,
+            ),
+            interval=25.0,
+            wd_info=_wd_info,
         ):
+            # keep-alive SSE 注释直接透传
+            if isinstance(raw, str):
+                yield raw
+                continue
+
+            event = raw
             event_type = event.get("type", "unknown")
+
+            # 首个 tg_ 事件表明 TaskGraph 模式已激活，更新 watchdog execution_mode
+            if event_type.startswith("tg_") and _wd_info.execution_mode != "taskgraph":
+                _wd_info.execution_mode = "taskgraph"
 
             if event_type == "content_delta":
                 assistant_parts.append(event.get("content", ""))
@@ -834,6 +912,10 @@ async def tot_stream_generator(
             # Images render inline via synthesis_node's _resolve_image_refs.
             elif event_type == "tot_tools_executed":
                 pass
+
+            elif event.get("type", "").startswith("tg_"):
+                yield format_sse_event(ChatEvent(**event))
+                continue
 
             yield format_sse_event(ChatEvent(**event))
 
@@ -1137,6 +1219,12 @@ async def chat(request: ChatRequest):
                 agent_manager=agent,
                 max_depth=tot_depth,
                 branching_factor=tot_branching,
+            )
+            # 设置 thinking_mode 供 TaskGraph 和 BeamSearchRouter 使用
+            orchestrator._thinking_mode = (
+                "exhaustive" if research_mode == "exhaustive"
+                else research_mode if research_mode in ("heuristic", "analytical")
+                else "heuristic"
             )
             return StreamingResponse(
                 tot_stream_generator(request, orchestrator, system_prompt),

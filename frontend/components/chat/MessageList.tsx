@@ -20,6 +20,8 @@ export function MessageList({ messages, thinkingEvents = [], isLoading = false }
   const hasToTEvents = thinkingEvents.some(event => event.type.startsWith('tot_'))
   // Check if there are any PERV events (mixed pevr_ / perv_ prefixes)
   const hasPervEvents = thinkingEvents.some(event => event.type.startsWith('perv_'))
+  // Check if there are any TaskGraph events
+  const hasTGEvents = thinkingEvents.some(event => event.type.startsWith('tg_'))
 
   if (messages.length === 0) {
     return (

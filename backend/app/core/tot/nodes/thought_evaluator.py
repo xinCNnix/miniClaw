@@ -738,7 +738,7 @@ async def thought_evaluator_node(state: ToTState) -> ToTState:
         _update_best_path(state)
 
     # ---- 日志 & trace ----
-    if "tot_logger" in state:
+    if state.get("tot_logger"):
         elapsed = time.time() - eval_start
         state["tot_logger"].log_evaluation(
             depth=state.get("current_depth", 0),

@@ -236,6 +236,17 @@ class Settings(BaseSettings):
     ]
     tot_checkpoint_path: str = "data/tot_checkpoints.db"
 
+    # TaskGraph Configuration (replaces ToT execution mode)
+    tot_use_taskgraph: bool = True
+    tg_skill_first: bool = True
+    tg_micro_tot_threshold: int = 2
+    tg_micro_tot_budget: int = 3000
+    tg_artifact_base_dir: str = "data/artifacts"
+    tg_max_task_attempts: int = 3
+    tg_scheduler_aging: bool = True
+    tg_watchdog_max_runtime: int = 21600  # 6 hours for TaskGraph mode
+    tg_max_parallel_tasks: int = 4
+
     # Deep Research Configuration
     enable_deep_research: bool = True
     research_mode: Literal["heuristic", "analytical", "exhaustive"] = "heuristic"

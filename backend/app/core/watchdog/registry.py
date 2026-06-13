@@ -33,6 +33,7 @@ class RunInfo:
     run_id: str
     session_id: str
     status: RunStatus = RunStatus.RUNNING
+    execution_mode: str = "normal"  # "normal" | "tot" | "taskgraph" | "perv"
     cancel_event: asyncio.Event = dataclasses.field(default_factory=asyncio.Event)
     last_heartbeat: float = dataclasses.field(default_factory=time.time)
     started_at: float = dataclasses.field(default_factory=time.time)
@@ -61,6 +62,7 @@ class RunInfo:
             "run_id": self.run_id,
             "session_id": self.session_id,
             "status": self.status,
+            "execution_mode": self.execution_mode,
             "last_heartbeat": self.last_heartbeat,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -81,13 +83,14 @@ class RunRegistry:
         self,
         run_id: Optional[str] = None,
         session_id: str = "default",
+        execution_mode: str = "normal",
     ) -> RunInfo:
         run_id = run_id or str(uuid.uuid4())
         if run_id in self._runs:
             raise ValueError(f"Run {run_id} already registered")
-        info = RunInfo(run_id=run_id, session_id=session_id)
+        info = RunInfo(run_id=run_id, session_id=session_id, execution_mode=execution_mode)
         self._runs[run_id] = info
-        logger.info(f"[Watchdog] 注册 run {run_id} (session={session_id})")
+        logger.info(f"[Watchdog] 注册 run {run_id} (session={session_id}, mode={execution_mode})")
         return info
 
     def get(self, run_id: str) -> Optional[RunInfo]:

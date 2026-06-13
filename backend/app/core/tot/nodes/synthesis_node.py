@@ -548,8 +548,12 @@ async def _generic_synthesis(state: ToTState) -> str:
     if chat_history:
         history_lines = []
         for msg in chat_history:
-            role = "用户" if msg.type == "human" else "助手"
-            content = msg.content[:200] if msg.content else ""
+            if isinstance(msg, dict):
+                role = "用户" if msg.get("role") in ("user", "human") else "助手"
+                content = (msg.get("content") or "")[:200]
+            else:
+                role = "用户" if msg.type == "human" else "助手"
+                content = msg.content[:200] if msg.content else ""
             history_lines.append(f"{role}: {content}")
         history_section = f"**Conversation History:**\n" + "\n".join(history_lines) + "\n\n"
 

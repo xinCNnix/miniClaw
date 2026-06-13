@@ -1,0 +1,1173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>郑州华夏白癜风医院 — 专注白癜风诊疗</title>
+  <style>
+    /* === 设计系统声明 ===
+       System: Medical Professional (Dieter Rams 医疗线)
+       Type: "Noto Sans SC", system-ui  14/16/20/28/36/48
+       Color: #0E7C6B (primary) · #F0A830 (accent) · #FAFBFC (bg) · #1A2332 (ink)
+       Grid: 1200px max-width · 24px gutter · 8px baseline
+       Rhythm: full-width hero → 4col strengths → 3col experts → 2col tech/cases → CTA → footer
+    */
+
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap');
+
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --primary: #0E7C6B;
+      --primary-light: #E8F5F2;
+      --primary-dark: #095E51;
+      --accent: #F0A830;
+      --accent-light: #FFF7E6;
+      --bg: #FAFBFC;
+      --bg-alt: #F0F2F5;
+      --ink: #1A2332;
+      --ink-light: #5A6577;
+      --ink-muted: #8C95A6;
+      --white: #FFFFFF;
+      --radius: 4px;
+      --shadow-sm: 0 1px 3px rgba(26,35,50,0.06);
+      --shadow-md: 0 4px 12px rgba(26,35,50,0.08);
+      --shadow-lg: 0 8px 32px rgba(26,35,50,0.10);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: "Noto Sans SC", system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.7;
+      color: var(--ink);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* --- 通用组件 --- */
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+    .section-label {
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--primary);
+      margin-bottom: 8px;
+    }
+
+    .section-title {
+      font-size: 36px;
+      font-weight: 700;
+      line-height: 1.3;
+      color: var(--ink);
+      margin-bottom: 16px;
+    }
+
+    .section-desc {
+      font-size: 16px;
+      color: var(--ink-light);
+      max-width: 560px;
+      line-height: 1.8;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      font-size: 15px;
+      font-weight: 500;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--white);
+    }
+    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+
+    .btn-accent {
+      background: var(--accent);
+      color: var(--ink);
+    }
+    .btn-accent:hover { background: #D9941F; transform: translateY(-1px); box-shadow: var(--shadow-md); }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--primary);
+      border: 1.5px solid var(--primary);
+    }
+    .btn-outline:hover { background: var(--primary-light); }
+
+    /* --- 导航 --- */
+    .nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(255,255,255,0.96);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(26,35,50,0.06);
+      transition: box-shadow 0.3s;
+    }
+
+    .nav.scrolled { box-shadow: var(--shadow-md); }
+
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 72px;
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--ink);
+    }
+
+    .nav-logo {
+      width: 40px;
+      height: 40px;
+      background: var(--primary);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--white);
+      font-size: 18px;
+      font-weight: 900;
+    }
+
+    .nav-brand-text {
+      font-size: 17px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    .nav-brand-text small {
+      display: block;
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--ink-muted);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--ink-light);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--primary); }
+
+    .nav-cta { margin-left: 8px; }
+
+    /* --- Hero --- */
+    .hero {
+      padding-top: 72px;
+      background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 60%, #14A085 100%);
+      color: var(--white);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 45%;
+      height: 100%;
+      background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><circle cx="160" cy="40" r="120" fill="rgba(255,255,255,0.04)"/><circle cx="140" cy="160" r="80" fill="rgba(255,255,255,0.03)"/></svg>') no-repeat right center / cover;
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 48px;
+      align-items: center;
+      padding: 80px 0 64px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-content { max-width: 540px; }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 24px;
+    }
+
+    .hero h1 {
+      font-size: 48px;
+      font-weight: 900;
+      line-height: 1.2;
+      margin-bottom: 20px;
+    }
+
+    .hero-desc {
+      font-size: 17px;
+      line-height: 1.8;
+      opacity: 0.9;
+      margin-bottom: 36px;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .hero-stats {
+      display: flex;
+      gap: 40px;
+      margin-top: 48px;
+      padding-top: 32px;
+      border-top: 1px solid rgba(255,255,255,0.15);
+    }
+
+    .hero-stat-num {
+      font-size: 32px;
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    .hero-stat-label {
+      font-size: 13px;
+      opacity: 0.75;
+      margin-top: 6px;
+    }
+
+    .hero-visual {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hero-card {
+      background: rgba(255,255,255,0.1);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 12px;
+      padding: 32px;
+      width: 100%;
+      max-width: 420px;
+    }
+
+    .hero-card-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .hero-card-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .hero-card-form input,
+    .hero-card-form select {
+      padding: 12px 16px;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.08);
+      color: var(--white);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .hero-card-form input::placeholder { color: rgba(255,255,255,0.5); }
+    .hero-card-form input:focus, .hero-card-form select:focus { border-color: var(--accent); }
+
+    .hero-card-form .btn { width: 100%; justify-content: center; padding: 14px; font-size: 16px; }
+
+    .hero-card-note {
+      font-size: 12px;
+      opacity: 0.6;
+      text-align: center;
+      margin-top: 12px;
+    }
+
+    /* --- 信任指标条 --- */
+    .trust-bar {
+      background: var(--white);
+      border-bottom: 1px solid rgba(26,35,50,0.06);
+      padding: 20px 0;
+    }
+
+    .trust-bar-inner {
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .trust-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: var(--ink-light);
+    }
+
+    .trust-icon {
+      width: 36px;
+      height: 36px;
+      background: var(--primary-light);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+
+    .trust-item strong {
+      display: block;
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    /* --- 核心优势 --- */
+    .strengths {
+      padding: 80px 0;
+    }
+
+    .strengths-header {
+      text-align: center;
+      margin-bottom: 56px;
+    }
+
+    .strengths-header .section-desc { margin: 0 auto; }
+
+    .strengths-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+    }
+
+    .strength-card {
+      background: var(--white);
+      border: 1px solid rgba(26,35,50,0.06);
+      border-radius: 8px;
+      padding: 32px 24px;
+      transition: all 0.25s;
+    }
+
+    .strength-card:hover {
+      box-shadow: var(--shadow-lg);
+      transform: translateY(-4px);
+      border-color: var(--primary);
+    }
+
+    .strength-icon {
+      width: 48px;
+      height: 48px;
+      background: var(--primary-light);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      margin-bottom: 20px;
+    }
+
+    .strength-card h3 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .strength-card p {
+      font-size: 14px;
+      color: var(--ink-light);
+      line-height: 1.7;
+    }
+
+    /* --- 专家团队 --- */
+    .experts {
+      padding: 80px 0;
+      background: var(--bg-alt);
+    }
+
+    .experts-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-bottom: 48px;
+    }
+
+    .experts-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+
+    .expert-card {
+      background: var(--white);
+      border-radius: 8px;
+      overflow: hidden;
+      transition: all 0.25s;
+    }
+
+    .expert-card:hover { box-shadow: var(--shadow-lg); transform: translateY(-3px); }
+
+    .expert-photo {
+      height: 200px;
+      background: linear-gradient(135deg, var(--primary-light) 0%, #D4EDE8 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 64px;
+      color: var(--primary);
+      opacity: 0.3;
+    }
+
+    .expert-info { padding: 24px; }
+
+    .expert-name {
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .expert-title {
+      font-size: 13px;
+      color: var(--primary);
+      font-weight: 500;
+      margin-top: 4px;
+    }
+
+    .expert-desc {
+      font-size: 14px;
+      color: var(--ink-light);
+      margin-top: 12px;
+      line-height: 1.7;
+    }
+
+    .expert-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 16px;
+    }
+
+    .expert-tag {
+      padding: 4px 10px;
+      background: var(--primary-light);
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 3px;
+    }
+
+    /* --- 技术与案例 --- */
+    .tech-cases {
+      padding: 80px 0;
+    }
+
+    .tc-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 48px;
+      margin-top: 48px;
+    }
+
+    .tc-section-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tc-section-title .dot {
+      width: 6px;
+      height: 6px;
+      background: var(--primary);
+      border-radius: 50%;
+    }
+
+    /* 技术列表 */
+    .tech-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .tech-item {
+      display: flex;
+      gap: 16px;
+      padding: 20px;
+      background: var(--white);
+      border: 1px solid rgba(26,35,50,0.06);
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+
+    .tech-item:hover { border-color: var(--primary); box-shadow: var(--shadow-sm); }
+
+    .tech-num {
+      width: 32px;
+      height: 32px;
+      background: var(--primary);
+      color: var(--white);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .tech-item h4 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .tech-item p {
+      font-size: 13px;
+      color: var(--ink-light);
+      line-height: 1.6;
+    }
+
+    /* 康复案例 */
+    .case-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .case-card {
+      background: var(--white);
+      border: 1px solid rgba(26,35,50,0.06);
+      border-radius: 8px;
+      padding: 20px;
+      transition: all 0.2s;
+    }
+
+    .case-card:hover { box-shadow: var(--shadow-sm); }
+
+    .case-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .case-patient {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .case-badge {
+      padding: 3px 10px;
+      background: #E8F8EE;
+      color: #1B7A3D;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 3px;
+    }
+
+    .case-detail {
+      font-size: 13px;
+      color: var(--ink-light);
+      line-height: 1.6;
+    }
+
+    .case-detail strong { color: var(--ink); }
+
+    .case-result {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed rgba(26,35,50,0.08);
+      font-size: 13px;
+      color: var(--primary);
+      font-weight: 500;
+    }
+
+    /* --- 数据统计 --- */
+    .stats {
+      padding: 64px 0;
+      background: var(--primary);
+      color: var(--white);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 32px;
+      text-align: center;
+    }
+
+    .stat-num {
+      font-size: 48px;
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    .stat-unit {
+      font-size: 20px;
+      font-weight: 400;
+    }
+
+    .stat-label {
+      font-size: 14px;
+      opacity: 0.8;
+      margin-top: 8px;
+    }
+
+    /* --- CTA --- */
+    .cta {
+      padding: 80px 0;
+      background: var(--bg-alt);
+    }
+
+    .cta-inner {
+      text-align: center;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .cta .section-title { margin-bottom: 12px; }
+
+    .cta .section-desc { margin: 0 auto 32px; text-align: center; }
+
+    .cta-actions {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .cta-phone {
+      font-size: 36px;
+      font-weight: 900;
+      color: var(--primary);
+      margin-top: 32px;
+      letter-spacing: 0.02em;
+    }
+
+    .cta-phone-label {
+      font-size: 13px;
+      color: var(--ink-muted);
+      margin-top: 4px;
+    }
+
+    /* --- 页脚 --- */
+    .footer {
+      background: var(--ink);
+      color: rgba(255,255,255,0.7);
+      padding: 56px 0 24px;
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 48px;
+      padding-bottom: 40px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .footer-brand-desc {
+      font-size: 14px;
+      line-height: 1.8;
+      margin-top: 16px;
+      max-width: 320px;
+    }
+
+    .footer h4 {
+      color: var(--white);
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+
+    .footer-links {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .footer-links a {
+      font-size: 14px;
+      color: rgba(255,255,255,0.6);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover { color: var(--white); }
+
+    .footer-contact-item {
+      font-size: 14px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    .footer-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 24px;
+      font-size: 13px;
+      color: rgba(255,255,255,0.4);
+    }
+
+    /* --- 响应式 --- */
+    @media (max-width: 960px) {
+      .hero-inner { grid-template-columns: 1fr; padding: 60px 0 48px; }
+      .hero-visual { display: none; }
+      .hero h1 { font-size: 36px; }
+      .strengths-grid { grid-template-columns: repeat(2, 1fr); }
+      .experts-grid { grid-template-columns: repeat(2, 1fr); }
+      .tc-grid { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .footer-grid { grid-template-columns: 1fr 1fr; }
+      .nav-links { display: none; }
+    }
+
+    @media (max-width: 600px) {
+      .hero h1 { font-size: 28px; }
+      .hero-stats { flex-direction: column; gap: 16px; }
+      .strengths-grid { grid-template-columns: 1fr; }
+      .experts-grid { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .trust-bar-inner { flex-direction: column; }
+      .section-title { font-size: 28px; }
+      .footer-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 导航 -->
+  <nav class="nav" id="nav">
+    <div class="container nav-inner">
+      <a href="#" class="nav-brand">
+        <div class="nav-logo">华</div>
+        <div class="nav-brand-text">
+          郑州华夏白癜风医院
+          <small>专注白癜风诊疗 · 守护皮肤健康</small>
+        </div>
+      </a>
+      <ul class="nav-links">
+        <li><a href="#strengths">核心优势</a></li>
+        <li><a href="#experts">专家团队</a></li>
+        <li><a href="#tech">诊疗技术</a></li>
+        <li><a href="#cases">康复案例</a></li>
+        <li><a href="#contact">联系我们</a></li>
+      </ul>
+      <a href="#appointment" class="btn btn-primary nav-cta">在线预约</a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero" id="home">
+    <div class="container hero-inner">
+      <div class="hero-content">
+        <div class="hero-badge">
+          &#9679; 河南省卫生健康委员会批准设立
+        </div>
+        <h1>专注白癜风<br>科学诊疗与康复</h1>
+        <p class="hero-desc">
+          郑州华夏白癜风医院是一家集预防、检查、治疗、康复为一体的白癜风专科医院，
+          拥有资深专家团队和国际先进诊疗设备，为每一位患者制定个性化治疗方案。
+        </p>
+        <div class="hero-actions">
+          <a href="#appointment" class="btn btn-accent">免费咨询预约</a>
+          <a href="#tech" class="btn btn-outline" style="border-color:rgba(255,255,255,0.3);color:#fff">了解诊疗技术</a>
+        </div>
+        <div class="hero-stats">
+          <div>
+            <div class="hero-stat-num">20+</div>
+            <div class="hero-stat-label">年专科经验</div>
+          </div>
+          <div>
+            <div class="hero-stat-num">50000+</div>
+            <div class="hero-stat-label">累计服务患者</div>
+          </div>
+          <div>
+            <div class="hero-stat-num">96%</div>
+            <div class="hero-stat-label">患者满意度</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 预约表单卡片 -->
+      <div class="hero-visual">
+        <div class="hero-card">
+          <div class="hero-card-title">&#128222; 快速预约挂号</div>
+          <form class="hero-card-form" id="appointment">
+            <input type="text" placeholder="您的姓名" aria-label="姓名">
+            <input type="tel" placeholder="手机号码" aria-label="手机号码">
+            <select aria-label="咨询类型">
+              <option value="">选择咨询类型</option>
+              <option value="first">初诊咨询</option>
+              <option value="follow">复诊预约</option>
+              <option value="online">线上问诊</option>
+            </select>
+            <button type="submit" class="btn btn-accent">立即预约</button>
+            <div class="hero-card-note">我们承诺保护您的个人隐私</div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 信任指标条 -->
+  <div class="trust-bar">
+    <div class="container trust-bar-inner">
+      <div class="trust-item">
+        <div class="trust-icon">&#9733;</div>
+        <div><strong>三级专科</strong>卫健委批准</div>
+      </div>
+      <div class="trust-item">
+        <div class="trust-icon">&#9881;</div>
+        <div><strong>医保定点</strong>报销更安心</div>
+      </div>
+      <div class="trust-item">
+        <div class="trust-icon">&#128300;</div>
+        <div><strong>国际设备</strong>精准检测</div>
+      </div>
+      <div class="trust-item">
+        <div class="trust-icon">&#128101;</div>
+        <div><strong>资深团队</strong>多学科协作</div>
+      </div>
+      <div class="trust-item">
+        <div class="trust-icon">&#128274;</div>
+        <div><strong>隐私保护</strong>一对一诊疗</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 核心优势 -->
+  <section class="strengths" id="strengths">
+    <div class="container">
+      <div class="strengths-header">
+        <div class="section-label">Core Strengths</div>
+        <h2 class="section-title">为什么选择华夏</h2>
+        <p class="section-desc">
+          我们以循证医学为基础，以患者为中心，打造白癜风诊疗全流程管理闭环。
+        </p>
+      </div>
+      <div class="strengths-grid">
+        <div class="strength-card">
+          <div class="strength-icon">&#128218;</div>
+          <h3>精准检测</h3>
+          <p>引进德国伍德灯、美国皮肤CT、微量元素检测等先进设备，科学查明病因病型，为精准治疗提供依据。</p>
+        </div>
+        <div class="strength-card">
+          <div class="strength-icon">&#9878;</div>
+          <h3>个性治疗</h3>
+          <p>根据患者年龄、病程、分型分期、体质等因素，制定一人一方案的个性化治疗体系，拒绝千人一方。</p>
+        </div>
+        <div class="strength-card">
+          <div class="strength-icon">&#128104;&#8205;&#9877;</div>
+          <h3>专家团队</h3>
+          <p>汇聚京沪豫三地白癜风领域资深专家，平均从业 20 年以上，定期开展多学科联合会诊。</p>
+        </div>
+        <div class="strength-card">
+          <div class="strength-icon">&#128259;</div>
+          <h3>全程管理</h3>
+          <p>建立"检测-治疗-康复-抗复发"全病程管理体系，专人跟踪随访，从根源降低复发率。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 专家团队 -->
+  <section class="experts" id="experts">
+    <div class="container">
+      <div class="experts-header">
+        <div>
+          <div class="section-label">Expert Team</div>
+          <h2 class="section-title">资深专家团队</h2>
+          <p class="section-desc">每位专家均具有丰富的白癜风临床诊疗经验</p>
+        </div>
+        <a href="#" class="btn btn-outline">查看全部专家</a>
+      </div>
+      <div class="experts-grid">
+        <div class="expert-card">
+          <div class="expert-photo">[专家照片]</div>
+          <div class="expert-info">
+            <div class="expert-name">张明远</div>
+            <div class="expert-title">主任医师 · 白癜风学科带头人</div>
+            <p class="expert-desc">从事皮肤病临床诊疗工作 30 余年，擅长各型白癜风的辨证施治，在疑难型白癜风治疗方面有深入研究。</p>
+            <div class="expert-tags">
+              <span class="expert-tag">疑难型白癜风</span>
+              <span class="expert-tag">中西医结合</span>
+              <span class="expert-tag">抗复发治疗</span>
+            </div>
+          </div>
+        </div>
+        <div class="expert-card">
+          <div class="expert-photo">[专家照片]</div>
+          <div class="expert-info">
+            <div class="expert-name">李秀华</div>
+            <div class="expert-title">副主任医师 · 皮肤科主任</div>
+            <p class="expert-desc">中华医学会皮肤性病学分会委员，专注白癜风临床研究 20 年，在进展期控制与稳定期复色方面经验丰富。</p>
+            <div class="expert-tags">
+              <span class="expert-tag">进展期控制</span>
+              <span class="expert-tag">光疗技术</span>
+              <span class="expert-tag">儿童白癜风</span>
+            </div>
+          </div>
+        </div>
+        <div class="expert-card">
+          <div class="expert-photo">[专家照片]</div>
+          <div class="expert-info">
+            <div class="expert-name">王建国</div>
+            <div class="expert-title">副主任医师 · 特需门诊专家</div>
+            <p class="expert-desc">曾在多家三甲医院进修学习，擅长运用美国 308nm 准分子激光联合中医药治疗各期白癜风。</p>
+            <div class="expert-tags">
+              <span class="expert-tag">308nm 激光</span>
+              <span class="expert-tag">节段型白癜风</span>
+              <span class="expert-tag">外科手术</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 技术与案例 -->
+  <section class="tech-cases" id="tech">
+    <div class="container">
+      <div class="strengths-header">
+        <div class="section-label">Technology & Cases</div>
+        <h2 class="section-title">先进技术 · 真实康复</h2>
+        <p class="section-desc">以国际前沿技术为支撑，用真实康复效果说话</p>
+      </div>
+      <div class="tc-grid">
+        <!-- 核心技术 -->
+        <div>
+          <div class="tc-section-title"><span class="dot"></span> 核心诊疗技术</div>
+          <div class="tech-list">
+            <div class="tech-item">
+              <div class="tech-num">1</div>
+              <div>
+                <h4>美国 308nm 准分子激光</h4>
+                <p>靶向照射白斑部位，诱导 T 细胞凋亡，促进黑色素细胞增殖，安全高效，儿童孕妇均可使用。</p>
+              </div>
+            </div>
+            <div class="tech-item">
+              <div class="tech-num">2</div>
+              <div>
+                <h4>ReCell 自体表皮细胞移植</h4>
+                <p>微创取皮，分离自体黑色素细胞悬液喷洒于白斑区，大面积白斑一次手术可覆盖，复色均匀自然。</p>
+              </div>
+            </div>
+            <div class="tech-item">
+              <div class="tech-num">3</div>
+              <div>
+                <h4>中药熏蒸渗透疗法</h4>
+                <p>精选中药组方，通过熏蒸使药物直达病灶，改善局部微循环，调节免疫功能，从内而外促进复色。</p>
+              </div>
+            </div>
+            <div class="tech-item">
+              <div class="tech-num">4</div>
+              <div>
+                <h4>德国 Wood 灾精准检测</h4>
+                <p>利用特定波长紫外线照射，清晰显示肉眼不可见的色素脱失，精确界定白斑边界与隐形白斑。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 康复案例 -->
+        <div id="cases">
+          <div class="tc-section-title"><span class="dot"></span> 真实康复案例</div>
+          <div class="case-list">
+            <div class="case-card">
+              <div class="case-header">
+                <span class="case-patient">刘女士 · 32岁 · 面部白癜风</span>
+                <span class="case-badge">已康复</span>
+              </div>
+              <div class="case-detail">
+                病程 <strong>3 年</strong>，面部多处白斑，曾辗转多家医院效果不佳。来院后经精准检测确诊为 <strong>寻常型进展期</strong>，
+                采用 308nm 激光 + 中药熏蒸联合治疗。
+              </div>
+              <div class="case-result">治疗 4 个月，面部白斑基本消失，随访 1 年未复发</div>
+            </div>
+            <div class="case-card">
+              <div class="case-header">
+                <span class="case-patient">小张 · 14岁 · 肢端型白癜风</span>
+                <span class="case-badge">已康复</span>
+              </div>
+              <div class="case-detail">
+                病程 <strong>1 年半</strong>，双手指端白斑逐渐扩散。经 ReCell 细胞移植 + 308nm 光疗个性化方案治疗。
+              </div>
+              <div class="case-result">治疗 6 个月，双手复色达 90% 以上，自信心明显恢复</div>
+            </div>
+            <div class="case-card">
+              <div class="case-header">
+                <span class="case-patient">赵先生 · 45岁 · 泛发型白癜风</span>
+                <span class="case-badge">明显好转</span>
+              </div>
+              <div class="case-detail">
+                病程 <strong>8 年</strong>，全身多处白斑，曾用偏方导致扩散加重。入院后综合评估，采用中西医结合系统治疗。
+              </div>
+              <div class="case-result">治疗 8 个月，白斑面积缩小 70%，色素岛大量生长中</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 数据统计 -->
+  <section class="stats">
+    <div class="container">
+      <div class="stats-grid">
+        <div>
+          <div class="stat-num">20<span class="stat-unit">+</span></div>
+          <div class="stat-label">年专科沉淀</div>
+        </div>
+        <div>
+          <div class="stat-num">50000<span class="stat-unit">+</span></div>
+          <div class="stat-label">服务患者</div>
+        </div>
+        <div>
+          <div class="stat-num">96<span class="stat-unit">%</span></div>
+          <div class="stat-label">治疗有效率</div>
+        </div>
+        <div>
+          <div class="stat-num">98<span class="stat-unit">%</span></div>
+          <div class="stat-label">患者满意度</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta" id="contact">
+    <div class="container cta-inner">
+      <div class="section-label">Get In Touch</div>
+      <h2 class="section-title">早发现 · 早治疗 · 早康复</h2>
+      <p class="section-desc">
+        白癜风并非不治之症。越早接受科学规范的治疗，康复几率越高，治疗周期越短。
+        如果您或您的家人正受白癜风困扰，请尽早咨询专业医生。
+      </p>
+      <div class="cta-actions">
+        <a href="#appointment" class="btn btn-primary">在线预约挂号</a>
+        <a href="#" class="btn btn-outline">了解就诊指南</a>
+      </div>
+      <div class="cta-phone">0371-5555-0120</div>
+      <div class="cta-phone-label">24 小时健康咨询热线（免费）</div>
+    </div>
+  </section>
+
+  <!-- 页脚 -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div>
+          <a href="#" class="nav-brand" style="color:rgba(255,255,255,0.9)">
+            <div class="nav-logo">华</div>
+            <div class="nav-brand-text" style="color:rgba(255,255,255,0.9)">
+              郑州华夏白癜风医院
+              <small style="color:rgba(255,255,255,0.5)">专注白癜风诊疗 · 守护皮肤健康</small>
+            </div>
+          </a>
+          <p class="footer-brand-desc">
+            郑州华夏白癜风医院是经河南省卫生健康委员会批准设立的白癜风专科医院，
+            致力于白癜风等色素性皮肤病的临床诊疗与科研。
+          </p>
+        </div>
+        <div>
+          <h4>快速导航</h4>
+          <ul class="footer-links">
+            <li><a href="#strengths">核心优势</a></li>
+            <li><a href="#experts">专家团队</a></li>
+            <li><a href="#tech">诊疗技术</a></li>
+            <li><a href="#cases">康复案例</a></li>
+            <li><a href="#">就诊指南</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4>诊疗项目</h4>
+          <ul class="footer-links">
+            <li><a href="#">寻常型白癜风</a></li>
+            <li><a href="#">节段型白癜风</a></li>
+            <li><a href="#">肢端型白癜风</a></li>
+            <li><a href="#">儿童白癜风</a></li>
+            <li><a href="#">白癜风抗复发</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4>联系方式</h4>
+          <div class="footer-contact-item">&#128205; 郑州市管城区XXX路XX号</div>
+          <div class="footer-contact-item">&#128222; 0371-5555-0120</div>
+          <div class="footer-contact-item">&#128233; huxia@hospital.com</div>
+          <div class="footer-contact-item">&#128336; 周一至周日 8:00-17:30</div>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>&copy; 2026 郑州华夏白癜风医院 版权所有</span>
+        <span>豫ICP备XXXXXXXX号-1 · 医疗机构执业许可证</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // 导航滚动效果
+    const nav = document.getElementById('nav');
+    window.addEventListener('scroll', () => {
+      nav.classList.toggle('scrolled', window.scrollY > 20);
+    });
+
+    // 表单拦截（演示用）
+    document.getElementById('appointment').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const btn = e.target.querySelector('.btn');
+      const originalText = btn.textContent;
+      btn.textContent = '预约提交成功';
+      btn.style.background = '#0E7C6B';
+      btn.style.color = '#fff';
+      setTimeout(() => {
+        btn.textContent = originalText;
+        btn.style.background = '';
+        btn.style.color = '';
+      }, 2000);
+    });
+  </script>
+</body>
+</html>

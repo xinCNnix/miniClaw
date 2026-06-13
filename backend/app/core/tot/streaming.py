@@ -206,6 +206,26 @@ class ToTEventStreamer:
                 "new_sources": trace_event.get("new_sources", 0),
             }
 
+        elif event_type == "tg_graph_built":
+            return {
+                "type": "tg_graph_built",
+                "tasks": trace_event.get("tasks", []),
+            }
+        elif event_type == "tg_task_running":
+            return {
+                "type": "tg_task_running",
+                "task_id": trace_event.get("task_id"),
+                "title": trace_event.get("title", ""),
+            }
+        elif event_type == "tg_task_done":
+            return {"type": "tg_task_done", "task_id": trace_event.get("task_id")}
+        elif event_type == "tg_task_failed":
+            return {"type": "tg_task_failed", "task_id": trace_event.get("task_id")}
+        elif event_type == "tg_task_verified":
+            return {"type": "tg_task_verified", "task_id": trace_event.get("task_id")}
+        elif event_type == "tg_reasoning_complete":
+            return {"type": "tg_reasoning_complete"}
+
         return None
 
     @staticmethod

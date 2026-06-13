@@ -239,7 +239,7 @@ async def thought_executor_node(state: ToTState) -> ToTState:
         )
 
     # ---- tot_logger ----
-    if "tot_logger" in state and tool_records:
+    if state.get("tot_logger") and tool_records:
         state["tot_logger"].log_execution(
             depth=state.get("current_depth", 0),
             tool_calls=tool_records,

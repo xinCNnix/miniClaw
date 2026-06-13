@@ -405,6 +405,10 @@ def parse_json_output(llm_output: str) -> Dict:
 
     text = llm_output.strip()
 
+    # 移除 LLM 思考标记（如 <think">...</think">）
+    import re as _re
+    text = _re.sub(r'^.*?</think\d*>', '', text, flags=_re.DOTALL).strip()
+
     # Strategy 1: Direct parse
     try:
         result = json.loads(text)

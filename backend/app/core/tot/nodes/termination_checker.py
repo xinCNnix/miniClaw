@@ -142,14 +142,16 @@ def should_continue_reasoning(state: ToTState) -> TerminationDecision:
         "finalize" if termination conditions are met
         "continue" otherwise
     """
-    # Phase 5: 优先检查回溯重生成
+    # If we already have a final answer (max_depth/high_quality), stop first
+    # This MUST come before needs_regeneration to prevent infinite loops
+    if state.get("final_answer"):
+        logger.info("[Routing] Final answer set, routing to finalize")
+        return "finalize"
+
+    # Phase 5: 检查回溯重生成
     if state.get("needs_regeneration"):
         logger.info("[Routing] Regeneration requested, routing to generator")
         return "regenerate"
-
-    # If we already have a final answer, stop
-    if state.get("final_answer"):
-        return "finalize"
 
     # Check termination conditions
     current_score = state["best_score"]

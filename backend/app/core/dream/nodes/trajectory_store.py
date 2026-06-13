@@ -152,8 +152,8 @@ class TrajectoryStore:
             failure_type, failure_summary = self._extract_failure(data)
 
         token_breakdown = data.get("token_breakdown") or {}
-        cost_tokens = token_breakdown.get("total", 0)
-        duration = data.get("total_duration", 0.0)
+        cost_tokens = token_breakdown.get("total", 0) or data.get("total_prompt_tokens", 0)
+        duration = data.get("total_duration", 0.0) or (data.get("graph_summary") or {}).get("total_time", 0.0)
         cost_time_ms = duration * 1000 if duration else None
 
         tags = [
@@ -198,6 +198,13 @@ class TrajectoryStore:
         loops = data.get("loops", [])
         if loops:
             return loops[-1].get("verification_passed", False)
+        # TaskGraph: check task_events for any task_failed
+        task_events = data.get("task_events", [])
+        if task_events:
+            for ev in task_events:
+                if ev.get("event") == "task_verified" and not ev.get("passed", True):
+                    return False
+            return True
         return True
 
     @staticmethod
@@ -209,6 +216,10 @@ class TrajectoryStore:
         for loop in data.get("loops", []):
             if loop.get("execution_error"):
                 errors.append(loop["execution_error"])
+        # TaskGraph: extract from task_events
+        for ev in data.get("task_events", []):
+            if ev.get("event") == "task_verified" and not ev.get("passed", True):
+                errors.append(f"task {ev.get('task_id', '?')} failed verification")
 
         summary = "; ".join(errors[:3]) if errors else "Unknown failure"
         sl = summary.lower()

@@ -462,6 +462,30 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
                   }
                   break
 
+                // TaskGraph 进度事件
+                case "tg_reasoning_start":
+                case "tg_skill_matched":
+                case "tg_skill_executed":
+                case "tg_graph_built":
+                case "tg_task_running":
+                case "tg_task_done":
+                case "tg_task_verified":
+                case "tg_reasoning_complete":
+                  setThinkingEvents((prev) => {
+                    // 同类型只保留最新
+                    const filtered = prev.filter(e => e.type !== data.type)
+                    return [...filtered, {
+                      type: data.type,
+                      ...(data.skill && { tool_name: `Skill: ${data.skill}` }),
+                      ...(data.title && { input: { title: data.title } }),
+                      ...(data.task_id && { thought_id: data.task_id }),
+                      ...(data.success !== undefined && { content: data.success ? '✓ 成功' : '✗ 失败' }),
+                      ...(data.steps !== undefined && { tool_count: data.steps }),
+                      timestamp: new Date().toISOString(),
+                    }]
+                  })
+                  break
+
                 case "session_id":
                   sessionId = data.session_id
                   setCurrentSessionId(sessionId)

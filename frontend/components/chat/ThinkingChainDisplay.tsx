@@ -26,7 +26,7 @@ export function ThinkingChainDisplay({ events, isLoading = false }: ThinkingChai
     (event) => event.type === "tool_use" || event.type === "tool_output"
   )
 
-  if (relevantEvents.length === 0 && !isLoading) {
+  if (relevantEvents.length === 0) {
     return null
   }
 

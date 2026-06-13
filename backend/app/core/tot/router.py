@@ -326,6 +326,20 @@ class ToTOrchestrator:
         run_id: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Inner ToT reasoning with logging. Called by _stream_tot_reasoning."""
+        from app.config import get_settings
+        settings = get_settings()
+
+        if settings.tot_use_taskgraph:
+            logger.warning("[TaskGraph] tot_use_taskgraph=True, entering taskgraph path")
+            try:
+                async for event in self._stream_taskgraph_reasoning(messages, system_prompt, cancel_event, run_id):
+                    yield event
+            except Exception as tg_err:
+                logger.error("[TaskGraph] Generator failed: %s", tg_err, exc_info=True)
+                yield {"type": "error", "error": f"TaskGraph: {tg_err}"}
+            logger.warning("[TaskGraph] taskgraph path complete")
+            return
+
         self._wd_tracker = None
         # --- Route classification (LLM first, keywords fallback) ---
         task_mode, task_type, route_details = await self.classifier.classify_route(
@@ -854,3 +868,128 @@ class ToTOrchestrator:
                 )
         except Exception as e:
             logger.debug(f"[MetaPolicy] ToT post-execution recording failed: {e}")
+
+    async def _stream_taskgraph_reasoning(
+        self, messages, system_prompt, cancel_event, run_id
+    ):
+        """TaskGraph 模式 — 替代传统 ToT"""
+        from app.core.tot.taskgraph.graph import compile_taskgraph_graph
+        from app.core.tot.taskgraph.models import TaskGraph
+        from app.core.tot.taskgraph.budget import BudgetEnforcer
+        from app.core.tot.taskgraph.checkpoint import GraphCheckpoint
+        from app.core.tot.taskgraph.event_buffer import TaskGraphEventBuffer
+        from app.core.tot.taskgraph.scheduler import TaskScheduler
+        from app.core.tot.taskgraph.artifact_store import ArtifactStore
+        from app.core.tot.taskgraph.trajectory import TaskGraphTrajectory
+        from app.config import get_settings
+
+        settings = get_settings()
+
+        user_query = messages[-1].get("content", "") if messages else ""
+
+        # 根据查询复杂度自动升级 thinking_mode
+        base_mode = getattr(self, "_thinking_mode", "heuristic")
+        _RESEARCH_KEYWORDS = ["研究", "论文", "报告", "技术报告", "综述", "分析报告",
+                              "research", "paper", "report", "survey", "6000字", "万字"]
+        if base_mode == "heuristic" and any(kw in user_query.lower() for kw in _RESEARCH_KEYWORDS):
+            base_mode = "analytical"
+            logger.info("[TaskGraph] Auto-upgraded thinking_mode: heuristic → analytical (research query)")
+
+        logger.info(
+            "[TaskGraph] Starting: query=%s, thinking_mode=%s",
+            user_query[:80],
+            base_mode,
+        )
+
+        # 初始化轨迹记录器
+        trajectory = TaskGraphTrajectory(
+            session_id="",
+            run_id=run_id or "",
+        )
+        trajectory.start()
+        trajectory.set_user_query(user_query)
+
+        graph = compile_taskgraph_graph()
+        initial_state = {
+            "user_query": user_query,
+            "session_context": str(messages[:-1]) if len(messages) > 1 else "",
+            "messages": messages,
+            "tools": self.agent_manager.tools if hasattr(self.agent_manager, "tools") else [],
+            "llm": self.agent_manager.llm if hasattr(self.agent_manager, "llm") else None,
+            "llm_with_tools": None,
+            "system_prompt": system_prompt,
+            "session_id": "",
+            "run_id": run_id or "",
+            "task_graph": TaskGraph(),
+            "scheduler": TaskScheduler(aging_enabled=settings.tg_scheduler_aging),
+            "artifact_store": ArtifactStore(base_dir=settings.tg_artifact_base_dir),
+            "checkpoint": GraphCheckpoint(),
+            "budget_enforcer": BudgetEnforcer.from_thinking_mode(base_mode),
+            "event_buffer": TaskGraphEventBuffer(),
+            "current_task_ids": [],
+            "thinking_mode": base_mode,
+            "skill_result": None,
+            "trajectory": trajectory,
+            "reasoning_trace": [],
+            "cancel_event": cancel_event,
+            "retrieved_patterns": [],
+            "semantic_history": "",
+            "tca_injection_text": "",
+            "meta_policy_injection_text": "",
+        }
+
+        yield {"type": "tg_reasoning_start", "mode": "taskgraph"}
+
+        # 增量发送 reasoning_trace，避免重复
+        _sent_trace_count = 0
+        _final_state = None
+
+        try:
+            async for graph_output in graph.astream(initial_state):
+                # LangGraph astream() yields {node_name: state_dict}
+                if not isinstance(graph_output, dict):
+                    continue
+
+                for node_name, node_state in graph_output.items():
+                    if not isinstance(node_state, dict):
+                        continue
+
+                    _final_state = node_state
+
+                    # 增量发送新增的 reasoning_trace 事件
+                    trace = node_state.get("reasoning_trace", [])
+                    new_events = trace[_sent_trace_count:]
+                    for te in new_events:
+                        yield te
+                    _sent_trace_count += len(new_events)
+
+        except Exception as e:
+            logger.error("[TaskGraph] Execution failed: %s", e, exc_info=True)
+            yield {"type": "error", "error": str(e)}
+
+        # 从最终的 graph state 读取 final_answer（而非 initial_state）
+        final_answer = ""
+        if _final_state and isinstance(_final_state, dict):
+            final_answer = _final_state.get("final_answer", "")
+        # 备用: event_buffer 可能也有答案
+        if not final_answer:
+            buf = initial_state.get("event_buffer")
+            if buf and buf.get_final_answer():
+                final_answer = buf.get_final_answer()
+
+        # 持久化轨迹
+        trajectory.finish()
+        try:
+            trajectory.save()
+        except Exception as e:
+            logger.warning("[TaskGraph] Failed to save trajectory: %s", e)
+
+        logger.info(
+            "[TaskGraph] Complete: answer_len=%d, events_sent=%d",
+            len(final_answer),
+            _sent_trace_count,
+        )
+
+        if final_answer:
+            yield {"type": "content_delta", "content": final_answer}
+        yield {"type": "done"}

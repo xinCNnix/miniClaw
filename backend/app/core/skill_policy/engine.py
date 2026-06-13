@@ -621,6 +621,96 @@ def _parse_tool_plan_json(raw: str) -> Optional[List[Dict[str, Any]]]:
     return None
 
 
+async def _direct_api_call(
+    llm: Any,
+    system_msg: str,
+    user_msg: str,
+    skill_name: str,
+) -> str:
+    """绕过 LangChain，直接调用底层 API 解决 MiniMax content=None 问题。
+
+    MiniMax thinking 模式返回 content:null + reasoning_content:"..."，
+    LangChain 的 Pydantic 验证无法处理 content=null，因此直接使用
+    底层 openai 客户端调用 API。
+    """
+    try:
+        # 从 LangChain ChatOpenAI 提取底层客户端配置
+        # 兼容不同版本 LangChain 的属性名
+        base_url = (
+            getattr(llm, 'openai_api_base_url', None)
+            or getattr(llm, 'base_url', None)
+            or getattr(llm, 'openai_api_base', None)
+            or ''
+        )
+        # 确保 base_url 包含协议前缀
+        if base_url and not base_url.startswith(('http://', 'https://')):
+            base_url = f"https://{base_url}"
+        api_key = (
+            getattr(llm, 'openai_api_key', None)
+            or getattr(llm, 'api_key', None)
+            or ''
+        )
+        # Pydantic SecretStr 需要显式解包，否则 str() 返回 '**********'
+        if hasattr(api_key, 'get_secret_value'):
+            api_key = api_key.get_secret_value()
+        model = getattr(llm, 'model_name', '') or getattr(llm, 'model', '')
+
+        if not api_key or not model or not base_url:
+            logger.warning(
+                "SkillPolicy COMPILE: direct API call skipped — missing config: "
+                "base_url=%s, api_key=%s, model=%s",
+                base_url[:30] if base_url else '""',
+                "set" if api_key else "missing",
+                model or '""',
+            )
+            return ""
+
+        import httpx
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            "response_format": {"type": "json_object"},
+            "max_tokens": 4000,
+            "temperature": 0.1,
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        choice = data.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        content = message.get("content", "")
+
+        # MiniMax thinking 模式：content 可能为 null，实际内容在 reasoning_content
+        if not content:
+            content = message.get("reasoning_content", "")
+
+        logger.info(
+            "SkillPolicy COMPILE: '%s' direct API call succeeded, content_len=%d",
+            skill_name, len(content),
+        )
+        return content or ""
+    except Exception as e:
+        logger.warning(
+            "SkillPolicy COMPILE: '%s' direct API call failed: %s",
+            skill_name, str(e)[:200],
+        )
+        return ""
+
+
 async def _llm_compile(
     skill_name: str,
     skill_type: str,
@@ -659,14 +749,54 @@ async def _llm_compile(
     except Exception:
         pass  # Provider may not support response_format
 
-    max_retries = 2
+    max_retries = 3
     for attempt in range(1, max_retries + 1):
-        response = await compile_llm.ainvoke([
-            SystemMessage(content=system_msg),
-            HumanMessage(content=user_msg),
-        ])
+        raw = ""
 
-        raw = response.content.strip()
+        # 尝试通过 LangChain ainvoke 调用
+        try:
+            response = await compile_llm.ainvoke([
+                SystemMessage(content=system_msg),
+                HumanMessage(content=user_msg),
+            ])
+            raw = response.content or ""
+        except Exception as invoke_err:
+            # MiniMax thinking 模式可能返回 content=None 导致 Pydantic 验证失败
+            logger.warning(
+                "SkillPolicy COMPILE: '%s' ainvoke failed (attempt %d/%d): %s",
+                skill_name, attempt, max_retries, str(invoke_err)[:200],
+            )
+            # 尝试绕过 LangChain，直接调用底层 API
+            raw = await _direct_api_call(
+                llm, system_msg, user_msg, skill_name,
+            )
+
+        # 处理空内容：MiniMax thinking 模式可能返回空字符串
+        if not raw or not raw.strip():
+            # 等待后重试，不带 response_format
+            if attempt < max_retries:
+                await asyncio.sleep(1.0)
+                try:
+                    response = await llm.ainvoke([
+                        SystemMessage(content=system_msg),
+                        HumanMessage(content=user_msg),
+                    ])
+                    raw = response.content or ""
+                except Exception:
+                    raw = await _direct_api_call(
+                        llm, system_msg, user_msg, skill_name,
+                    )
+
+        if not raw or not raw.strip():
+            logger.warning(
+                "SkillPolicy COMPILE: '%s' attempt %d/%d empty response",
+                skill_name, attempt, max_retries,
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(1.0)
+            continue
+
+        raw = raw.strip()
         parsed = _parse_tool_plan_json(raw)
 
         if parsed:
@@ -1181,7 +1311,7 @@ async def run_skill_policy(
     return PolicyOutput(
         action="EXECUTE_TOOL_PLAN",
         tool_plan=tool_plan,
-        selected_skill={"skill_name": skill_name, "skill_type": cand["skill_type"]},
+        selected_skill={"skill_name": skill_name, "skill_type": cand["skill_type"], "score": cand["score"]},
         guardrails={},
         notes="OK",
     )

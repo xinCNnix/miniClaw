@@ -38,7 +38,7 @@ class DistillTrajectory:
     """Online execution trajectory, shared between Online Distill and Dream."""
 
     traj_id: str
-    execution_mode: Literal["normal", "tot", "perv"]
+    execution_mode: Literal["normal", "tot", "perv", "taskgraph"]
     user_query: str
     final_answer: str
     steps: List[StepRecord] = field(default_factory=list)
@@ -60,6 +60,11 @@ class DistillTrajectory:
     thought_count: int = 0
     best_score: float = 0.0
     max_depth: int = 0
+
+    # TaskGraph-specific fields
+    task_count: int = 0
+    done_count: int = 0
+    artifact_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +91,11 @@ class DistillState(TypedDict, total=False):
     thought_count: int
     best_score: float
     max_depth: int
+
+    # TaskGraph extended input
+    task_count: int
+    done_count: int
+    artifact_count: int
 
     # verify output
     verify_result: VerifyResult

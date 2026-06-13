@@ -53,11 +53,21 @@ class WatchdogService:
         if info.status == RunStatus.QUEUED:
             return
 
-        if info.elapsed > self._max_runtime:
+        max_runtime = self._max_runtime
+        if info.execution_mode == "taskgraph":
+            from app.config import get_settings
+            settings = get_settings()
+            max_runtime = settings.tg_watchdog_max_runtime
+
+        if info.elapsed > max_runtime:
             self._registry.kill(info.run_id, "max_runtime_exceeded")
             return
 
-        if now - info.last_heartbeat > self._heartbeat_timeout:
+        heartbeat_timeout = self._heartbeat_timeout
+        if info.execution_mode == "taskgraph":
+            heartbeat_timeout = 120  # TaskGraph 子图可能长时间不产生事件
+
+        if now - info.last_heartbeat > heartbeat_timeout:
             self._registry.kill(info.run_id, "heartbeat_timeout")
             return
 

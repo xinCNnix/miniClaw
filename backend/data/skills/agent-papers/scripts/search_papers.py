@@ -502,6 +502,8 @@ def _print_paper(p: dict[str, Any], brief: bool = False) -> None:
 
 def main() -> None:
     parser = _build_parser()
+    # 兼容 LLM 生成的 --max_results / --sort_by 等下划线格式
+    sys.argv = [a.replace("_", "-", 1) if a.startswith("--") and "_" in a else a for a in sys.argv]
     args = parser.parse_args()
 
     if args.command is None:

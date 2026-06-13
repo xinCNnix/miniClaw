@@ -27,8 +27,12 @@ def _build_history_summary(state: ToTState) -> str:
         return ""
     lines = []
     for msg in chat_history:
-        role = "用户" if msg.type == "human" else "助手"
-        content = msg.content[:200] if msg.content else ""
+        if isinstance(msg, dict):
+            role = "用户" if msg.get("role") in ("user", "human") else "助手"
+            content = (msg.get("content") or "")[:200]
+        else:
+            role = "用户" if msg.type == "human" else "助手"
+            content = msg.content[:200] if msg.content else ""
         lines.append(f"{role}: {content}")
     return "\n".join(lines)
 
@@ -189,7 +193,7 @@ async def _generate_multi_beam_extensions(state: ToTState) -> ToTState:
     )
 
     # tot_logger
-    if "tot_logger" in state:
+    if state.get("tot_logger"):
         state["tot_logger"].log_generation(
             depth=current_depth,
             count=len(unique_thoughts),
@@ -222,7 +226,25 @@ async def _generate_multi_beam_extensions(state: ToTState) -> ToTState:
 
 async def _regenerate_for_beams(state: ToTState, beam_indices: List[int]) -> ToTState:
     """为回溯 beam 重新生成分支。使用不同策略 + 反思上下文。"""
-    llm_with_tools = state.get("llm_with_tools", state["llm"])
+    llm_with_tools = state.get("llm_with_tools") or state.get("llm")
+    if llm_with_tools is None:
+        logger.error("[Regenerate] No LLM available in state, generating fallback thoughts")
+        state["needs_regeneration"] = []
+        user_query = state["user_query"]
+        current_depth = state["current_depth"]
+        branching_factor = state.get("branching_factor", 3)
+        active_beams = state.get("active_beams", [])
+        all_fallbacks = []
+        for beam_idx in beam_indices:
+            if beam_idx < len(active_beams):
+                parent_id = active_beams[beam_idx][-1]
+            else:
+                parent_id = state.get("best_path", ["root"])[-1] if state.get("best_path") else "root"
+            all_fallbacks.extend(
+                _generate_fallback_thoughts(user_query, current_depth, parent_id, branching_factor)
+            )
+        state["thoughts"] = all_fallbacks
+        return state
     active_beams = state.get("active_beams", [])
     current_depth = state["current_depth"]
     user_query = state["user_query"]
@@ -451,7 +473,7 @@ async def _generate_single_beam(state: ToTState) -> ToTState:
 
         logger.info(f"Generated {len(all_new_thoughts)} thoughts from single prompt")
 
-        if "tot_logger" in state:
+        if state.get("tot_logger"):
             state["tot_logger"].log_generation(
                 depth=current_depth,
                 count=len(all_new_thoughts),
@@ -618,7 +640,7 @@ async def _generate_research_plans(state: ToTState) -> ToTState:
         "plan_mode": True,
     })
 
-    if "tot_logger" in state:
+    if state.get("tot_logger"):
         state["tot_logger"].log_generation(
             depth=current_depth,
             count=len(unique_thoughts),

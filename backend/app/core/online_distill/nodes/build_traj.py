@@ -52,6 +52,10 @@ def build_traj_node(state: DistillState) -> DistillState:
         thought_count=state.get("thought_count", 0),
         best_score=state.get("best_score", 0.0),
         max_depth=state.get("max_depth", 0),
+        # TaskGraph extensions
+        task_count=state.get("task_count", 0),
+        done_count=state.get("done_count", 0),
+        artifact_count=state.get("artifact_count", 0),
     )
 
     state["trajectory"] = traj
